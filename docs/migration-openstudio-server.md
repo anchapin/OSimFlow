@@ -930,3 +930,19 @@ empty `_OSIMFLOW_COMPLETE` object. `download` fetches only completed samples
 `aggregated_results.csv` plus the server-layout `download_data.csv`. It refuses
 incomplete campaigns unless `--allow-partial`. Failed samples upload nothing
 yet (#1878), so use `--allow-partial` when a batch contains failures.
+
+## Sequential batches (`rake execute_sequential` equivalent, issue #1874)
+
+```yaml
+common: {executor: aws_batch, detach-s3: true, result-storage-backend: s3, result-storage-bucket: my-bucket,
+         input_variables: variables.yml, template_sim_package: ./pkg, openstudio_version: 3.10.0}
+batches:
+  - {id: 1, name: baseline, n_samples: 50}
+  - {id: 2, name: retrofit, n_samples: 200}
+```
+
+`osimflow run-batches --manifest batches.yml --root ./batches` runs each batch as
+its own campaign (`Batch1_baseline`, ...) under a submit lock, stops after the
+first failure unless `--continue-on-error`, and writes `batches_summary.json`.
+With `detach-s3` each batch only submits, so follow with
+`osimflow download --from-s3 ... ./batches/Batch1_baseline`.

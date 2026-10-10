@@ -242,6 +242,12 @@ REGISTRY_INLINE_DESTS: frozenset[str] = frozenset(
         "result_storage_bucket",
         "result_storage_endpoint",
         "allow_insecure_storage_endpoint",
+        # `run-batches` (issue #1874)
+        "manifest",
+        "root",
+        "continue_on_error",
+        "submit_lock_timeout_s",
+        "dry_run",
         # `show`
         "campaign_id",
         # `compare`

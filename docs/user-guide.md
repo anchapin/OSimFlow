@@ -1730,6 +1730,16 @@ See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
 | `--coordinator-url URL` | Base URL of the Coordinator service (required with `--detach`). |
 | `--shard-count` / `--shard-index` / `--shard-start` / `--shard-end` | Coordinator shard configuration for distributed execution. |
 
+#### Multi-batch driver (`run-batches`)
+
+| Flag | Description |
+|---|---|
+| `--manifest M` | YAML/JSON with `common:` flags and a `batches:` list (`id`, `name`, run flags without `--`). |
+| `--root DIR` | Parent of the `Batch<id>_<name>` campaign dirs, the submit lock file and `batches_summary.json`. |
+| `--continue-on-error` | Keep going after a failed batch (default: remaining batches are skipped). |
+| `--submit-lock-timeout-s N` | Seconds to wait for the exclusive submit lock. |
+| `--dry-run` | Print each batch's `osimflow run` command only. |
+
 #### Debugging modes
 
 | Flag | Description |
@@ -1824,6 +1834,7 @@ cross-links for depth.
 | `osimflow merge` | Merge multiple data points into a single target (`--source-ids`, `--target-id`, `--target-work-dir`; issue #418). |
 | `osimflow backup` | Create a backup of the campaign registry (`--output`, `--registry`; issue #440). |
 | `osimflow restore` | Restore/import the campaign registry from a backup (`--merge` merges into the existing registry instead of replacing; issue #440). |
+| `osimflow run-batches` | Run the batches of a manifest sequentially as separate campaigns under a submit lock (issue #1874; see the Multi-batch driver table above). |
 | `osimflow health` | Verify system health before starting a campaign (see [§8 Health Checks](#8-health-checks)). Issue #411. |
 | `osimflow measure` | Discover and inspect measures in a template package: `osimflow measure list --template <pkg>` (issues #532, #580). See [packaging-measures.md](packaging-measures.md). |
 | `osimflow query-results` | Query aggregated results across campaigns (`--campaign-ids` or `--outdirs`, `--filter`, `--page` / `--per-page`; issue #585). |
