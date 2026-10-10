@@ -94,7 +94,15 @@ services:
   nomad-client-1:
     image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
     container_name: nomad-multi-client-1
-    command: agent -config=/etc/nomad/client.hcl
+    # cgroup v2: the container's root cgroup holds this process, so Nomad cannot
+    # enable subtree controllers ("device or resource busy"). Move into a leaf
+    # cgroup first (issue #1864).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /sys/fs/cgroup/init &&
+        echo $$$$ > /sys/fs/cgroup/init/cgroup.procs &&
+        exec nomad agent -config=/etc/nomad/client.hcl
     volumes:
       - ./configs/client.hcl:/etc/nomad/client.hcl:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -113,7 +121,15 @@ services:
   nomad-client-2:
     image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
     container_name: nomad-multi-client-2
-    command: agent -config=/etc/nomad/client.hcl
+    # cgroup v2: the container's root cgroup holds this process, so Nomad cannot
+    # enable subtree controllers ("device or resource busy"). Move into a leaf
+    # cgroup first (issue #1864).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /sys/fs/cgroup/init &&
+        echo $$$$ > /sys/fs/cgroup/init/cgroup.procs &&
+        exec nomad agent -config=/etc/nomad/client.hcl
     volumes:
       - ./configs/client.hcl:/etc/nomad/client.hcl:ro
       - /var/run/docker.sock:/var/run/docker.sock
