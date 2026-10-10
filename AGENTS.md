@@ -188,7 +188,7 @@ bypass `_verify_step_inputs` when adding a step.
 
 ### CLI subcommands
 
-`run` (campaign), `import-osa` / `export` (PAT/OSA I/O), `serve`
+`run` (campaign), `import-osa` / `import-gem-osa` / `export` (PAT/OSA I/O), `serve`
 (REST, `[api]` extra), `list` / `show` / `compare` / `status` /
 `download` (registry), `backup` / `restore` (registry),
 `mark-for-reanalysis` / `merge` (data-point lifecycle),
@@ -347,6 +347,8 @@ physically live in their executor's config module, not in
   `--registry`;   `health` — `--json`, `--offline`, `--redis-url`;
   `mark-for-reanalysis` — `--priority`;
   `merge` — `--source-ids`, `--target-id`, `--target-work-dir`;
+  `import-gem-osa` — `--output-dir`, `--batch`, `--template-package`,
+  `--configs`;
   `measure` / `list-measures` — `--filter`, `--project`,
   `--template`, `--variables`;
   `aggregate-runs` / `compare` / `query-results` / `export-results` —
@@ -1085,7 +1087,12 @@ plus `automountServiceAccountToken: false`),
 ### `osimflow/importers/`, `osimflow/exporters/`
 
 `osimflow/importers/osa.py` (`parse_osa`, `parse_analysis_json`,
-`osa_to_variables_yml`); `osimflow/exporters/osa.py` (`OSAExporter`,
+`osa_to_variables_yml`); `osimflow/importers/gem_osa.py`
+(`import_gem_project`, `discover_batches`, `parametric_space_to_variables`,
+`GemBatch`, `GemImportError`, `BATCHES_MANIFEST`, `DEFAULT_BATCH_ID` — the
+`import-gem-osa` subcommand, issue #1870: one campaign dir per gem
+`Batch<N>_<name>` plus a `batches.json` mapping);
+`osimflow/exporters/osa.py` (`OSAExporter`,
 `pack_osa` — PAT `.osa` archive).
 
 ### `osimflow/testing/`

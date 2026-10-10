@@ -121,6 +121,23 @@ In PAT, use **File → Export → Export Analysis Spreadsheet (.osa)** or
 
 ### Step 2: Import into OSimFlow
 
+### Importing openstudio-bem-to-surrogate-gem projects
+
+```bash
+osimflow import-gem-osa ./gem_project --output-dir ./campaigns \
+  --template-package ./seed_package [--batch Batch4491_baseline_training] [--configs configs.yml]
+```
+
+Each `parametric_space[_Batch<N>_<name>].json` becomes
+`<output-dir>/<batch_id>/variables.yml` (`[min,max]` or `{min,max}` → uniform,
+numeric list → discrete, string list → categorical; variables are named
+`<measure>.<argument>`). `measure_space*.json` static arguments are overlaid
+onto the copied `workflow.osw`; `seed`, `number_of_samples` and
+`sample_method` come from `algorithm_setting`, `osa_workflow*.json` or
+`configs.yml`. `<output-dir>/batches.json` maps each batch id to its
+variables file, outdir, sampling settings and an `osimflow run` command.
+`seed` is recorded only (OSimFlow has no seed flag).
+
 Use the `import-osa` subcommand to convert variable definitions:
 
 ```bash
