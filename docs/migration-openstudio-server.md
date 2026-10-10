@@ -937,6 +937,19 @@ A success marker takes precedence over a stale failure marker, and a Batch
 retry attempt (`AWS_BATCH_JOB_ATTEMPT` > 1) overwrites the old marker with
 `retrying` so the sample is not reported finished while the retry runs.
 
+**Crash-safe submit (issue #1881).** Before any Batch submit, `run --detach-s3`
+claims `<id>/_claims/<generation>.json` with an S3 conditional create
+(`If-None-Match: *`), so two concurrent invocations cannot both submit: the
+loser exits with an error ("being submitted by another process"). The claim is a
+15-minute lease renewed after each submit. Each submitted job id is recorded at
+`<id>/_jobs/<sample>.json`. If the submitter crashes, re-running the same command
+after the lease lapses takes over (generation + 1), reuses recorded jobs and, for
+a submit that died before recording, looks up the deterministic Batch job name
+`osimflow-<id>-<sample>` (non-FAILED jobs are reused). After the handoff is
+written the claim becomes `submitted`; later runs are a no-op. Batch `SubmitJob`
+has no client token, hence name lookup plus S3 records. The S3 bucket must
+support conditional writes.
+
 ## Sequential batches (`rake execute_sequential` equivalent, issue #1874)
 
 ```yaml

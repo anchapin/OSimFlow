@@ -562,7 +562,9 @@ name in this section.
   burning the 5 s socket timeout on every job state transition; closes
   the control-plane sibling of issue #1111. Single-instance Redis is
   the supported topology (issue #1562 / ADR-0004).
-- `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,
+- `osimflow/storage.py` — `ResultStorage` ABC (`put_if_absent`: atomic
+  create-if-absent, `S3Storage` uses `If-None-Match: *`, base fails closed —
+  issue #1881) + `LocalStorage`,
   `S3Storage`, `GCSStorage`, `AzureBlobStorage`,
   `S3ArtifactStorage`, `ResultStorageUploader`,
   `build_result_storage`.  `_validate_storage_endpoint`
@@ -808,6 +810,17 @@ name in this section.
   --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and
   `download` finalizes locally (KPI extract + aggregate +
   `download_data.csv`), skipping already-downloaded samples.
+  Issue #1881 makes the submit crash/concurrency-safe: `SubmitClaim`
+  (generation-numbered `<campaign>/_claims/NNNNNN.json`, created via
+  `ResultStorage.put_if_absent`, 15-min renewable lease; `claim_submission`
+  / `renew_claim` / `finish_claim` / `release_claim` on `S3CampaignStore`
+  with outcomes `CLAIM_ACQUIRED` / `CLAIM_ALREADY_SUBMITTED` /
+  `CLAIM_IN_PROGRESS`), per-sample `<campaign>/_jobs/<sample>.json` job
+  records (`record_job` / `recorded_jobs`), and `batch_job_name`
+  (deterministic `osimflow-<campaign>-<sample>`). `Campaign` claims before
+  the first submit; `AWSBatchExecutor._do_submit(job_name=,
+  reuse_existing_job=)` dedupes a resumed submit via `_find_existing_job`
+  (`list_jobs` name filter, FAILED ignored) because Batch has no client token.
 - `osimflow/batches.py` — sequential multi-batch driver (issue #1874):
   `run_batches`, `load_manifest`, `build_run_argv`, `batch_campaign_name`,
   `submit_lock`, `BatchResult`, `BatchManifestError`, `SubmitLockTimeout`.

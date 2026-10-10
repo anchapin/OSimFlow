@@ -1142,6 +1142,49 @@ class AWSBatchExecutor(BaseExecutor):
         log.info("aws_batch submit_job -> jobId=%s queue=%s", job_id, queue)
         return job_id
 
+    def _find_existing_job(self, submit_params: dict[str, Any]) -> str | None:
+        """Return the id of a live job already submitted under this name (issue #1881).
+
+        Batch ``SubmitJob`` has no client token, so a resumed detached submit
+        looks the deterministic job name up instead of creating a duplicate.
+        FAILED jobs are ignored so a failed attempt can be resubmitted.
+        """
+        client = self._get_client()
+        queues = [
+            q
+            for q in (
+                submit_params.get("job_queue"),
+                self.job_queue,
+                self.on_demand_job_queue,
+            )
+            if q
+        ]
+        for queue in dict.fromkeys(queues):
+            token: str | None = None
+            while True:
+                params: dict[str, Any] = {
+                    "jobQueue": queue,
+                    "filters": [{"name": "JOB_NAME", "values": [submit_params["name"]]}],
+                }
+                if token:
+                    params["nextToken"] = token
+                resp = client.list_jobs(**params)
+                for job in resp.get("jobSummaryList", []):
+                    if (
+                        job.get("jobName") == submit_params["name"]
+                        and job.get("jobStatus") != "FAILED"
+                    ):
+                        log.info(
+                            "aws_batch reusing existing job %s for name %s",
+                            job["jobId"],
+                            submit_params["name"],
+                        )
+                        return str(job["jobId"])
+                token = resp.get("nextToken")
+                if not token:
+                    break
+        return None
+
     def _submit_job_with_retry(self, submit_kwargs: dict[str, Any]) -> dict[str, Any]:
         """Call ``submit_job`` with retry on throttle exceptions (issue #1010).
 
@@ -1256,6 +1299,8 @@ class AWSBatchExecutor(BaseExecutor):
         stderr_path: Any = None,
         max_retries: int | None = None,
         worker_id: str | None = None,
+        job_name: str | None = None,
+        reuse_existing_job: bool = False,
         **kwargs: Any,
     ) -> Handle:
         self._container_digest = container_digest
@@ -1349,7 +1394,7 @@ class AWSBatchExecutor(BaseExecutor):
         del fn  # noqa: ARG002 — work runs inside the Batch container via remote_runner
 
         submit_params: dict[str, Any] = {
-            "name": name,
+            "name": job_name or name,
             "cpus": cpus,
             "memory_mb": memory_mb,
             "time_min": time_min,
@@ -1361,7 +1406,8 @@ class AWSBatchExecutor(BaseExecutor):
             submit_params["expected_image"] = expected_image
         if price_fallback:
             submit_params.update(self._on_demand_route())
-        job_id = self._submit_job(**submit_params)
+        existing = self._find_existing_job(submit_params) if reuse_existing_job else None
+        job_id = existing or self._submit_job(**submit_params)
 
         return _AWSBatchHandle(
             job_id=job_id,

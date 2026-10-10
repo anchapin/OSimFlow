@@ -1,6 +1,8 @@
 """Tests for S3-backed detached campaigns (issue #1873)."""
 
 import json
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -48,6 +50,21 @@ class FakeStorage(ResultStorage):
 
     async def list_results_async(self, prefix: str = "") -> list[str]:
         return self.list_results(prefix)
+
+    def put_if_absent(self, remote_path: str, data: bytes) -> bool:
+        dest = self.root / remote_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        staging = self.root.parent / f"{self.root.name}.staging"
+        staging.mkdir(exist_ok=True)
+        tmp = staging / uuid.uuid4().hex
+        tmp.write_bytes(data)
+        try:
+            os.link(tmp, dest)  # atomic create-if-absent, like S3 If-None-Match
+        except FileExistsError:
+            return False
+        finally:
+            tmp.unlink()
+        return True
 
 
 @pytest.fixture

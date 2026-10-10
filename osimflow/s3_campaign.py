@@ -10,9 +10,12 @@ machine; ``download`` performs the KPI extraction + aggregation locally (the
 "finalizer") and writes the server-style ``download_data.csv``.
 """
 
+import hashlib
 import json
 import logging
+import re
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +37,15 @@ SAMPLES_NAME = "samples.json"
 SIM_PREFIX = "work/sim"
 DOWNLOAD_CSV_NAME = "download_data.csv"
 HANDOFF_VERSION = 1
+CLAIMS_PREFIX = "_claims"
+JOBS_PREFIX = "_jobs"
+CLAIM_SUBMITTING = "submitting"
+CLAIM_SUBMITTED = "submitted"
+#: Claim lease; the submitter renews it as it submits, a crashed one lets it lapse.
+DEFAULT_CLAIM_LEASE_S = 900.0
+CLAIM_ACQUIRED = "acquired"
+CLAIM_ALREADY_SUBMITTED = "already_submitted"
+CLAIM_IN_PROGRESS = "in_progress"
 
 
 class S3CampaignError(OSimFlowRuntimeError):
@@ -67,6 +79,52 @@ class S3Handoff:
         return cls(**known)
 
 
+def batch_job_name(campaign_id: str, sample_id: str) -> str:
+    """Deterministic AWS Batch job name for a campaign sample (issue #1881).
+
+    Batch names allow ``[A-Za-z0-9_-]`` up to 128 chars; when clipped, a hash of
+    the full pair keeps the name unique and stable.
+    """
+    raw = f"osimflow-{campaign_id}-{sample_id}"
+    clean = re.sub(r"[^A-Za-z0-9_-]", "-", raw)
+    if clean == raw and len(raw) <= 128:
+        return raw
+    digest = hashlib.sha256(f"{campaign_id}\0{sample_id}".encode()).hexdigest()[:12]
+    return f"{clean[:115]}-{digest}"
+
+
+@dataclass
+class SubmitClaim:
+    """Conditional claim on a detached submit (issue #1881).
+
+    Claims are generation-numbered objects ``<campaign>/_claims/<NNNNNN>.json``
+    created with an atomic create-if-absent, so exactly one process owns a
+    generation. Taking over a lapsed lease means atomically creating the next
+    generation; a superseded owner notices on its next renew and aborts.
+    """
+
+    campaign_id: str
+    owner: str
+    generation: int
+    state: str
+    claimed_at: float
+    lease_expires_at: float
+    version: int = 1
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), indent=2, sort_keys=True)
+
+    @classmethod
+    def from_json(cls, raw: str) -> "SubmitClaim":
+        data = json.loads(raw)
+        return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data})
+
+    @property
+    def resumed(self) -> bool:
+        """True when this claim took over an earlier, unfinished submission."""
+        return self.generation > 1
+
+
 def _tmp_roundtrip_write(storage: ResultStorage, key: str, text: str, tmp_dir: Path) -> None:
     tmp_dir.mkdir(parents=True, exist_ok=True)
     local = tmp_dir / "payload"
@@ -84,6 +142,117 @@ class S3CampaignStore:
     def __init__(self, storage: ResultStorage, scratch: Path) -> None:
         self.storage = storage
         self.scratch = scratch
+
+    @staticmethod
+    def _claim_key(campaign_id: str, generation: int) -> str:
+        return f"{campaign_id}/{CLAIMS_PREFIX}/{generation:06d}.json"
+
+    def _claim_generations(self, campaign_id: str) -> list[int]:
+        head = f"{campaign_id}/{CLAIMS_PREFIX}/"
+        gens: list[int] = []
+        for key in self.storage.list_results(head):
+            stem = key[len(head) :].removesuffix(".json")
+            if key.startswith(head) and stem.isdigit():
+                gens.append(int(stem))
+        return sorted(gens)
+
+    def _read_claim(self, campaign_id: str, generation: int) -> SubmitClaim:
+        self.scratch.mkdir(parents=True, exist_ok=True)
+        local = self.scratch / f"claim-{generation}-{uuid.uuid4().hex}.json"
+        try:
+            self.storage.download_file(self._claim_key(campaign_id, generation), local)
+            return SubmitClaim.from_json(local.read_text())
+        finally:
+            local.unlink(missing_ok=True)
+
+    def claim_submission(
+        self, campaign_id: str, *, lease_s: float = DEFAULT_CLAIM_LEASE_S
+    ) -> tuple[str, SubmitClaim | None]:
+        """Try to become the single submitter of *campaign_id* (issue #1881).
+
+        Returns ``(outcome, claim)`` where outcome is ``"acquired"`` (claim
+        returned), ``"already_submitted"`` or ``"in_progress"`` (another live
+        submitter holds the lease, or this call lost a takeover race).
+        """
+        if self.handoff_exists(campaign_id):
+            return CLAIM_ALREADY_SUBMITTED, None
+        gens = self._claim_generations(campaign_id)
+        latest = gens[-1] if gens else 0
+        now = time.time()
+        if latest:
+            current = self._read_claim(campaign_id, latest)
+            if current.state == CLAIM_SUBMITTED:
+                return CLAIM_ALREADY_SUBMITTED, None
+            if current.lease_expires_at > now:
+                return CLAIM_IN_PROGRESS, None
+        claim = SubmitClaim(
+            campaign_id=campaign_id,
+            owner=uuid.uuid4().hex,
+            generation=latest + 1,
+            state=CLAIM_SUBMITTING,
+            claimed_at=now,
+            lease_expires_at=now + lease_s,
+        )
+        if not self.storage.put_if_absent(
+            self._claim_key(campaign_id, claim.generation), claim.to_json().encode()
+        ):
+            return CLAIM_IN_PROGRESS, None
+        return CLAIM_ACQUIRED, claim
+
+    def _write_claim(self, claim: SubmitClaim) -> None:
+        gens = self._claim_generations(claim.campaign_id)
+        if gens and gens[-1] != claim.generation:
+            raise S3CampaignError(
+                f"submit claim for {claim.campaign_id} was taken over by generation "
+                f"{gens[-1]}; this submitter (generation {claim.generation}) must stop"
+            )
+        _tmp_roundtrip_write(
+            self.storage,
+            self._claim_key(claim.campaign_id, claim.generation),
+            claim.to_json(),
+            self.scratch,
+        )
+
+    def renew_claim(self, claim: SubmitClaim, lease_s: float = DEFAULT_CLAIM_LEASE_S) -> None:
+        """Extend the lease; raises :class:`S3CampaignError` if superseded."""
+        claim.lease_expires_at = time.time() + lease_s
+        self._write_claim(claim)
+
+    def finish_claim(self, claim: SubmitClaim) -> None:
+        """Mark the claim ``submitted`` (after the handoff record is durable)."""
+        claim.state = CLAIM_SUBMITTED
+        self._write_claim(claim)
+
+    def release_claim(self, claim: SubmitClaim) -> None:
+        """Expire the lease now so a retry can resume immediately (best effort)."""
+        if claim.state == CLAIM_SUBMITTED:
+            return
+        claim.lease_expires_at = 0.0
+        try:
+            self._write_claim(claim)
+        except (OSError, S3CampaignError):
+            log.warning("could not release submit claim for %s", claim.campaign_id, exc_info=True)
+
+    def record_job(self, campaign_id: str, sample_id: str, job_id: str, job_name: str) -> None:
+        """Durably record a submitted job; the first record per sample wins."""
+        body = json.dumps(
+            {"sample_id": sample_id, "job_id": job_id, "job_name": job_name, "at": time.time()}
+        )
+        self.storage.put_if_absent(f"{campaign_id}/{JOBS_PREFIX}/{sample_id}.json", body.encode())
+
+    def recorded_jobs(self, campaign_id: str) -> dict[str, str]:
+        """``sample_id -> job_id`` for every job a previous submitter recorded."""
+        head = f"{campaign_id}/{JOBS_PREFIX}/"
+        jobs: dict[str, str] = {}
+        self.scratch.mkdir(parents=True, exist_ok=True)
+        for key in self.storage.list_results(head):
+            if not key.startswith(head) or not key.endswith(".json"):
+                continue
+            local = self.scratch / "job.json"
+            self.storage.download_file(key, local)
+            data = json.loads(local.read_text())
+            jobs[str(data["sample_id"])] = str(data["job_id"])
+        return jobs
 
     def handoff_exists(self, campaign_id: str) -> bool:
         return f"{campaign_id}/{HANDOFF_NAME}" in set(self.storage.list_results(campaign_id))
