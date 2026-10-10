@@ -1809,9 +1809,12 @@ def _add_export_results_args(er: argparse.ArgumentParser) -> None:
     )
     er.add_argument(
         "--format",
-        choices=["csv", "json"],
+        choices=["csv", "json", "openstudio-server-csv"],
         default="csv",
-        help="Export format (default: csv)",
+        help=(
+            "Export format (default: csv). 'openstudio-server-csv' writes the "
+            "openstudio-server download_data.csv layout (issue #1872)."
+        ),
     )
     er.add_argument(
         "--output",

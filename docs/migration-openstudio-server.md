@@ -894,3 +894,21 @@ static entries that don't need sampling to keep the campaign focused.
 - [AWS Batch Terraform Guide](aws-batch-terraform.md) — Cloud infrastructure setup
 - [eplusout.sql Guide](eplusout-sql-guide.md) — Querying EnergyPlus SQL output
 - [user_scripts/README.md](../user_scripts/README.md) — BYOS script templates
+
+## Server-compatible results CSV (`download_data.csv` layout)
+
+`osimflow export-results --outdirs <campaign_dir> --format openstudio-server-csv --output download_data.csv`
+writes the same layout as `download_data.csv?export=true` on the server
+(issue #1872), so gem tooling that reads `rake download_results` output works
+unchanged:
+
+| Order | Columns | Notes |
+|---|---|---|
+| 1 | `name`, `_id`, `status`, `status_message` | Sample id; `status` is `completed`; `status_message` is `completed normal` or `datapoint failure`. |
+| 2 | `<measure>.<argument>` | Variables, in `samples.json` order. |
+| 3 | outputs | KPI and `reporting_179_d.*` values, in aggregated order. |
+| 4 | `reporting_179_d.simulation_failed_message` | Always present and last; empty on success, failure text for failed samples. |
+
+Failed samples are included unless `--no-include-failed` is given. The
+reference fixture is `tests/fixtures/server_download_data_reference.csv`
+(synthetic, sanitized).
