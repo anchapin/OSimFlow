@@ -849,6 +849,7 @@ class CampaignConfig:
 
     # --- Container image pinning (issue #1081) ---
     container_digest: str | None = None
+    detach_s3: bool = False
 
     # --- Container signature verification (issue #1385) ---
     # When set, campaign init shells out to `cosign verify` against the
@@ -1696,6 +1697,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
         container_digest=(str(args["container_digest"]) if args.get("container_digest") else None),
+        detach_s3=bool(args.get("detach_s3", False)),
         require_cosign_identity=(
             str(args["require_cosign_identity"]) if args.get("require_cosign_identity") else None
         ),

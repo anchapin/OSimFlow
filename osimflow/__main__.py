@@ -1014,6 +1014,19 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--detach-s3",
+        dest="detach_s3",
+        action="store_true",
+        default=False,
+        help=(
+            "AWS Batch only: submit the jobs, write a handoff record + samples.json "
+            "to the --result-storage-bucket S3 bucket and exit without waiting "
+            "(issue #1873). Check progress with `osimflow status --from-s3` and "
+            "fetch results with `osimflow download --from-s3`. Re-running with the "
+            "same --outdir name is a no-op once the handoff exists."
+        ),
+    )
+    run.add_argument(
         "--detach",
         action="store_true",
         default=False,
@@ -1382,7 +1395,30 @@ def _add_dashboard_args(dash: argparse.ArgumentParser) -> None:
     dash.add_argument("--log_level", default="INFO")
 
 
+def _add_from_s3_args(p: argparse.ArgumentParser) -> None:
+    """Flags shared by ``status`` / ``list`` / ``download`` for S3-backed state."""
+    p.add_argument(
+        "--from-s3",
+        dest="from_s3",
+        action="store_true",
+        default=False,
+        help="Read detached-campaign state from the S3 result bucket (issue #1873)",
+    )
+    p.add_argument("--result-storage-bucket", default=None, help="S3 bucket (with --from-s3)")
+    p.add_argument(
+        "--result-storage-endpoint", default=None, help="Custom S3 endpoint (with --from-s3)"
+    )
+    p.add_argument(
+        "--allow-insecure-storage-endpoint",
+        action="store_true",
+        default=False,
+        help="Allow a plaintext http:// S3 endpoint (with --from-s3)",
+    )
+
+
 def _add_list_args(lst: argparse.ArgumentParser) -> None:
+    _add_from_s3_args(lst)
+    lst.add_argument("--prefix", default="", help="Campaign id prefix filter (with --from-s3)")
     lst.add_argument(
         "--status",
         default=None,
@@ -1506,6 +1542,7 @@ def _add_aggregate_runs_args(agr: argparse.ArgumentParser) -> None:
 
 
 def _add_status_args(st: argparse.ArgumentParser) -> None:
+    _add_from_s3_args(st)
     st.add_argument(
         "outdir",
         type=Path,
@@ -1515,6 +1552,12 @@ def _add_status_args(st: argparse.ArgumentParser) -> None:
 
 
 def _add_download_args(dl: argparse.ArgumentParser) -> None:
+    _add_from_s3_args(dl)
+    dl.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="With --from-s3: download even if some samples are not complete",
+    )
     dl.add_argument(
         "outdir",
         type=Path,
@@ -2301,9 +2344,78 @@ def _run_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _s3_store(args: argparse.Namespace, scratch: Path) -> Any:
+    """Build an S3CampaignStore from the ``--result-storage-*`` flags."""
+    from .s3_campaign import S3CampaignStore  # noqa: PLC0415
+    from .storage import build_result_storage  # noqa: PLC0415
+
+    if not getattr(args, "result_storage_bucket", None):
+        raise SystemExit("error: --from-s3 / --detach-s3 require --result-storage-bucket")
+    storage = build_result_storage(
+        "s3",
+        args.result_storage_bucket,
+        endpoint_url=getattr(args, "result_storage_endpoint", None),
+        allow_insecure_endpoint=bool(getattr(args, "allow_insecure_storage_endpoint", False)),
+    )
+    return S3CampaignStore(storage, scratch)
+
+
+def _cmd_s3(args: argparse.Namespace, action: str) -> int:
+    """Handle ``list|status|download --from-s3`` (issue #1873)."""
+    import json as json_mod  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    from .s3_campaign import S3CampaignError  # noqa: PLC0415
+
+    with tempfile.TemporaryDirectory(prefix="osimflow-s3-") as tmp:
+        store = _s3_store(args, Path(tmp))
+        try:
+            if action == "list":
+                rows = [
+                    {
+                        "campaign_id": r.campaign_id,
+                        "samples": len(r.sample_ids),
+                        "submitted_at": r.submitted_at,
+                    }
+                    for r in store.list_campaigns(args.prefix)
+                ]
+                print(json_mod.dumps(rows, indent=2))
+                return 0
+            cid = args.outdir.name
+            if action == "status":
+                print(json_mod.dumps(store.status(cid), indent=2))
+                return 0
+            dest = args.output_dir or args.outdir
+            result = store.download(cid, dest, allow_partial=args.allow_partial)
+            print(
+                f"downloaded {cid}: {result['completed']}/{result['total']} samples, "
+                f"{len(result['fetched'])} new -> {dest}"
+            )
+            return 0
+        except S3CampaignError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+
+def _detach_s3_already_submitted(args: argparse.Namespace) -> bool:
+    """Idempotency guard: True (and a notice) if the handoff already exists."""
+    import tempfile  # noqa: PLC0415
+
+    with tempfile.TemporaryDirectory(prefix="osimflow-s3-") as tmp:
+        store = _s3_store(args, Path(tmp))
+        cid = Path(args.outdir).name
+        if store.handoff_exists(cid):
+            print(f"campaign {cid} already submitted (handoff in S3); nothing to do")
+            return True
+    return False
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     """List all registered campaigns."""
     import json as json_mod  # noqa: PLC0415
+
+    if getattr(args, "from_s3", False):
+        return _cmd_s3(args, "list")
 
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
@@ -2615,6 +2727,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     the Coordinator for live status — works from a fresh shell / rebooted
     machine (issue #630). Otherwise falls back to the local ``run.json`` view.
     """
+    if getattr(args, "from_s3", False):
+        return _cmd_s3(args, "status")
+
     import json as json_mod  # noqa: PLC0415
 
     outdir: Path = args.outdir.resolve()
@@ -2706,6 +2821,9 @@ def _cmd_download(args: argparse.Namespace) -> int:
     bytes are not downloaded (issue #630). Otherwise copies the local
     artifacts from ``outdir/``.
     """
+    if getattr(args, "from_s3", False):
+        return _cmd_s3(args, "download")
+
     outdir: Path = args.outdir.resolve()
 
     # Coordinator-backed campaign: fetch aggregated artifacts via presigned
@@ -3794,6 +3912,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     # record under outdir/, clean exit. See _perform_detach_handoff.
     if args.detach:
         return _perform_detach_handoff(args)
+
+    if getattr(args, "detach_s3", False):
+        if args.executor != "aws_batch":
+            print("error: --detach-s3 requires --executor aws_batch", file=sys.stderr)
+            return 2
+        args.result_storage_backend = "s3"
+        _s3_store(args, Path(args.outdir) / ".s3_scratch")
+        if _detach_s3_already_submitted(args):
+            return 0
 
     # Issue #1461: config/input-loading failures (missing --input_variables
     # file, missing --template_sim_package dir, malformed YAML) must surface

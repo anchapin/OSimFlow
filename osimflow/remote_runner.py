@@ -32,6 +32,7 @@ from .input_staging import (
     fetch_spilled_payload,
     result_upload_plan,
 )
+from .s3_campaign import COMPLETE_MARKER
 from .storage import ResultStorage, build_result_storage
 from .task_payload_hmac import (
     RESULT_TRANSPORT_SIG_ENV,
@@ -391,11 +392,20 @@ def _object_storage_context() -> tuple[ResultStorage, str | None] | None:
     return storage, prefix
 
 
+def _upload_complete_marker(storage: ResultStorage, key: str) -> None:
+    """Upload the empty per-directory completion marker (issue #1873)."""
+    with tempfile.TemporaryDirectory(prefix="osimflow-marker-") as tmp:
+        marker = Path(tmp) / COMPLETE_MARKER
+        marker.touch()
+        storage.upload_file(marker, f"{key}/{COMPLETE_MARKER}")
+
+
 def _upload_dir_strict(storage: ResultStorage, directory: Path, key: str) -> None:
     """Upload *directory* file by file; any failure propagates (issue #1809)."""
     for file_path in sorted(directory.rglob("*")):
         if file_path.is_file():
             storage.upload_file(file_path, f"{key}/{file_path.relative_to(directory).as_posix()}")
+    _upload_complete_marker(storage, key)
 
 
 def _upload_artifacts_for_object_storage(
@@ -432,6 +442,7 @@ def _upload_artifacts_for_object_storage(
             continue
         if path.is_dir():
             storage.upload_dir(path, key)
+            _upload_complete_marker(storage, key)
             uploaded.add(str(path))
             continue
         log.warning("object-storage upload skipped missing path: %s", path)

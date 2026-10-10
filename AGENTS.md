@@ -228,7 +228,7 @@ physically live in their executor's config module, not in
   `--container-digest`, `--cosign-oidc-issuer`, `--dask-cluster-type`, `--dask-cpus-per-worker`,
   `--dask-max-workers`, `--dask-memory-per-worker`,
   `--dask-min-workers`, `--dask-project`, `--dask-queue`,
-  `--dask-scheduler-address`, `--dask-walltime`, `--detach`,
+  `--dask-scheduler-address`, `--dask-walltime`, `--detach`, `--detach-s3`,
   `--docker-swarm-image`, `--docker-swarm-max-poll-interval-s`,
   `--docker-swarm-network`, `--docker-swarm-payload-secret`, `--docker-swarm-poll-interval-s`,
   `--ecr-repository`, `--enable-cost-tracking`, `--executor`,
@@ -268,7 +268,8 @@ physically live in their executor's config module, not in
   `--task-queue`, `--uq-failure-threshold`, `--uq-method`,
   `--uq-n-samples`.
 
-- **Inputs / outputs:** `--allow-insecure-storage-endpoint`,
+- **Inputs / outputs:** `--allow-insecure-storage-endpoint`, `--allow-partial`,
+  `--from-s3`, `--prefix`,
   `--archive_intermediates`,
   `--bcl-api-key`, `--dry-run`, `--finalize-script`,
   `--finalize-script-timeout` (issue #1685 — wall-clock
@@ -789,6 +790,15 @@ name in this section.
   `osimflow export-results --format openstudio-server-csv`; columns
   `name,_id,status,status_message`, then `<measure>.<arg>` variables,
   outputs, and `reporting_179_d.simulation_failed_message` last.
+- `osimflow/s3_campaign.py` — S3-backed detached AWS Batch campaigns
+  (issue #1873): `S3CampaignStore`, `S3Handoff`, `new_handoff`,
+  `S3CampaignError`, `CampaignDetached`, `COMPLETE_MARKER`
+  (`_OSIMFLOW_COMPLETE`, uploaded last by `remote_runner` into each
+  sample result dir). `run --detach-s3` writes `<campaign>/_handoff.json`
+  + `samples.json` to the bucket and exits; `status|list|download
+  --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and
+  `download` finalizes locally (KPI extract + aggregate +
+  `download_data.csv`), skipping already-downloaded samples.
 - `osimflow/handoff_record.py` — `HandoffRecord` +
   `NoHandoffRecordError` + `IDEMPOTENCY_KEY_HEADER` +
   `HANDOFF_RECORD_NAME` + `read_handoff_record`,

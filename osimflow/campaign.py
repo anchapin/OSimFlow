@@ -160,6 +160,8 @@ from .monitoring import (
     sample_log_paths,
 )
 from .registry import CampaignRegistry
+from .s3_campaign import CampaignDetached, S3CampaignStore, new_handoff
+from .server_csv import find_samples_json
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
 from .work import (
@@ -1860,6 +1862,24 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 "status": "paused",
                 "trace": self.trace,
             }
+        except CampaignDetached as detached:
+            # Issue #1873: jobs submitted, handoff persisted in S3; exit cleanly.
+            campaign_status = "detached"
+            self.trace.status = "detached"
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            return {
+                "samples": [],
+                "kpis": [],
+                "aggregated": {"csv": None, "failed": None},
+                "plots": [],
+                "elapsed_s": time.time() - t0,
+                "run_json": self.cfg.outdir / "run.json",
+                "status": "detached",
+                "campaign_id": str(detached),
+                "trace": self.trace,
+            }
         except KeyboardInterrupt:
             campaign_status = "cancelled"
             log.warning("campaign cancelled by user or signal")
@@ -3122,7 +3142,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             # (the previous run's log files are still on disk).
             state["stdout_log"] = str(stdout_log)
             state["stderr_log"] = str(stderr_log)
-            cached = self.cache.lookup(key)
+            cached = None if self.cfg.detach_s3 else self.cache.lookup(key)
             if cached:
                 out[sid] = cached
                 state["sim_exit_code"] = 0
@@ -3183,6 +3203,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                     },
                 )
 
+        detached_jobs: dict[str, str | None] = {}
         pending_items = list(pending.items())
         if pending_items:
             chunk_size = self._fanout_submit_chunk_size(len(pending_items))
@@ -3240,6 +3261,10 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                         "transport": self._result_transport_config,
                     },
                 )
+
+                if self.cfg.detach_s3:
+                    detached_jobs[sid] = getattr(handle, "job_id", None)
+                    continue
 
                 key = ctx["key"]
                 state = ctx["state"]
@@ -3301,12 +3326,15 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
 
                 submissions[sid] = (handle, _on_success)
 
-            self._submit_and_await_all(
-                submissions,
-                "RUN_OPENSTUDIO_SIM",
-                recovery_manager=recovery_manager,
-                resubmit_callback=resubmit_callback,
-            )
+            if not self.cfg.detach_s3:
+                self._submit_and_await_all(
+                    submissions,
+                    "RUN_OPENSTUDIO_SIM",
+                    recovery_manager=recovery_manager,
+                    resubmit_callback=resubmit_callback,
+                )
+        if self.cfg.detach_s3:
+            self._finish_detached_submit(list(parameterized), detached_jobs)
         # Issue #1871: remember failed-sample sim dirs so AGGREGATE_RESULTS can
         # report their measure failure messages (out.osw / run.log).
         failed_dirs: dict[str, Path] = getattr(self, "_failed_sim_dirs", None) or {}
@@ -3349,6 +3377,40 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
         return SimResult(samples=out, success=not any_failed)
+
+    def _finish_detached_submit(
+        self, sample_ids: list[str], job_ids: dict[str, str | None]
+    ) -> None:
+        """Write the S3 handoff record and detach (issue #1873)."""
+        cfg = self.cfg
+        if cfg.result_storage_backend != "s3" or not cfg.result_storage_bucket:
+            raise CampaignError(
+                "--detach-s3 requires --result-storage-backend s3 and --result-storage-bucket"
+            )
+        storage = build_result_storage(
+            "s3",
+            cfg.result_storage_bucket,
+            endpoint_url=cfg.result_storage_endpoint,
+            allow_insecure_endpoint=bool(cfg.allow_insecure_storage_endpoint),
+        )
+        store = S3CampaignStore(storage, cfg.outdir / ".s3_scratch")
+        record = new_handoff(
+            cfg.outdir.name,
+            sample_ids,
+            openstudio_version=cfg.openstudio_version,
+            kpis=list(cfg.kpis) if cfg.kpis else None,
+            job_ids=job_ids,
+            executor=self.executor.name,
+        )
+        store.write_handoff(record, find_samples_json(cfg.outdir))
+        shutil.rmtree(cfg.outdir / ".s3_scratch", ignore_errors=True)
+        log.info(
+            "detached: submitted %d job(s); campaign id %s (bucket %s)",
+            len(job_ids),
+            record.campaign_id,
+            cfg.result_storage_bucket,
+        )
+        raise CampaignDetached(record.campaign_id)
 
     # ------------------------------------------------------------------
     # Worker direct-to-storage push (issue #625, Epic #624)
