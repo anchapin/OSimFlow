@@ -1823,7 +1823,7 @@ cross-links for depth.
 | `osimflow health` | Verify system health before starting a campaign (see [§8 Health Checks](#8-health-checks)). Issue #411. |
 | `osimflow measure` | Discover and inspect measures in a template package: `osimflow measure list --template <pkg>` (issues #532, #580). See [packaging-measures.md](packaging-measures.md). |
 | `osimflow query-results` | Query aggregated results across campaigns (`--campaign-ids` or `--outdirs`, `--filter`, `--page` / `--per-page`; issue #585). |
-| `osimflow export-results` | Export aggregated results to CSV or JSON (`--include-failed` / `--no-include-failed`; issue #585). |
+| `osimflow export-results` | Export aggregated results to CSV or JSON, or `--format openstudio-server-csv` for the openstudio-server `download_data.csv` layout (`--include-failed` / `--no-include-failed`; issue #585). |
 
 #### Subcommand-specific flags
 

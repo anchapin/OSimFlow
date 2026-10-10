@@ -1,0 +1,3 @@
+name,_id,status,status_message,hvac.cop,envelope.wall_r,reporting_179_d.out_eui,reporting_179_d.simulation_failed_message
+s000,s000,completed,completed normal,3.5,12.0,55.2,
+s001,s001,completed,datapoint failure,,,,Measure hvac failed: bad argument

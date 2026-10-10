@@ -783,6 +783,12 @@ name in this section.
   imports `apply_filter` / `load_aggregated_results` from here for
   its route handlers; do not import the CLI helpers from the api
   module (use this module directly).
+- `osimflow/server_csv.py` — openstudio-server `download_data.csv`
+  layout export (issue #1872): `build_server_csv_frame`,
+  `SIMULATION_FAILED_COL`. Powers
+  `osimflow export-results --format openstudio-server-csv`; columns
+  `name,_id,status,status_message`, then `<measure>.<arg>` variables,
+  outputs, and `reporting_179_d.simulation_failed_message` last.
 - `osimflow/handoff_record.py` — `HandoffRecord` +
   `NoHandoffRecordError` + `IDEMPOTENCY_KEY_HEADER` +
   `HANDOFF_RECORD_NAME` + `read_handoff_record`,

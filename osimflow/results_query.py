@@ -234,6 +234,34 @@ def query_results_cli(  # noqa: PLR0912
     }
 
 
+def _export_server_csv(
+    paths: list[tuple[Path, str]], output_path: str | None, include_failed: bool
+) -> int:
+    """Write the openstudio-server ``download_data.csv`` layout (issue #1872)."""
+    from osimflow.server_csv import build_server_csv_frame  # noqa: PLC0415
+
+    frames: list[pd.DataFrame] = []
+    for campaign_path, _label in paths:
+        df = build_server_csv_frame(campaign_path)
+        if df.empty:
+            log.warning("No results found in %s", campaign_path)
+            continue
+        if not include_failed:
+            df = df[df["status_message"] != "datapoint failure"]
+        frames.append(df)
+    if not frames:
+        log.error("No results to export")
+        return 1
+    combined = pd.concat(frames, ignore_index=True)
+    content = combined.to_csv(index=False)
+    if output_path:
+        Path(output_path).write_text(content)
+        print(f"Exported {len(combined)} rows to {output_path}")
+    else:
+        print(content)
+    return 0
+
+
 def export_results_cli(  # noqa: PLR0912
     campaign_ids: list[str] | None = None,
     outdirs: list[str] | None = None,
@@ -253,7 +281,7 @@ def export_results_cli(  # noqa: PLR0912
     filter_expr
         JSON filter expression as a string.
     format
-        Export format: ``csv`` or ``json``.
+        Export format: ``csv``, ``json`` or ``openstudio-server-csv``.
     output_path
         Output file path. If None, prints to stdout.
     include_failed
@@ -276,6 +304,9 @@ def export_results_cli(  # noqa: PLR0912
     if not paths_to_query:
         log.error("No valid campaign directories found")
         return 1
+
+    if format == "openstudio-server-csv":
+        return _export_server_csv(paths_to_query, output_path, include_failed)
 
     all_dfs: list[pd.DataFrame] = []
 
