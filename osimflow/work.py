@@ -613,8 +613,11 @@ def default_apply_parameters(
             type or instance name that does not exist in the model.
     """
     osm_path = out / "model.osm"
+    # Issue #1869: measure arguments and the weather file live in the OSW
+    # (plain JSON), so they are applied without the OpenStudio bindings.
+    parameters = _apply_osw_parameters(out / "workflow.osw", parameters)
     if not parameters:
-        # Nothing to mutate (issue #1812): never load the OpenStudio
+        # Nothing left to mutate (issue #1812): never load the OpenStudio
         # bindings or rewrite the staged package, so an existing OSW runs
         # byte-for-byte as supplied.
         if not (out / "workflow.osw").is_file() and not osm_path.is_file():
@@ -660,6 +663,43 @@ def default_apply_parameters(
     )
     log.info("default_apply_parameters: mutated .osm saved to %s", osm_path)
     return result
+
+
+def _apply_osw_parameters(osw_path: Path, parameters: dict[str, Any]) -> dict[str, Any]:
+    """Apply OSW-level parameters in place; return the remaining ``.osm`` ones.
+
+    Handles the reserved ``__epw_file__`` key (``weather_file``) and every
+    parameter that maps to a measure argument in *osw_path*. Categorical
+    ``{"label": ..., "index": ...}`` values are written as their label.
+    """
+    from .apply_params import (  # noqa: PLC0415
+        EPW_FILE_KEY,
+        _mutate_osw,
+        mutate_osw_weather_file,
+        parse_osw_arguments,
+    )
+
+    remaining = dict(parameters)
+    epw_file = remaining.pop(EPW_FILE_KEY, None)
+    if not osw_path.is_file():
+        if epw_file is not None:
+            log.warning("epw_file requested but no workflow.osw in %s; ignoring", osw_path.parent)
+        return remaining
+    if remaining:
+        mappings = parse_osw_arguments(osw_path)
+        osw_params: dict[str, Any] = {}
+        for key in list(remaining):
+            mapped = mappings.get(key)
+            if mapped is not None and mapped.kind == "measure_argument":
+                value = remaining.pop(key)
+                if isinstance(value, dict) and "label" in value:
+                    value = value["label"]
+                osw_params[key] = value
+        if osw_params:
+            _mutate_osw(osw_path, osw_params, mappings)
+    if epw_file is not None:
+        mutate_osw_weather_file(osw_path, str(epw_file))
+    return remaining
 
 
 def _apply_osm_mutations(
