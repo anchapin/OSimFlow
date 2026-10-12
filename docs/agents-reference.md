@@ -503,7 +503,14 @@ name in this section.
   boundary — issue #1539), extracted from `Campaign` (issue #1462).
 - `osimflow/logging.py` — `JSONFormatter` + `RotatingFileHandler`
   + `get_logger`, `setup_logging`, `LogAggregator`.
-- `osimflow/registry.py` — `CampaignRegistry` + `CampaignRecord`
+- `osimflow/registry/` — subpackage (issue #1891) holding
+  `__init__.py` (the registry below), `results_db.py`,
+  `results_query.py` and `cross_run_aggregator.py`;
+  `osimflow/results_db.py`, `osimflow/results_query.py` and
+  `osimflow/cross_run_aggregator.py` are `sys.modules` aliases of them
+  kept for back-compat (patch seams and imports at the old paths still
+  work).
+- `osimflow/registry/__init__.py` — `CampaignRegistry` + `CampaignRecord`
   (powers `list`/`show`/`compare`/`backup`/`restore`).
 - `osimflow/pareto.py` — `ParetoFront` + `ParetoSolution`.
 - `osimflow/measures.py` — `MeasureRegistry` + `MeasureArgument` +
@@ -570,8 +577,8 @@ name in this section.
   verified digest and (when triangulated) the source tag.
 - `osimflow/data_point_manager.py` — `DataPoint`,
   `DataPointManager`, `DataPointStatus`.
-- `osimflow/cross_run_aggregator.py` — `CrossRunAggregator`.
-- `osimflow/results_query.py` — cross-campaign results query/export
+- `osimflow/registry/cross_run_aggregator.py` — `CrossRunAggregator`.
+- `osimflow/registry/results_query.py` — cross-campaign results query/export
   helpers (issue #1699): `query_results_cli` (powers
   ``osimflow query-results``), `export_results_cli` (powers
   ``osimflow export-results``), `load_aggregated_results`, and
@@ -670,7 +677,7 @@ name in this section.
 - `osimflow/apply_params.py`, `osimflow/aggregation.py`,
   `osimflow/audit.py`, `osimflow/byos.py`,
   `osimflow/event_log.py`, `osimflow/json_utils.py`,
-  `osimflow/results_db.py`,
+  `osimflow/registry/results_db.py`,
   `osimflow/validation.py` (`ValidationError`) — internal
   supporting modules.
 - `osimflow/webhook.py` — `WebhookClient` (campaign-completion

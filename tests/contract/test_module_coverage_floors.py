@@ -101,7 +101,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/config.py": 87.26,
     "osimflow/cosign.py": 92.59,
     "osimflow/cost_tracking.py": 97.18,
-    "osimflow/cross_run_aggregator.py": 94.98,
+    "osimflow/registry/cross_run_aggregator.py": 94.98,
     "osimflow/data_point_manager.py": 77.81,
     "osimflow/distributed_cache.py": 87.50,
     "osimflow/distributed_jobqueue.py": 73.38,
@@ -124,10 +124,10 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/observability/__init__.py": 97.17,
     "osimflow/offline_bundle.py": 94.20,
     "osimflow/pareto.py": 97.09,
-    "osimflow/registry.py": 98.20,
+    "osimflow/registry/__init__.py": 98.20,
     "osimflow/remote_runner.py": 82.23,
-    "osimflow/results_db.py": 94.83,
-    "osimflow/results_query.py": 59.82,
+    "osimflow/registry/results_db.py": 94.83,
+    "osimflow/registry/results_query.py": 59.82,
     "osimflow/storage/__init__.py": 95.27,
     "osimflow/task_payload_hmac.py": 100.00,
     "osimflow/taskqueue.py": 92.96,
@@ -237,6 +237,7 @@ def _in_scope_files() -> set[str]:
         "osimflow/notifications/*.py",
         "osimflow/storage/*.py",
         "osimflow/observability/*.py",
+        "osimflow/registry/*.py",
     ):
         out.update(
             str(p.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -262,6 +263,9 @@ def _in_scope_files() -> set[str]:
         "osimflow/_storage_retry.py",
         "osimflow/monitoring.py",
         "osimflow/mlflow_hook.py",
+        "osimflow/cross_run_aggregator.py",
+        "osimflow/results_db.py",
+        "osimflow/results_query.py",
     ):
         out.discard(path)
     return out

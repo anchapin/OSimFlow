@@ -42,7 +42,6 @@ from .config import (
 )
 from .cosign import CosignVerificationError, verify_image_signature
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
-from .cross_run_aggregator import CrossRunAggregator
 from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
 from .distributed_cache import (
     DistributedCache,
@@ -111,6 +110,7 @@ from .observability import (
 from .observability.monitoring import RunTrace, StepTrace
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
+from .registry.cross_run_aggregator import CrossRunAggregator
 from .taskqueue import (
     ConsumerQueue,
     DaskTaskQueue,

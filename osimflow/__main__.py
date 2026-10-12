@@ -142,7 +142,6 @@ from osimflow.cli.status import (  # noqa: F401
     _download_local_results,
 )
 from osimflow.cosign import DEFAULT_COSIGN_OIDC_ISSUER  # noqa: F401
-from osimflow.cross_run_aggregator import CrossRunAggregator  # noqa: F401
 from osimflow.executor_configs import add_executor_arguments  # noqa: F401
 from osimflow.exporters.osa import OSAExporter  # noqa: F401
 from osimflow.handoff_record import (
@@ -156,6 +155,7 @@ from osimflow.handoff_record import (
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa  # noqa: F401
 from osimflow.manifest import _validate_coordinator_url
 from osimflow.offline_bundle import OfflineBundleError, verify_offline_bundle
+from osimflow.registry.cross_run_aggregator import CrossRunAggregator  # noqa: F401
 from osimflow.validation import ValidationError
 
 log = logging.getLogger("osimflow.__main__")
