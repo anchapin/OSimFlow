@@ -75,7 +75,6 @@ from ..cosign import (
 )
 from ..data_point_manager import DataPointManager
 from ..distributed_cache import build_cache, campaign_state_namespace
-from ..distributed_jobqueue import build_job_queue
 from ..document_store import build_document_store
 from ..errors import OSimFlowRuntimeError
 from ..executors import BaseExecutor, Handle
@@ -96,6 +95,8 @@ from ..observability.monitoring import (
     WorkerRecoveryManager,
     sample_log_paths,
 )
+from ..queues.control_plane import build_job_queue
+from ..queues.dispatch import ConsumerQueue
 from ..registry import CampaignRegistry
 from ..s3_campaign import (
     CLAIM_ACQUIRED,
@@ -107,7 +108,6 @@ from ..s3_campaign import (
     new_handoff,
 )
 from ..storage import ResultStorageUploader, build_result_storage
-from ..taskqueue import ConsumerQueue
 from ..work import (
     SevereEnergyPlusError,
     aggregate_results,

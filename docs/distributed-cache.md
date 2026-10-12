@@ -200,7 +200,7 @@ A single `--redis-url` does not back just the cache. When it is set, four OSimFl
 |---|---|---|---|
 | Distributed cache | `osimflow/distributed_cache.py` | Cross-worker cache *hint* (§2) | Circuit-breaker fail-fast (issue #1111); degrades to the pid-private local SQLite because the cache is a soft hint |
 | Document store | `osimflow/document_store.py` (`RedisDocumentStore`) | **Source of truth** for documents | Circuit-breaker fail-fast; **refuses silent divergence** — raises `DocumentStoreError` (issue #1014) |
-| Control-plane broadcast | `osimflow/distributed_jobqueue.py` | Cross-worker job-state transitions | Circuit-breaker fail-fast (issue #1397) |
+| Control-plane broadcast | `osimflow/queues/control_plane.py` | Cross-worker job-state transitions | Circuit-breaker fail-fast (issue #1397) |
 | API rate limiter | `osimflow/api/app.py` (`RateLimitMiddleware`) | Shared security state (per-key abuse counters) | Falls back to an in-process dict — backward-compatible but unsafe for multi-worker (issues #663, #768) |
 
 The split between "degrade" and "fail loud" is deliberate. A Redis outage that *seems* to recover but serves stale data would corrupt the source-of-truth view across workers, so `RedisDocumentStore` raises and the running campaign **aborts by design** rather than resuming against diverged state (issue #1014). Recovery is *restart*, not *auto-resume* — see below.
@@ -209,9 +209,9 @@ Three queue-adjacent modules with similar names have distinct roles ([ADR-0005](
 
 | Module | Role (ADR-0005) | Backing store |
 |---|---|---|
-| `osimflow/taskqueue.py` | **Work dispatch** — moving per-sample callables to compute (opt-in `--task-queue`) | Executor / task-queue backend (e.g. dask) |
-| `osimflow/jobqueue.py` | **Crash-recovery journal** — which `{sample}_{step}` items were in flight when a process died | Local filesystem |
-| `osimflow/distributed_jobqueue.py` | **Control-plane broadcast** — pub/sub fan-out of job-state transitions (ADR-0004 plane 3) | Redis (`--redis-url`) |
+| `osimflow/queues/dispatch.py` | **Work dispatch** — moving per-sample callables to compute (opt-in `--task-queue`) | Executor / task-queue backend (e.g. dask) |
+| `osimflow/queues/journal.py` | **Crash-recovery journal** — which `{sample}_{step}` items were in flight when a process died | Local filesystem |
+| `osimflow/queues/control_plane.py` | **Control-plane broadcast** — pub/sub fan-out of job-state transitions (ADR-0004 plane 3) | Redis (`--redis-url`) |
 
 ### Single-instance scope and the health probe
 
@@ -283,7 +283,7 @@ When `redis_url` is `None` (the default), `Campaign` uses a plain `SQLiteCache` 
 
 ### Distributed job queue coordination
 
-`osimflow/distributed_jobqueue.py` provides `DistributedJobQueue` with the same Redis pub/sub pattern, keeping the filesystem-based job queue (`JobQueue`) coherent across nodes. The job queue handles the fan-out/fan-in lifecycle (pending → in_progress → completed/failed).
+`osimflow/queues/control_plane.py` provides `DistributedJobQueue` with the same Redis pub/sub pattern, keeping the filesystem-based job queue (`JobQueue`) coherent across nodes. The job queue handles the fan-out/fan-in lifecycle (pending → in_progress → completed/failed).
 
 Redis channel:
 

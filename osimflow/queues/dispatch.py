@@ -1,0 +1,488 @@
+"""Distributed task queue abstraction for OSimFlow campaigns.
+
+This module provides two Celery-like queue interfaces that can accept jobs
+from multiple producers, distribute work to multiple workers, and provide
+retry / dead-letter / result persistence. The primary implementation uses
+``dask.distributed``.
+
+ARCH-001 gap: all job submission currently goes through the Campaign orchestrator
+directly to executors. There is no queue that can accept jobs from multiple
+producers, distribute work to multiple workers, and provide retry/dead-letter/
+result persistence. Integrating dask.distributed resolves ARCH-001 and ARCH-004
+(horizontal worker scaling) simultaneously.
+
+Design
+~~~~~~
+
+``ProducerQueue`` is the abstract push interface (enqueue). ``ConsumerQueue``
+is the abstract pull interface (dequeue). ``DaskTaskQueue`` and ``NoOpTaskQueue``
+implement both since dask.distributed and the no-op pass-through handle both
+push and pull semantics internally.
+
+``TaskHandle`` is a real subclass of the executor ``Handle``
+(``osimflow.executors.base.Handle``) since issue #1543 (ADR-0005): work
+dispatch and executor submission produce the *same* handle type, so the
+Campaign fan-out loop never unions the two. The queue modules are *not*
+interchangeable, though — see ADR-0005 for the distinct roles of
+``taskqueue.py`` (work dispatch), ``jobqueue.py`` (crash-recovery journal),
+and ``distributed_jobqueue.py`` (control-plane broadcast).
+
+The queue is opt-in via the ``--task-queue`` CLI flag. When ``none`` (the
+default), behaviour is identical to the existing direct-executor pattern.
+
+Usage
+~~~~~
+
+``--task-queue dask --dask-scheduler-address tcp://scheduler:8786``
+
+When a Dask scheduler address is not provided, ``DaskTaskQueue`` starts an
+embedded local cluster (single-process, multi-worker) so the queue works
+out-of-the-box without any external infrastructure.
+"""
+
+from __future__ import annotations
+
+__all__ = [
+    "ConsumerQueue",
+    "DaskTaskQueue",
+    "NoOpTaskQueue",
+    "ProducerQueue",
+    "TaskHandle",
+    "TaskQueueStatus",
+    "build_task_queue",
+]
+
+import abc
+import dataclasses
+import logging
+import time
+from collections.abc import Callable
+from concurrent.futures import Future
+from enum import Enum
+from typing import Any
+
+from osimflow.executors.base import Handle
+
+log = logging.getLogger("osimflow.taskqueue")
+
+
+class TaskQueueStatus(Enum):
+    """Possible states for a task handle."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    RETRYING = "retrying"
+
+
+@dataclasses.dataclass
+class TaskHandle(Handle):
+    """A future-like handle for a queued task.
+
+    Since issue #1543 (ADR-0005) this is a real subclass of the
+    executor ``Handle`` (``osimflow.executors.base.Handle``): work
+    dispatched via ``task_queue.submit`` and jobs submitted via
+    ``executor.submit`` produce the *same* handle type, so the
+    Campaign fan-out loop references a single type and fixes to
+    shared Handle semantics (e.g. deadline handling, issue #1465)
+    reach both. Queue-specific vocabulary (``task_id``, ``status``,
+    ``retry``) is preserved on top of the inherited identity /
+    worker-attribution fields; ``__post_init__`` keeps ``job_id``
+    and ``task_id`` in sync.
+
+    Attributes
+    ----------
+    task_id
+        Unique identifier for this task (assigned by the queue);
+        mirrored onto the inherited ``job_id``.
+    status
+        Current task state.
+    _future
+        Backing future from the underlying queue implementation.
+        May be ``None`` for handles created without one; ``result()``
+        fails closed (``RuntimeError``) in that case.
+    submitted_at
+        Unix timestamp when the task was submitted.
+    worker_id
+        Identifier of the worker that ran this task (populated when
+        the task starts).
+    """
+
+    job_id: str = ""
+    # ``Handle`` types ``_future`` non-Optional (executors always have a
+    # backing future); a queued handle may legitimately exist before one
+    # is attached. The ``result()`` override fails closed on ``None``
+    # before the base implementation could ever observe it, so the
+    # widening is deliberate (issue #1543).
+    _future: Future[Any] | None = None  # type: ignore[assignment]
+    task_id: str = ""
+    status: TaskQueueStatus = TaskQueueStatus.PENDING
+    submitted_at: float = dataclasses.field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        # Mirror the queue identity (``task_id``) onto the executor
+        # identity (``job_id``) so code written against ``Handle`` sees
+        # a meaningful identifier — whichever one was supplied wins.
+        if not self.job_id:
+            self.job_id = self.task_id
+        elif not self.task_id:
+            self.task_id = self.job_id
+
+    def done(self) -> bool:
+        """Return ``True`` if the task has reached a terminal state.
+
+        Queue semantics: terminality is tracked on ``status``, not by
+        probing the backing future (a PENDING dask handle whose future
+        has already resolved is still awaiting its state transition).
+        """
+        return self.status in (TaskQueueStatus.SUCCESS, TaskQueueStatus.FAILED)
+
+    def result(self, timeout: float | None = None) -> Any:
+        """Block until the task completes and return the result.
+
+        Raises the exception that caused the task to fail.
+        """
+        if self._future is None:
+            raise RuntimeError(f"task {self.task_id!r} has no backing future")
+        return self._future.result(timeout=timeout)
+
+    def retry(self) -> None:
+        """Re-queue a failed task for retry.
+
+        Raises ``RuntimeError`` if the task is not in FAILED state.
+        """
+        if self.status != TaskQueueStatus.FAILED:
+            raise RuntimeError(f"task {self.task_id!r} cannot be retried in state {self.status}")
+        log.info("retry requested for task %s", self.task_id)
+
+
+class ProducerQueue(abc.ABC):
+    """Abstract push-based task queue (enqueue side).
+
+    Subclass this to add a push-based queue backend (e.g. Celery, RabbitMQ)
+    where producers enqueue work and workers consume it asynchronously.
+
+    The Campaign uses this interface for fan-out steps when a push-based
+    queue is configured.
+    """
+
+    name: str = "base"
+
+    @abc.abstractmethod
+    def enqueue(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        """Submit a callable to the queue and return a handle.
+
+        Parameters
+        ----------
+        fn
+            The Python callable to execute.
+        args
+            Positional arguments passed to *fn*.
+        kwargs
+            Keyword arguments passed to *fn*.
+
+        Returns
+        -------
+        TaskHandle
+            A handle that can be used to await the result or retry the task.
+        """
+        ...
+
+    @abc.abstractmethod
+    def shutdown(self) -> None:
+        """Shutdown the producer client and release resources."""
+        ...
+
+
+class ConsumerQueue(abc.ABC):
+    """Abstract pull-based task queue (dequeue side).
+
+    Subclass this to add a pull-based queue backend where the queue
+    itself manages worker scheduling (e.g. dask.distributed, Ray).
+
+    The Campaign uses this interface for fan-out steps when a pull-based
+    queue is configured.
+    """
+
+    name: str = "base"
+
+    @abc.abstractmethod
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        """Submit a callable to the queue and return a handle.
+
+        Parameters
+        ----------
+        fn
+            The Python callable to execute.
+        args
+            Positional arguments passed to *fn*.
+        kwargs
+            Keyword arguments passed to *fn*.
+
+        Returns
+        -------
+        TaskHandle
+            A handle that can be used to await the result or retry the task.
+        """
+        ...
+
+    @abc.abstractmethod
+    def get_result(self, handle: TaskHandle, timeout: float | None = None) -> Any:
+        """Retrieve the result of a completed task.
+
+        This is a separate method (rather than just ``handle.result()``)
+        so that result persistence can be implemented separately from
+        the handle — results can be stored in a database or object store
+        even after the handle is discarded.
+        """
+        ...
+
+    @abc.abstractmethod
+    def retry(self, handle: TaskHandle) -> TaskHandle:
+        """Re-queue a failed task and return a new handle for the retry."""
+        ...
+
+    @abc.abstractmethod
+    def shutdown(self) -> None:
+        """Shutdown the consumer client and release resources."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# No-op queue (used when task_queue == "none")
+# ---------------------------------------------------------------------------
+
+
+class NoOpTaskQueue(ProducerQueue, ConsumerQueue):
+    """A no-op queue that runs tasks synchronously in the caller thread.
+
+    This is the identity queue: ``submit`` / ``enqueue`` runs ``fn(*args, **kwargs)``
+    immediately and returns a handle in SUCCESS state. It is used when
+    ``--task-queue none`` (the default) so the Campaign has a consistent
+    interface regardless of whether a distributed queue is configured.
+
+    Implements both ``ProducerQueue`` (push/enqueue) and ``ConsumerQueue``
+    (pull/submit) for API symmetry — in practice both methods behave identically
+    in this no-op implementation.
+    """
+
+    name = "none"
+
+    def enqueue(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        try:
+            result = fn(*args, **kwargs)
+            fut: Future[Any] = Future()
+            fut.set_result(result)
+        except Exception as exc:
+            fut = Future()
+            fut.set_exception(exc)
+        return TaskHandle(
+            task_id="noop",
+            status=TaskQueueStatus.SUCCESS,
+            _future=fut,
+            submitted_at=time.time(),
+            worker_id="main",
+        )
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        return self.enqueue(fn, *args, **kwargs)
+
+    def get_result(self, handle: TaskHandle, timeout: float | None = None) -> Any:
+        if handle._future is None:
+            raise RuntimeError(f"task {handle.task_id!r} has no backing future")
+        return handle._future.result(timeout=timeout)
+
+    def retry(self, handle: TaskHandle) -> TaskHandle:
+        raise RuntimeError("retry is not supported on NoOpTaskQueue")
+
+    def shutdown(self) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Dask distributed queue
+# ---------------------------------------------------------------------------
+
+
+class DaskTaskQueue(ProducerQueue, ConsumerQueue):
+    """Distributed task queue backed by ``dask.distributed``.
+
+    Connects to a Dask scheduler at the address provided via
+    ``--dask-scheduler-address``. When no address is provided, starts
+    an embedded single-process cluster so the queue works without any
+    external infrastructure.
+
+    The Dask scheduler handles:
+    - Horizontal worker scaling (ARCH-004).
+    - Worker failure detection and retry.
+    - Result persistence via the scheduler's state store.
+    - Dead-letter tracking via ``.exception()`` on the future.
+
+    Security: credentials are sourced from the environment (DASK_SCHEDULER_URI
+    env var, TLS certs, etc.). The constructor does **not** accept long-lived
+    credentials.
+
+    Implements both ``ProducerQueue`` (enqueue) and ``ConsumerQueue`` (submit).
+    In dask.distributed the scheduler acts as both a push target (submit from
+    the client) and a pull source (workers call get()), so a single
+    ``DaskTaskQueue`` instance handles both interfaces.
+    """
+
+    name = "dask"
+
+    def __init__(
+        self,
+        scheduler_address: str | None = None,
+        *,
+        max_retries: int = 3,
+    ) -> None:
+        self.scheduler_address = scheduler_address
+        self.max_retries = max_retries
+        self._client: Any = None
+        self._embedded_cluster: Any = None
+
+    def _ensure_client(self) -> Any:
+        """Lazily create the Dask client and optionally start an embedded cluster."""
+        if self._client is not None:
+            return self._client
+
+        import dask.distributed  # noqa: PLC0415
+
+        if self.scheduler_address is None:
+            cluster = dask.distributed.LocalCluster(
+                n_workers=2,
+                threads_per_worker=1,
+                silence_logs=logging.WARNING,
+            )
+            self._embedded_cluster = cluster
+            log.info("dask task queue: started embedded LocalCluster (workers=2, threads=1)")
+        else:
+            log.info("dask task queue: connecting to scheduler %s", self.scheduler_address)
+
+        self._client = dask.distributed.Client(
+            self.scheduler_address,
+            asynchronous=False,
+            set_as_default=False,
+        )
+        return self._client
+
+    def enqueue(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        """Alias for ``submit`` — dask.distributed is brokerless and handles both."""
+        return self.submit(fn, *args, **kwargs)
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        client = self._ensure_client()
+
+        future = client.submit(fn, *args, **kwargs)
+        task_id = f"dask-task-{id(future)}"
+
+        log.debug(
+            "dask task queue submit: task_id=%s fn=%s",
+            task_id,
+            getattr(fn, "__name__", repr(fn)),
+        )
+
+        return TaskHandle(
+            task_id=task_id,
+            status=TaskQueueStatus.PENDING,
+            _future=future,
+            submitted_at=time.time(),
+            worker_id=None,
+        )
+
+    def get_result(self, handle: TaskHandle, timeout: float | None = None) -> Any:
+        if handle._future is None:
+            raise RuntimeError(f"task {handle.task_id!r} has no backing future")
+        return handle._future.result(timeout=timeout)
+
+    def retry(self, handle: TaskHandle) -> TaskHandle:
+        if handle.status != TaskQueueStatus.FAILED:
+            raise RuntimeError(
+                f"task {handle.task_id!r} cannot be retried in state {handle.status}"
+            )
+        log.info("dask task queue: retry requested for task %s", handle.task_id)
+        raise NotImplementedError(
+            "DaskTaskQueue.retry() requires re-submitting the original function. "
+            "Store the original fn/args/kwargs to enable retry."
+        )
+
+    def shutdown(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+        if self._embedded_cluster is not None:
+            self._embedded_cluster.close()
+            self._embedded_cluster = None
+            log.info("dask task queue: embedded cluster closed")
+        log.info("dask task queue: shutdown complete")
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def build_task_queue(
+    backend: str,
+    scheduler_address: str | None = None,
+    *,
+    max_retries: int = 3,
+) -> ConsumerQueue:
+    """Factory to build a TaskQueue from a backend name.
+
+    Parameters
+    ----------
+    backend
+        One of ``"none"`` or ``"dask"``.
+    scheduler_address
+        Dask scheduler address (e.g. ``tcp://scheduler:8786``).
+        Required when *backend* is ``"dask"``.
+    max_retries
+        Maximum retry attempts for failed tasks (default: 3).
+
+    Returns
+    -------
+    ConsumerQueue
+        A queue instance implementing both ``ProducerQueue`` and
+        ``ConsumerQueue`` interfaces (they are the same concrete class
+        for all built-in backends).
+    """
+    if backend == "none":
+        return NoOpTaskQueue()
+    if backend == "dask":
+        return DaskTaskQueue(
+            scheduler_address=scheduler_address,
+            max_retries=max_retries,
+        )
+    raise ValueError(f"unknown task queue backend: {backend!r} (expected 'none' or 'dask')")

@@ -616,9 +616,9 @@ context-mode / codebase-memory-mcp are exposed):
   (`.agents/results/architecture/0005-queue-modules-roles.md`)](.agents/results/architecture/0005-queue-modules-roles.md)
   — `TaskHandle` subclasses the executor `Handle` (one handle
   contract, issue #1543); documents the distinct roles of the three
-  queue modules: work dispatch (`taskqueue.py`) vs. crash-recovery
-  journal (`jobqueue.py`) vs. control-plane broadcast
-  (`distributed_jobqueue.py`).
+  queue modules: work dispatch (`queues/dispatch.py`) vs. crash-recovery
+  journal (`queues/journal.py`) vs. control-plane broadcast
+  (`queues/control_plane.py`).
 - [Decision verdict
   (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md)
   — spike outcome that ratified the foundation.

@@ -765,7 +765,7 @@ green server has immediate access to the full campaign history.
 
 ### 7.3. Job queue crash recovery
 
-The `JobQueue` (`osimflow/jobqueue.py`) is a filesystem-based
+The `JobQueue` (`osimflow/queues/journal.py`) is a filesystem-based
 persistence layer that tracks the lifecycle of each work item:
 
 ```

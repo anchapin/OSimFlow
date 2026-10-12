@@ -314,7 +314,15 @@ name in this section.
   `record_failure`, issue #1569 — fan-out threads no longer
   race past the cooldown boundary and burn per-call socket
   timeouts on a still-down Redis).
-- `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
+- `osimflow/queues/` — subpackage (issue #1891) grouping the three ADR-0005
+  queue modules by role: `dispatch.py` (work dispatch, was `taskqueue.py`),
+  `journal.py` (crash-recovery journal, was `jobqueue.py`) and
+  `control_plane.py` (control-plane broadcast, was
+  `distributed_jobqueue.py`). `osimflow/taskqueue.py`,
+  `osimflow/jobqueue.py` and `osimflow/distributed_jobqueue.py` are
+  `sys.modules` aliases of them kept for back-compat (patch seams and
+  imports at the old paths still work).
+- `osimflow/queues/control_plane.py` — `DistributedJobQueue` +
   `build_job_queue` (Redis pub/sub wrapper).  Carries its own
   `CircuitBreaker(name=f"jobqueue:{campaign_id}")` (issue #1397) so
   persistent Redis outages fail-fast at the publish boundary instead of
@@ -348,14 +356,14 @@ name in this section.
   `--s3-artifact-endpoint` URLs unless
   `--allow-insecure-storage-endpoint` is set (issue #1386);
   mirrors `osimflow.distributed_cache.validate_redis_url`.
-- `osimflow/taskqueue.py` — `ProducerQueue` ABC (fan-out / push) +
+- `osimflow/queues/dispatch.py` — `ProducerQueue` ABC (fan-out / push) +
   `ConsumerQueue` ABC (fan-in / pull) + `DaskTaskQueue`
   (implements both), `NoOpTaskQueue` (implements both),
   `TaskHandle` (a subclass of the executor `Handle` since
   issue #1543, so `Campaign` fan-out references one handle type),
   `TaskQueueStatus`, `build_task_queue`. Work-dispatch role only —
-  distinct from the `jobqueue.py` crash-recovery journal and the
-  `distributed_jobqueue.py` control-plane broadcast (ADR-0005).
+  distinct from the `queues/journal.py` crash-recovery journal and the
+  `queues/control_plane.py` control-plane broadcast (ADR-0005).
 - `osimflow/document_store.py` — `DocumentStore` ABC,
   `DocumentStoreError`, `DocumentNotFoundError`,
   `DuplicateDocumentError`, `SQLiteDocumentStore`,
@@ -373,7 +381,7 @@ name in this section.
   `_build_where_clause`. `osimflow/document_store.py` keeps
   `RedisDocumentStore`, `_get_redis_sync` (test patch seam),
   `build_document_store`, and re-exports every historical name.
-- `osimflow/jobqueue.py` — filesystem-based `JobQueue`
+- `osimflow/queues/journal.py` — filesystem-based `JobQueue`
   (crash recovery).
 - `osimflow/observability/` — subpackage (issue #1891) holding
   `__init__.py` (the backends below), `monitoring.py` and
