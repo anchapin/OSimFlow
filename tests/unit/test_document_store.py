@@ -419,9 +419,9 @@ class TestSQLiteDocumentStore:
         """
         import re
 
-        source = (Path(__file__).resolve().parents[2] / "osimflow" / "document_store.py").read_text(
-            encoding="utf-8"
-        )
+        source = (
+            Path(__file__).resolve().parents[2] / "osimflow" / "_document_store_sqlite.py"
+        ).read_text(encoding="utf-8")
         executable_truncate = re.findall(
             r'\.execute\(\s*["\']PRAGMA\s*wal_checkpoint\(TRUNCATE\)["\']',
             source,

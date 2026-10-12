@@ -83,6 +83,8 @@ _SEED_PCT: dict[str, float] = {
     # --- issue #1694 scope-widening measurements ---
     "osimflow/__init__.py": 80.95,
     "osimflow/_eval_safe.py": 81.36,
+    "osimflow/_document_store_base.py": 88.00,
+    "osimflow/_document_store_sqlite.py": 91.00,
     "osimflow/_sqlite_store.py": 67.69,
     "osimflow/_subprocess_utils.py": 85.45,
     "osimflow/aggregation.py": 93.40,
@@ -103,7 +105,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/data_point_manager.py": 77.81,
     "osimflow/distributed_cache.py": 87.50,
     "osimflow/distributed_jobqueue.py": 73.38,
-    "osimflow/document_store.py": 81.19,
+    "osimflow/document_store.py": 74.00,
     "osimflow/errors.py": 100.00,
     "osimflow/event_log.py": 100.00,
     "osimflow/handoff_record.py": 100.00,
