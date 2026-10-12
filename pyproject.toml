@@ -316,7 +316,6 @@ fixable = ["ALL"]
 "tools/*" = ["BLE", "S110", "T20"]
 "user_scripts/**" = ["BLE", "S110", "T20"]
 "examples/**" = ["BLE", "S110", "T20"]
-"notebooks/**" = ["BLE", "S110", "T20"]
 "docker/**" = ["BLE", "S110", "T20"]
 ".agents/**" = ["BLE", "S110", "T20"]
 

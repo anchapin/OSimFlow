@@ -11,10 +11,10 @@ storage requirements for parametric campaigns.
 ## Jupyter Notebooks
 
 A starter notebook for exploring campaign results with DuckDB is available at
-[`notebooks/duckdb_parquet_analysis.ipynb`](../notebooks/duckdb_parquet_analysis.ipynb).
+[`examples/notebooks/duckdb_parquet_analysis.ipynb`](../examples/notebooks/duckdb_parquet_analysis.ipynb).
 It includes ready-made queries for monthly energy by end-use, peak demand profiling,
 EUI distribution histograms, failed-simulation summaries, and cross-sample comparison.
-See [`notebooks/README.md`](../notebooks/README.md) for setup instructions.
+See [`examples/notebooks/README.md`](../examples/notebooks/README.md) for setup instructions.
 
 ---
 

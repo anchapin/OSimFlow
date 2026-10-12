@@ -629,7 +629,8 @@ name in this section.
   inherits from `OSimFlowError` while keeping its historic
   `RuntimeError` / `ValueError` catch behaviour (issue #1484).
 - `osimflow/client.py` — typed Python client for the `[api]`
-  REST surface.
+  REST surface. **Canonical** REST client; the separate sync
+  `osimflow_client/` package is deprecated (issue #1887).
 - `osimflow/mlflow_hook.py` — optional MLflow integration
   (lazy-imports `mlflow`).
 - `osimflow/tui.py` — optional `rich`-based terminal UI.
@@ -942,7 +943,9 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
 - `osimflow-deploy/` — cloud-deployment recipes sub-monorepo
   (independent `osimflow-deploy-v` tag prefix, CODEOWNERS
   for IaC). Links to actual IaC in `infra/`; does not
-  duplicate it.
+  duplicate it (the sole Helm chart is `infra/kubernetes/`; compose
+  files live at the repo root; notebooks live in `examples/notebooks/`;
+  issue #1887).
 - `docker/osimflow-worker/` — AWS Batch worker runtime image (issue
   #1810): `Dockerfile` layers Python 3.12 + `osimflow[aws]` onto
   `nrel/openstudio`, no ENTRYPOINT, non-root, `/scratch`; `smoke_test.py`
