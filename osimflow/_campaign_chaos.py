@@ -26,7 +26,7 @@ from .chaos import (
     MemoryPressureInjector,
     NetworkDelayInjector,
 )
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 
 log = logging.getLogger("osimflow.campaign")
 

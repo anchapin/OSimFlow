@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 from .config import CampaignConfig
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 
 log = logging.getLogger("osimflow.campaign")
 

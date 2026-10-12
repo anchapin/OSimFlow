@@ -171,19 +171,19 @@ from .executors.transport import ResultTransportConfig
 from .json_utils import safe_json_dumps, safe_json_loads
 from .manifest import _validate_coordinator_url
 from .measures import MeasureRegistry, UnmappedVariableError
-from .mlflow_hook import (
+from .notifications.alerting import AlertManager, build_alert_manager
+from .observability.mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
     log_mlflow_params,
     maybe_end_mlflow_run,
     maybe_start_mlflow_run,
 )
-from .monitoring import (
+from .observability.monitoring import (
     RunTrace,
     WorkerRecoveryManager,
     sample_log_paths,
 )
-from .notifications.alerting import AlertManager, build_alert_manager
 from .registry import CampaignRegistry
 from .s3_campaign import (
     CLAIM_ACQUIRED,

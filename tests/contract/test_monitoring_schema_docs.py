@@ -28,7 +28,7 @@ import pytest
 # Project root is the parent of this package.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_MONITORING = REPO_ROOT / "osimflow" / "monitoring.py"
+_MONITORING = REPO_ROOT / "osimflow" / "observability" / "monitoring.py"
 _SCHEMA_DOC = REPO_ROOT / "docs" / "monitoring-schema.md"
 _GUIDE_DOC = REPO_ROOT / "docs" / "runjson-guide.md"
 

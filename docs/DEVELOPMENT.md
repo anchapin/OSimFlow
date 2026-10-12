@@ -189,8 +189,8 @@ OSimFlow/
 │   ├── jobqueue.py              # Filesystem JobQueue (crash recovery)
 │   ├── distributed_jobqueue.py  # Redis pub/sub job-state queue
 │   ├── circuit_breaker.py       # CircuitBreaker guarding the Redis data planes
-│   ├── monitoring.py            # RunTrace, StepTrace, SampleTrace → run.json
-│   ├── observability.py         # CloudWatch/Prometheus/OpenTelemetry backends
+│   ├── monitoring.py            # alias → observability/monitoring.py; RunTrace, StepTrace, SampleTrace → run.json
+│   ├── observability/           # CloudWatch/Prometheus/OpenTelemetry backends (+ monitoring, mlflow_hook)
 │   ├── health.py                # "osimflow health" — one check per executor
 │   ├── chaos.py                 # ChaosEngine + fault injectors
 │   ├── cost_tracking.py         # CostTracker + cost estimates
@@ -208,7 +208,7 @@ OSimFlow/
 │   ├── version_detection.py     # OpenStudio version detection/compatibility
 │   ├── apply_params.py          # Parameter pre-flight + application
 │   ├── pareto.py                # ParetoFront + ParetoSolution
-│   ├── mlflow_hook.py           # Optional MLflow integration
+│   ├── mlflow_hook.py           # alias → observability/mlflow_hook.py; Optional MLflow integration
 │   ├── tui.py                   # Optional rich-based terminal UI
 │   ├── client.py                # Typed Python client for the REST API
 │   │

@@ -93,7 +93,6 @@ from .measures import (
     MeasureRegistryError,
     UnmappedVariableError,
 )
-from .monitoring import RunTrace, StepTrace
 from .notifications.alerting import AlertManager, build_alert_manager
 from .notifications.notify import (
     EmailNotifyBackend,
@@ -109,6 +108,7 @@ from .observability import (
     PrometheusBackend,
     new_trace_id,
 )
+from .observability.monitoring import RunTrace, StepTrace
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
 from .taskqueue import (

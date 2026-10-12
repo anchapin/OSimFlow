@@ -749,7 +749,7 @@ osimflow run \
 ### 7.2. run.json persists across restarts
 
 The monitoring trace (`run.json`) is written incrementally by
-`RunTrace.update_sample()` in `osimflow/monitoring.py`. Each completed
+`RunTrace.update_sample()` in `osimflow/observability/monitoring.py`. Each completed
 sample triggers an atomic write (temp file + rename), so the file is
 never in a corrupted state — even if the process is killed mid-campaign.
 

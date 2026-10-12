@@ -125,7 +125,7 @@ Both can be active simultaneously without conflict.
 
 ### Real file-tracking smoke test
 
-The MLflow integration (`osimflow/mlflow_hook.py`) is unit-tested with a fake
+The MLflow integration (`osimflow/observability/mlflow_hook.py`) is unit-tested with a fake
 `mlflow` module injected into `sys.modules`. To also exercise the *real*
 `mlflow` package, a hermetic smoke test runs against a local `file://` tracking
 store (no server required) plus stub simulation. This catches API regressions —
@@ -166,7 +166,7 @@ class MyDatadogBackend(ObservabilityBackend):
         ...
 ```
 
-See `osimflow/observability.py` for the full ABC definition.
+See `osimflow/observability/__init__.py` for the full ABC definition.
 
 ## Real-sink validation
 

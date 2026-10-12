@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CampaignConfig
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 from .webhook import WebhookClient
 
 log = logging.getLogger("osimflow.campaign")

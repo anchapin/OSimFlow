@@ -947,12 +947,12 @@ The canonical implementation lives in:
 
 | Component | Source file |
 |---|---|
-| `StepTrace` dataclass | `osimflow/monitoring.py` |
-| `SampleTrace` dataclass | `osimflow/monitoring.py` |
-| `GenerationTrace` dataclass | `osimflow/monitoring.py` |
-| `RunTrace` class and `to_dict()` | `osimflow/monitoring.py` |
+| `StepTrace` dataclass | `osimflow/observability/monitoring.py` |
+| `SampleTrace` dataclass | `osimflow/observability/monitoring.py` |
+| `GenerationTrace` dataclass | `osimflow/observability/monitoring.py` |
+| `RunTrace` class and `to_dict()` | `osimflow/observability/monitoring.py` |
 | Trace population (step hooks) | `osimflow/campaign.py` |
 | Chaos engine feeding `chaos_invocations` | `osimflow/chaos.py` |
 | Circuit breakers feeding `circuit_breaker_states` | `osimflow/circuit_breaker.py` |
 | `Alert` payloads feeding `alerts_fired` | `osimflow/alerting.py` |
-| `sample_log_paths()` helper | `osimflow/monitoring.py` |
+| `sample_log_paths()` helper | `osimflow/observability/monitoring.py` |

@@ -369,13 +369,18 @@ name in this section.
   `build_document_store`, and re-exports every historical name.
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
-- `osimflow/monitoring.py` — `RunTrace` (includes
+- `osimflow/observability/` — subpackage (issue #1891) holding
+  `__init__.py` (the backends below), `monitoring.py` and
+  `mlflow_hook.py`; `osimflow/monitoring.py` and
+  `osimflow/mlflow_hook.py` are `sys.modules` aliases of them kept for
+  back-compat (patch seams and imports at the old paths still work).
+- `osimflow/observability/monitoring.py` — `RunTrace` (includes
   `chaos_schedule`, `circuit_breaker_states`, `alerts_fired`,
   `accounting_errors`) + `StepTrace` + `record_alert()` +
   `record_accounting_error()` (issue #1674 — fan-out drain
   accounting-failure counter surfaced in `run.json`); writes
   `run.json`.
-- `osimflow/observability.py` — `ObservabilityBackend` ABC +
+- `osimflow/observability/__init__.py` — `ObservabilityBackend` ABC +
   `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
   + `new_trace_id` + `record_circuit_breaker_event`.
 - `osimflow/_campaign_observability.py` — `ObservabilityManager`
@@ -701,7 +706,7 @@ name in this section.
 - `osimflow/client.py` — typed Python client for the `[api]`
   REST surface. **Canonical** REST client; the separate sync
   `osimflow_client/` package is deprecated (issue #1887).
-- `osimflow/mlflow_hook.py` — optional MLflow integration
+- `osimflow/observability/mlflow_hook.py` — optional MLflow integration
   (lazy-imports `mlflow`).
 - `osimflow/tui.py` — optional `rich`-based terminal UI.
 - `osimflow/_eval_safe.py`, `osimflow/_subprocess_utils.py` —

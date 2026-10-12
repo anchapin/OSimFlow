@@ -694,7 +694,7 @@ For kBtu/ft², multiply MJ/m² by 0.0888.
 |---|---|
 | Default KPI extractor | `bin/extract_kpis.py` |
 | BYOS loader | `osimflow/byos.py` (planned) |
-| SampleTrace schema | `osimflow/monitoring.py` |
+| SampleTrace schema | `osimflow/observability/monitoring.py` |
 | BYOS interface spec | `user_scripts/README.md` |
 | PRD — KPI extraction | `docs/OSimFlow.md` §4.2 |
 | OpenStudio version matrix | `docs/openstudio-image-distribution.md` |
