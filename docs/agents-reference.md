@@ -306,6 +306,14 @@ name in this section.
   burning the 5 s socket timeout on every job state transition; closes
   the control-plane sibling of issue #1111. Single-instance Redis is
   the supported topology (issue #1562 / ADR-0004).
+- `osimflow/_storage_endpoint.py`, `osimflow/_storage_retry.py`,
+  `osimflow/_storage_base.py`, `osimflow/_storage_azure.py` — pieces split out of `storage.py`
+  (issue #1890): endpoint validation (`_validate_storage_endpoint`),
+  transient-error classifier, the `ResultStorage` ABC + `LocalStorage`,
+  and `AzureBlobStorage`. `storage.py` re-exports every moved name and
+  keeps `_retry_transient_storage` (patch seam), `S3Storage`, `GCSStorage`, `S3ArtifactStorage`,
+  `ResultStorageUploader` and `build_result_storage`; they log under the
+  `osimflow.storage` logger.
 - `osimflow/storage.py` — `ResultStorage` ABC (`put_if_absent`: atomic
   create-if-absent, `S3Storage` uses `If-None-Match: *`, base fails closed —
   issue #1881) + `LocalStorage`,

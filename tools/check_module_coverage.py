@@ -365,6 +365,11 @@ FLOORS: dict[str, float] = {
     "osimflow/_config_coerce.py": 86.00,  # measured 87.00%
     "osimflow/_config_quota.py": 62.00,  # measured 63.00%
     "osimflow/_config_sections.py": 99.00,  # measured 100.00%
+    # Split out of storage.py (issue #1890); readings from the CI-flag suite.
+    "osimflow/_storage_azure.py": 89.00,  # measured 90.00%
+    "osimflow/_storage_base.py": 94.00,  # measured 95.00%
+    "osimflow/_storage_endpoint.py": 99.00,  # measured 100.00%
+    "osimflow/_storage_retry.py": 99.00,  # measured 100.00%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors
