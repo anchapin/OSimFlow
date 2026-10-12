@@ -202,6 +202,13 @@ name in this section.
   the digest is unresolved and no `--container-digest` was given) +
   `CampaignError` +
   `CampaignAbortError` + `QuotaExceededError` + the 7-step DAG.
+- `osimflow/_config_quota.py`, `osimflow/_config_coerce.py`,
+  `osimflow/_config_sections.py` — leaf pieces split out of `config.py`
+  (issue #1890): `ResourceQuota` + `_parse_resource_quota`, variable type
+  coercion (`coerce_variable_type`, `_coerce_variables_yml_file`), and the
+  focused dataclasses (`DAGConfig`, `StorageConfig`,
+  `ObservabilityConfig`, `ChaosConfig`). `config.py` re-exports every
+  moved name; they log under the `osimflow.config` logger.
 - `osimflow/config.py` — the campaign-config composer: `CampaignConfig`
   + the focused subsystem dataclasses it composes (`ObservabilityConfig`,
   `DAGConfig`, `StorageConfig`) + `ResourceQuota` +
