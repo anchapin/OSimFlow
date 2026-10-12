@@ -11,7 +11,7 @@ OSimFlow manages three kinds of state, each with its own storage module:
 |---|---|---|---|
 | Campaign cache | `osimflow/cache.py` | `SQLiteCache` | Explicit, hash-keyed resume layer for per-step, per-sample outputs |
 | Document store | `osimflow/document_store.py` | `SQLiteDocumentStore` | MongoDB-equivalent JSON document persistence for KPIs, run metadata |
-| Results database | `osimflow/results_db.py` | SQLite (direct) | Per-(sample, KPI) relational table for historical analysis |
+| Results database | `osimflow/registry/results_db.py` | SQLite (direct) | Per-(sample, KPI) relational table for historical analysis |
 | Result artifacts | `osimflow/storage/` | `LocalStorage` | File-level upload/download for simulation outputs |
 
 The first three are SQLite-based; the fourth already supports S3, GCS, and Azure Blob via the `ResultStorage` abstraction.
@@ -117,11 +117,11 @@ def insert_result(conn, sample_id: str, kpis: dict) -> None:
 
 ## Results Database Options
 
-`osimflow/results_db.py` uses a direct SQLite connection to store per-sample KPI results in a relational schema. The `ResultsDatabase` class is not currently abstracted behind an ABC, so swapping it requires a code change.
+`osimflow/registry/results_db.py` uses a direct SQLite connection to store per-sample KPI results in a relational schema. The `ResultsDatabase` class is not currently abstracted behind an ABC, so swapping it requires a code change.
 
 ### PostgreSQL / TimescaleDB
 
-Replace the `osimflow/results_db.py` SQLite backend with `psycopg2` or `asyncpg` for a network-accessible, concurrent-writer results store. TimescaleDB (a PostgreSQL extension) adds time-series optimization (chunking, compression, continuous aggregates) which is useful if you run hundreds of campaigns and query across time ranges.
+Replace the `osimflow/registry/results_db.py` SQLite backend with `psycopg2` or `asyncpg` for a network-accessible, concurrent-writer results store. TimescaleDB (a PostgreSQL extension) adds time-series optimization (chunking, compression, continuous aggregates) which is useful if you run hundreds of campaigns and query across time ranges.
 
 ```python
 import psycopg2

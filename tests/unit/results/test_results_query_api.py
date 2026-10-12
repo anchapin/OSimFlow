@@ -345,7 +345,7 @@ class TestQueryResultsCLIWithoutFastAPI:
 
         src_query = inspect.getsource(_cmd_query_results)
         src_export = inspect.getsource(_cmd_export_results)
-        assert "from osimflow.results_query import" in src_query
+        assert "from osimflow.registry.results_query import" in src_query
         assert "from osimflow.api.results_query import" not in src_query
-        assert "from osimflow.results_query import" in src_export
+        assert "from osimflow.registry.results_query import" in src_export
         assert "from osimflow.api.results_query import" not in src_export

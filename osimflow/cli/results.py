@@ -73,7 +73,7 @@ def _cmd_query_results(args: argparse.Namespace) -> int:
     """Query aggregated results across multiple campaigns (issue #585)."""
     import json as json_mod  # noqa: PLC0415
 
-    from osimflow.results_query import query_results_cli  # noqa: PLC0415
+    from osimflow.registry.results_query import query_results_cli  # noqa: PLC0415
 
     campaign_ids = None
     if args.campaign_ids:
@@ -135,7 +135,7 @@ def _cmd_query_results(args: argparse.Namespace) -> int:
 
 def _cmd_export_results(args: argparse.Namespace) -> int:
     """Export aggregated results to CSV or JSON (issue #585)."""
-    from osimflow.results_query import export_results_cli  # noqa: PLC0415
+    from osimflow.registry.results_query import export_results_cli  # noqa: PLC0415
 
     campaign_ids = None
     if args.campaign_ids:

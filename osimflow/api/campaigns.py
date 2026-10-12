@@ -62,7 +62,7 @@ from osimflow.api.schemas import (
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
-from osimflow.cross_run_aggregator import CrossRunAggregator
+from osimflow.registry.cross_run_aggregator import CrossRunAggregator
 from osimflow.validation import (
     ValidationError,
     sanitize_filename,

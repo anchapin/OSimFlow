@@ -195,9 +195,9 @@ OSimFlow/
 │   ├── chaos.py                 # ChaosEngine + fault injectors
 │   ├── cost_tracking.py         # CostTracker + cost estimates
 │   ├── cosign.py                # Container image signature verification
-│   ├── registry.py              # CampaignRegistry (list/show/compare/backup)
+│   ├── registry/                # package: CampaignRegistry (list/show/compare/backup)
 │   ├── data_point_manager.py    # DataPoint lifecycle (mark-for-reanalysis, merge)
-│   ├── cross_run_aggregator.py  # Cross-campaign aggregation
+│   ├── cross_run_aggregator.py  # alias → registry/cross_run_aggregator.py; Cross-campaign aggregation
 │   ├── remote_runner.py         # Stdlib worker for Nomad/K8s (task payload)
 │   ├── task_payload_hmac.py     # HMAC signing/verification of task payloads
 │   ├── alerting.py              # AlertManager + alert rules

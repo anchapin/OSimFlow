@@ -28,7 +28,7 @@ from osimflow.api.campaigns import (
     _campaign_dir_from_id,
     _campaigns_base_dir,
 )
-from osimflow.results_query import (
+from osimflow.registry.results_query import (
     apply_filter,
     load_aggregated_results,
 )

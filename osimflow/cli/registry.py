@@ -20,7 +20,7 @@ from osimflow import (
     SlurmExecutor,  # noqa: F401 — see above.
 )
 from osimflow.cli.s3 import _cmd_s3
-from osimflow.cross_run_aggregator import CrossRunAggregator
+from osimflow.registry.cross_run_aggregator import CrossRunAggregator
 
 log = logging.getLogger("osimflow.__main__")
 

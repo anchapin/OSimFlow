@@ -24,9 +24,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ._sqlite_store import connect as _store_connect
-from ._sqlite_store import decode_value as _decode_value
-from ._sqlite_store import encode_value as _encode_value
+from .._sqlite_store import connect as _store_connect
+from .._sqlite_store import decode_value as _decode_value
+from .._sqlite_store import encode_value as _encode_value
 
 log = logging.getLogger("osimflow.registry")
 
