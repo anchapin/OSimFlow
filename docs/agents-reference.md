@@ -465,10 +465,14 @@ name in this section.
   `unknown` and the Redis version + replication role for `--redis-url`
   when the operator runs `osimflow health --redis-url <URL>`; the
   probe SKIPs cleanly when no URL is set.
-- `osimflow/alerting.py` — `AlertManager`
+- `osimflow/notifications/` — subpackage (issue #1891) holding
+  `alerting.py` and `notify.py`; `osimflow/alerting.py` and
+  `osimflow/notify.py` are `sys.modules` aliases of them kept for
+  back-compat (patch seams and imports at the old paths still work).
+- `osimflow/notifications/alerting.py` — `AlertManager`
   (`on_alert` callback for `RunTrace.record_alert` wiring),
   `build_alert_manager`.
-- `osimflow/notify.py` — `NotifyBackend` ABC +
+- `osimflow/notifications/notify.py` — `NotifyBackend` ABC +
   `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`,
   `WebhookNotifyBackend` + `build_notify_backend`.
 - `osimflow/chaos.py` — `ChaosEngine` + `ChaosResult` +

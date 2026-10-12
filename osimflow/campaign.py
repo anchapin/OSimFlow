@@ -114,7 +114,6 @@ from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
 from ._campaign_sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
 from ._campaign_sharding import CampaignSharding
 from ._campaign_types import SampleSpec, VariableSpec  # noqa: F401  — re-exported API
-from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     _build_mappings,
@@ -159,6 +158,7 @@ from .monitoring import (
     WorkerRecoveryManager,
     sample_log_paths,
 )
+from .notifications.alerting import AlertManager, build_alert_manager
 from .registry import CampaignRegistry
 from .s3_campaign import (
     CLAIM_ACQUIRED,

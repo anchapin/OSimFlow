@@ -88,7 +88,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/_sqlite_store.py": 67.69,
     "osimflow/_subprocess_utils.py": 85.45,
     "osimflow/aggregation.py": 93.40,
-    "osimflow/alerting.py": 78.16,
+    "osimflow/notifications/alerting.py": 78.16,
     "osimflow/apply_params.py": 86.40,
     "osimflow/audit.py": 92.11,
     "osimflow/byos.py": 88.30,
@@ -119,7 +119,8 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/measures.py": 53.09,
     "osimflow/mlflow_hook.py": 100.00,
     "osimflow/monitoring.py": 87.39,
-    "osimflow/notify.py": 100.00,
+    "osimflow/notifications/notify.py": 100.00,
+    "osimflow/notifications/__init__.py": 100.00,
     "osimflow/observability.py": 97.17,
     "osimflow/offline_bundle.py": 94.20,
     "osimflow/pareto.py": 97.09,
@@ -233,6 +234,7 @@ def _in_scope_files() -> set[str]:
         "osimflow/executors/*.py",
         "osimflow/_work_scripts/*.py",
         "osimflow/api/*.py",
+        "osimflow/notifications/*.py",
     ):
         out.update(
             str(p.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -250,6 +252,8 @@ def _in_scope_files() -> set[str]:
     for path in (
         "osimflow/__main__.py",
         "osimflow/_byos_runner_generated.py",
+        "osimflow/alerting.py",
+        "osimflow/notify.py",
     ):
         out.discard(path)
     return out
