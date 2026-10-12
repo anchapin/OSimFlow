@@ -233,15 +233,16 @@ EXECUTOR_CONFIGS_REL_DIR = Path("osimflow") / "executor_configs"
 # justify an addition here.
 INDEX_EXEMPT_DOCS: dict[str, str] = {
     "user-guide.md": "the user guide itself — the index is a subsection of this file",
-    "gap-analysis-summary.md": (
+    "archive/README.md": "index of archived internal artefacts, not a user-facing guide",
+    "archive/gap-analysis-summary.md": (
         "internal gap analysis vs. openstudio-server — synthesized report, not a "
-        "user-facing runbook; superseded by docs/migration-openstudio-server.md"
+        "user-facing runbook; superseded by docs/migration/openstudio-server.md"
     ),
-    "gap-analysis-oss-replacement.md": (
+    "archive/gap-analysis-oss-replacement.md": (
         "internal gap analysis vs. openstudio-server — multi-agent audit report, "
         "project-internal artefact, not a user-facing runbook"
     ),
-    "trace-openstudio-server-helm-chart-lhs-1000-samples.md": (
+    "archive/trace-openstudio-server-helm-chart-lhs-1000-samples.md": (
         "internal execution trace of a competitor's helm chart — informational, "
         "not a user-facing guide"
     ),

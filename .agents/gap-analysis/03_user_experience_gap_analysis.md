@@ -28,7 +28,7 @@ The table below compares user-facing features across key UX dimensions.
 | **14. BYOS / Extension** | R scripts via `analysis.json`; custom reporting | Python BYOS scripts via `--custom_apply_script` / `--custom_kpi_extractor`; function-signature validation | **Minor Gap** |
 | **15. Multi-Campaign Registry** | MongoDB queries across analyses | `osimflow list` / `osimflow compare` via SQLite registry | **No Gap** |
 | **16. Interactive Parameter Tweaking** | PAT allows changing variables and re-running without full re-import | Full `variables.yml` re-edit required; `--sample` flag for single-sample re-run | **Minor Gap** |
-| **17. Documentation & Examples** | OpenStudio docs + PAT tutorials | `docs/user-guide.md`, `docs/variables-schema.md`, `docs/pat-migration.md`, `docs/migration-openstudio-server.md` | **No Gap** |
+| **17. Documentation & Examples** | OpenStudio docs + PAT tutorials | `docs/user-guide.md`, `docs/variables-schema.md`, `docs/migration/pat.md`, `docs/migration/openstudio-server.md` | **No Gap** |
 
 ---
 
@@ -39,7 +39,7 @@ The table below compares user-facing features across key UX dimensions.
 - **Description:** OSimFlow provides no graphical interface for defining parametric analyses. Users must manually edit `variables.yml` in a text editor. PAT users expect a visual spreadsheet-like interface with dropdowns, distribution pickers, and measure argument browsers.
 - **Severity:** Critical
 - **openstudio-server Approach:** PAT (Electron-based desktop app) provides visual analysis definition, measure ordering, and one-click run. The OpenStudio-analysis-spreadsheet gem enables Excel-based variable definition.
-- **Evidence:** OSimFlow PRD §3.2 explicitly lists web-based UI as out-of-scope; `docs/pat-migration.md` states "PAT GUI features are not replicated. OSimFlow is a CLI + API tool."
+- **Evidence:** OSimFlow PRD §3.2 explicitly lists web-based UI as out-of-scope; `docs/migration/pat.md` states "PAT GUI features are not replicated. OSimFlow is a CLI + API tool."
 - **If Wrong:** Non-CLI users (energy modelers, architects) cannot adopt OSimFlow without significant workflow restructuring. PAT users face a steep learning curve switching to YAML editing.
 
 ---
@@ -49,7 +49,7 @@ The table below compares user-facing features across key UX dimensions.
 - **Description:** openstudio-server's web dashboard provides live per-sample status via WebSocket as simulations run. OSimFlow's real-time capability (SSE) only works when serving via `osimflow serve` — it is not available during a live `osimflow run` invocation on a remote executor.
 - **Severity:** Major
 - **openstudio-server Approach:** Persistent web application at port 8080 with real-time WebSocket updates for every data point transition.
-- **Evidence:** `docs/migration-openstudio-server.md` §7 states "Real-time per-sample status: Yes (WebSocket)" for OSS; OSimFlow has "No (updates on step completion)" via MLflow.
+- **Evidence:** `docs/migration/openstudio-server.md` §7 states "Real-time per-sample status: Yes (WebSocket)" for OSS; OSimFlow has "No (updates on step completion)" via MLflow.
 - **If Wrong:** Users running long campaigns on HPC/cloud must poll `run.json` or connect to MLflow to observe progress. Remote monitoring is less seamless than the OSS dashboard.
 
 ---
@@ -69,7 +69,7 @@ The table below compares user-facing features across key UX dimensions.
 - **Description:** PAT provides a measure browser showing available OpenStudio measures with argument documentation. OSimFlow has no built-in measure registry — users must manually know measure names, arguments, and directory structure.
 - **Severity:** Critical (per gap-analysis-summary.md GAP-EXT-012)
 - **openstudio-server Approach:** PAT measure browser integrated with OpenStudio measure libraries (BCL — Building Component Library).
-- **Evidence:** `docs/migration-openstudio-server.md` §6 discusses measure paths but no discovery mechanism exists in OSimFlow; AGENTS.md §0.3 references "No Models in ORM sense" but measure management is a separate gap.
+- **Evidence:** `docs/migration/openstudio-server.md` §6 discusses measure paths but no discovery mechanism exists in OSimFlow; AGENTS.md §0.3 references "No Models in ORM sense" but measure management is a separate gap.
 - **If Wrong:** Users must manually reference OpenStudio documentation or BCL to understand available measures and their arguments, increasing friction for new users.
 
 ---
@@ -79,7 +79,7 @@ The table below compares user-facing features across key UX dimensions.
 - **Description:** PAT shows the OpenStudio workflow as an ordered list of measures with drag-drop reordering. OSimFlow respects the `workflow.osw` order but provides no UI to visualize or modify the workflow — users must edit the `.osw` JSON directly.
 - **Severity:** Major
 - **openstudio-server Approach:** PAT UI shows workflow.osw steps with argument inspection and reordering.
-- **Evidence:** `docs/pat-migration.md` Known Limitations §4: "Workflow measures. PAT allows ordering measures in a workflow. OSimFlow respects the `workflow.osw` in the template simulation package, which must be set up correctly before import."
+- **Evidence:** `docs/migration/pat.md` Known Limitations §4: "Workflow measures. PAT allows ordering measures in a workflow. OSimFlow respects the `workflow.osw` in the template simulation package, which must be set up correctly before import."
 - **If Wrong:** Users accustomed to PAT's drag-drop workflow editor must manually maintain `workflow.osw` JSON, increasing the risk of misconfiguration.
 
 ---

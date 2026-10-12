@@ -4,7 +4,7 @@
 
 **Date:** 2026-06-16
 **Focus Area:** Algorithms & Sampling Methods
-**Reference:** [Algorithm Migration Guide](../../docs/algorithm-migration.md), [Migration Guide](../../docs/migration-openstudio-server.md)
+**Reference:** [Algorithm Migration Guide](../../docs/migration/algorithm.md), [Migration Guide](../../docs/migration/openstudio-server.md)
 
 ---
 
@@ -204,7 +204,7 @@ The AlgorithmRegistry already supports third-party plugins via `entry_points`. T
 
 ## 5. References
 
-- Algorithm Migration Guide: `docs/algorithm-migration.md`
-- openstudio-server migration: `docs/migration-openstudio-server.md`
+- Algorithm Migration Guide: `docs/migration/algorithm.md`
+- openstudio-server migration: `docs/migration/openstudio-server.md`
 - Existing OSimFlow algorithms: `osimflow/algorithms/`
 - BaseAlgorithm interface: `osimflow/algorithms/__init__.py`

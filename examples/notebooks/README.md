@@ -18,5 +18,5 @@ jupyter notebook examples/notebooks/
 
 ## See also
 
-- [Migration Guide](../../docs/migration-openstudio-server.md)
+- [Migration Guide](../../docs/migration/openstudio-server.md)
 - [R to Python BYOS Cheatsheet](../../user_scripts/examples/r_to_python_migration.md)
