@@ -373,7 +373,7 @@ def test_docs_sync_user_guide_flag_coverage() -> None:
     mention (inline doc or pointer-link), while passing flags the guide
     covers. Exemptions must suppress the error."""
     mod = _load_docs_sync_module()
-    main_src = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+    main_src = (REPO_ROOT / "osimflow" / "cli" / "parser.py").read_text()
     flags = mod._collect_main_cli_flags(main_src)
     assert "--uq-method" in flags
     assert "--redis-url" in flags
@@ -396,7 +396,7 @@ def test_docs_sync_user_guide_subcommand_coverage() -> None:
     """Issue #1547: every add_parser subcommand must be mentioned in the
     user guide as an `osimflow <name>` invocation; missing ones fail."""
     mod = _load_docs_sync_module()
-    main_src = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+    main_src = (REPO_ROOT / "osimflow" / "cli" / "parser.py").read_text()
     subs = mod._collect_main_subcommands(main_src)
     assert {"run", "cancel", "pause", "resume", "warm-cache"} <= subs
 

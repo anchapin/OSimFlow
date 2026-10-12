@@ -136,6 +136,7 @@ SKIP_DIRS = {".agents", ".github", "__pycache__", ".venv", "node_modules", ".git
 # the add_arguments hook modules under osimflow/executor_configs/.
 CLI_FLAG_SOURCE_FILES: list[Path] = [
     REPO_ROOT / "osimflow" / "__main__.py",
+    *sorted((REPO_ROOT / "osimflow" / "cli").glob("*.py")),
     *sorted((REPO_ROOT / "osimflow" / "executor_configs").glob("*.py")),
     *sorted((REPO_ROOT / "osimflow" / "_work_scripts").glob("*.py")),
     *sorted((REPO_ROOT / "bin").glob("*.py")),
@@ -611,7 +612,10 @@ def main() -> int:
                 f"{len(INDEX_EXEMPT_DOCS)} exempt"
             )
     if user_guide.is_file() and main_module.is_file():
-        main_src = main_module.read_text()
+        # The argparse surface lives in osimflow/cli/ since issue #1890.
+        main_src = main_module.read_text() + "".join(
+            p.read_text() for p in sorted((REPO_ROOT / "osimflow" / "cli").glob("*.py"))
+        )
         # Issue #1575: executor flags moved from __main__.py into the
         # per-executor add_arguments hooks — union both surfaces so
         # user-guide coverage keeps requiring every CLI flag.

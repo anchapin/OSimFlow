@@ -60,7 +60,7 @@ physically live in their executor's config module, not in
   apply/extract hooks before submission — `AWSBatchExecutor.validate_work_fn`),
   `--preset`,
   `--preset` accepts one of the named bundles defined in
-  `osimflow/__main__.py:73-155` (issue #384): `local-quick`,
+  `osimflow/cli/parser.py` (`PRESETS`) (issue #384): `local-quick`,
   `local-large`, `slurm-hpc`, `slurm-gpu`, `aws-batch-cloud`,
   `sensitivity-morris`, `sensitivity-fast99`, `optimization-de`,
   `optimization-nsga2`. Individual flags override preset values;
@@ -176,7 +176,26 @@ name in this section.
 ### `osimflow/` core
 
 - `osimflow/__init__.py` — public API surface (`__all__`).
-- `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
+- `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`):
+  keeps `main`, the `run` path (`_perform_detach_handoff`, `_cmd_resume`,
+  `_cmd_warm_cache`) and re-exports every name moved into `osimflow/cli/`
+  so historical `osimflow.__main__.<name>` patch/import seams keep working
+  (issue #1890).
+- `osimflow/cli/__init__.py` — CLI package marker (issue #1890).
+- `osimflow/cli/parser.py` — `_build_parser`, `PRESETS`, `_apply_preset`
+  and every per-subcommand `_add_*_args` registration.
+- `osimflow/cli/executor.py` — `_build_executor`, `_byos_audit_logger`,
+  `_warn_if_mutable_tag`.
+- `osimflow/cli/serve.py` — `serve` / `dashboard` subcommands.
+- `osimflow/cli/io.py` — `import-osa` / `import-gem-osa` / `export`.
+- `osimflow/cli/s3.py` — S3 result-store helpers (`--from-s3`, `--detach-s3`).
+- `osimflow/cli/registry.py` — `list` / `show` / `compare` /
+  `aggregate-runs` / `backup` / `restore`.
+- `osimflow/cli/status.py` — `status` / `download`.
+- `osimflow/cli/coordinator.py` — Coordinator handoff status/download helpers.
+- `osimflow/cli/lifecycle.py` — `run-batches`, `mark-for-reanalysis`, `merge`,
+  `health`, `cancel`, `pause`, run-invocation record/replay.
+- `osimflow/cli/results.py` — `measure` / `query-results` / `export-results`.
 - `osimflow/campaign.py` — `Campaign` orchestrator +
   `CONTAINER_SUBSTRATE_EXECUTORS` (issue #1536: executors whose
   substrate pulls the OpenStudio image; `run()` fails loudly when
