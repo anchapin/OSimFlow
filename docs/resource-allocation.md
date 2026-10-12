@@ -168,4 +168,4 @@ The per-sample steps (`APPLY_PARAMETERS`, `RUN_OPENSTUDIO_SIM`, `EXTRACT_KPIS`) 
 - [Cost Estimation Guide](cost-estimation.md) — per-campaign pricing estimates.
 - [AGENTS.md §8.9](../AGENTS.md) — cache invalidation on `bin/*.py` edits.
 - `osimflow/executors/__init__.py` — `DEFAULT_STEP_RESOURCES` constant and per-executor mapping logic.
-- `osimflow/campaign.py` — per-step resource values passed to `executor.submit()`.
+- `osimflow/campaign/__init__.py` — per-step resource values passed to `executor.submit()`.

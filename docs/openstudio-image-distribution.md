@@ -77,7 +77,7 @@ tag we still advertise, so a missed removal is loud, not silent.
 
 ## How the cache key reflects the image
 
-`osimflow/campaign.py` defines:
+`osimflow/campaign/__init__.py` defines:
 
 ```python
 CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
@@ -100,7 +100,7 @@ in-container `bin/*.py` shim — the Python orchestration lives in
 the *driver* container, and the driver calls into the OpenStudio
 container per sample. The campaign passes the resolved image string
 as the executor's `container=` argument
-(`osimflow/campaign.py:step_run_openstudio_sim`).
+(`osimflow/campaign/__init__.py:step_run_openstudio_sim`).
 
 If a future feature needs the OSimFlow Python layer inside the
 OpenStudio container, switch to a `FROM nrel/openstudio:X`

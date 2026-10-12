@@ -951,7 +951,7 @@ The canonical implementation lives in:
 | `SampleTrace` dataclass | `osimflow/observability/monitoring.py` |
 | `GenerationTrace` dataclass | `osimflow/observability/monitoring.py` |
 | `RunTrace` class and `to_dict()` | `osimflow/observability/monitoring.py` |
-| Trace population (step hooks) | `osimflow/campaign.py` |
+| Trace population (step hooks) | `osimflow/campaign/__init__.py` |
 | Chaos engine feeding `chaos_invocations` | `osimflow/chaos.py` |
 | Circuit breakers feeding `circuit_breaker_states` | `osimflow/circuit_breaker.py` |
 | `Alert` payloads feeding `alerts_fired` | `osimflow/alerting.py` |

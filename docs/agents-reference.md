@@ -196,16 +196,22 @@ name in this section.
 - `osimflow/cli/lifecycle.py` — `run-batches`, `mark-for-reanalysis`, `merge`,
   `health`, `cancel`, `pause`, run-invocation record/replay.
 - `osimflow/cli/results.py` — `measure` / `query-results` / `export-results`.
-- `osimflow/_campaign_dag.py`, `osimflow/_campaign_helpers.py` — pieces
-  split out of `campaign.py` (issue #1890): the DAG step descriptors
+- `osimflow/campaign/` — subpackage (issue #1891): `__init__.py` holds
+  `Campaign`, and the former `_campaign_*.py` collaborators live beside it
+  as `campaign/<name>.py`. The old private paths are `sys.modules`
+  aliases of them kept for back-compat (patch seams and imports at the old
+  paths still work, and `osimflow/campaign/code_hashes.py` resolves the
+  package root as `.parent.parent`): `osimflow/_campaign_analysis.py`, `osimflow/_campaign_artifacts.py`, `osimflow/_campaign_baseline.py`, `osimflow/_campaign_chaos.py`, `osimflow/_campaign_code_hashes.py`, `osimflow/_campaign_cost_tracker.py`, `osimflow/_campaign_dag.py`, `osimflow/_campaign_epw.py`, `osimflow/_campaign_fanout.py`, `osimflow/_campaign_helpers.py`, `osimflow/_campaign_hooks.py`, `osimflow/_campaign_kpis.py`, `osimflow/_campaign_lifecycle.py`, `osimflow/_campaign_observability.py`, `osimflow/_campaign_optimization.py`, `osimflow/_campaign_quota.py`, `osimflow/_campaign_sample_trace.py`, `osimflow/_campaign_sharding.py`, `osimflow/_campaign_types.py`.
+- `osimflow/campaign/dag.py`, `osimflow/campaign/helpers.py` — pieces
+  split out of `Campaign` (issue #1890): the DAG step descriptors
   (`StepInputs`, `StepOutputs`, `DAGStep`, `SimResult`, `SampleDict`, the
   per-step `_sig_*` / `_out_*` helpers) and small helpers
   (`_scoped_dry_run_env`, `_make_mlflow_param_view`,
   `_package_content_digest`, `cast_samples`, `cast_variables`,
-  `cast_aggregate_result`, `cast_plot_paths`). `campaign.py` re-exports
+  `cast_aggregate_result`, `cast_plot_paths`). `campaign/__init__.py` re-exports
   every moved name and keeps the `_STEP_DEPENDENCIES` table (tests patch
   it there).
-- `osimflow/campaign.py` — `Campaign` orchestrator +
+- `osimflow/campaign/__init__.py` — `Campaign` orchestrator +
   `CONTAINER_SUBSTRATE_EXECUTORS` (issue #1536: executors whose
   substrate pulls the OpenStudio image; `run()` fails loudly when
   the digest is unresolved and no `--container-digest` was given) +
@@ -383,24 +389,24 @@ name in this section.
 - `osimflow/observability/__init__.py` — `ObservabilityBackend` ABC +
   `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
   + `new_trace_id` + `record_circuit_breaker_event`.
-- `osimflow/_campaign_observability.py` — `ObservabilityManager`
+- `osimflow/campaign/observability.py` — `ObservabilityManager`
   wrapping backend lifecycle from `Campaign`.
-- `osimflow/_campaign_cost_tracker.py` — internal cost wiring
+- `osimflow/campaign/cost_tracker.py` — internal cost wiring
   used by `Campaign`.
-- `osimflow/_campaign_quota.py` — `CampaignQuotaGuard` +
+- `osimflow/campaign/quota.py` — `CampaignQuotaGuard` +
   `QuotaExceededError` (defined here, re-exported from
   `osimflow.campaign`): quota enforcement extracted from `Campaign`
   (issue #1462) — start-quota fail-fast, mid-campaign hard-limit
   checks, `max_concurrent_samples` fan-out bounding.
-- `osimflow/_campaign_chaos.py` — `CampaignChaosWiring` +
+- `osimflow/campaign/chaos.py` — `CampaignChaosWiring` +
   `build_default_chaos_engine`: chaos-engine selection/wiring and the
   schedule-aware `maybe_inject` hook extracted from `Campaign`
   (issue #1462; engine wiring originally issue #1013).
-- `osimflow/_campaign_sharding.py` — `CampaignSharding`: shard
+- `osimflow/campaign/sharding.py` — `CampaignSharding`: shard
   selection (`shard_count`/`shard_index` partition + `shard_start`/
   `shard_end` range) and shard labels, extracted from `Campaign`
   (issue #1462).
-- `osimflow/_campaign_code_hashes.py` — `compute_code_hashes` +
+- `osimflow/campaign/code_hashes.py` — `compute_code_hashes` +
   `code_hash_with_byos` + the AST-based transitive import-closure
   machinery (issues #1021/#1011/#1446) extracted from `Campaign`
   (issue #1462). `Campaign._compute_code_hashes` delegates here and
@@ -408,7 +414,7 @@ name in this section.
   path); `_byos_file_hash` / `_combine_code_hash` /
   `_transitive_import_closure` are re-exported from
   `osimflow.campaign`.
-- `osimflow/_campaign_lifecycle.py` — `CampaignLifecycle` +
+- `osimflow/campaign/lifecycle.py` — `CampaignLifecycle` +
   `CancelSignal` (the explicit `request_cancel` / `request_pause` /
   `request_resume` protocol Campaign satisfies structurally — issue
   #1542 killed the former `Campaign` back-reference) +
@@ -425,7 +431,7 @@ name in this section.
   (issue #1542 acceptance criterion; the documented unbound
   `Campaign._compute_code_hashes(stub)` test path is preserved via
   duck typing).
-- `osimflow/_campaign_fanout.py` — the fan-out wait loop extracted
+- `osimflow/campaign/fanout.py` — the fan-out wait loop extracted
   from `Campaign` (issue #1542): `FanoutDeps` (explicit
   call-time dependency bundle — job queue, sample-state,
   sample-trace/checkpoint + alert + cancel/pause callbacks; no
@@ -448,12 +454,12 @@ name in this section.
   `_mark_sample_failed` / `_compute_await_deadline` +
   `_fanout_deps`) so the historical test seams
   (`patch.object(campaign, "_job_queue")` & co.) keep working.
-- `osimflow/_campaign_analysis.py` — `CampaignAnalysisMixin`
+- `osimflow/campaign/analysis.py` — `CampaignAnalysisMixin`
   (issue #1542): `step_compute_sensitivity_indices` (Sobol, issue
   #346) and `step_compute_uq_indices` (issue #530) extracted from
   `Campaign`; `Campaign` inherits the mixin so the step-method
   surface and the data-driven DAG dispatcher are unchanged.
-- `osimflow/_campaign_optimization.py` — `CampaignOptimizationMixin`
+- `osimflow/campaign/optimization.py` — `CampaignOptimizationMixin`
   (issue #1679): the GA / NSGA-II / DE / SPEA2 generational
   optimization loop (`_run_one_generation`, issue #270 feedback
   loop with the data-driven step dispatcher of #1392), the
@@ -465,7 +471,7 @@ name in this section.
   (`campaign._run_one_generation(...)` &
   `campaign._persist_pareto_front(...)` &
   `campaign._extract_best_objective(...)`) is unchanged.
-- `osimflow/_campaign_kpis.py` — `CampaignKpisMixin` (issue
+- `osimflow/campaign/kpis.py` — `CampaignKpisMixin` (issue
   #1679): the `EXTRACT_KPIS` per-sample fan-out step
   (`step_extract_kpis` — issue #1082 cache key, the #286/#1533/
   #1566 bounded-submit-and-await chunking, the #847/#1180
@@ -478,23 +484,23 @@ name in this section.
   the data-driven dispatcher
   (``getattr(self, step_info.method)``) still resolves the
   method.
-- `osimflow/_campaign_types.py` — `SampleSpec` + `VariableSpec`
+- `osimflow/campaign/types.py` — `SampleSpec` + `VariableSpec`
   TypedDicts (issue #1542), re-exported from
   `osimflow.campaign` so existing imports keep working.
-- `osimflow/_campaign_artifacts.py` — `CampaignArtifactWriter`:
+- `osimflow/campaign/artifacts.py` — `CampaignArtifactWriter`:
   `campaign_meta.json` / `provenance.json` /
   `artifact_manifest.json` writers (issue #277) and intermediate/
   input archiving, extracted from `Campaign` (issue #1462).
-- `osimflow/_campaign_epw.py` — `CampaignEpwResolver`:
+- `osimflow/campaign/epw.py` — `CampaignEpwResolver`:
   variables.yml loading, `epw_file` target resolution (issue #55),
   and pre-flight EPW existence/format validation (issue #63),
   extracted from `Campaign` (issue #1462).
-- `osimflow/_campaign_hooks.py` — init/finalize shell-hook execution
+- `osimflow/campaign/hooks.py` — init/finalize shell-hook execution
   (issue #108), hook env construction, and the completion webhook
   (issue #283), extracted from `Campaign` (issue #1462).
-- `osimflow/_campaign_baseline.py` — baseline KPI comparison
+- `osimflow/campaign/baseline.py` — baseline KPI comparison
   (issue #64) extracted from `Campaign` (issue #1462).
-- `osimflow/_campaign_sample_trace.py` —
+- `osimflow/campaign/sample_trace.py` —
   `CampaignSampleTraceRecorder` + `CampaignAbortError`: per-sample
   `SampleTrace` assembly, per-sample trace-ID minting (issue #436),
   campaign cost-total accumulation (issue #126), and incremental

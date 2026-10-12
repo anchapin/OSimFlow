@@ -133,8 +133,8 @@ def _flag_source_paths() -> list[Path]:
 
 
 def _step_names_from_campaign() -> list[str]:
-    """Pull every "step=" constant from osimflow/campaign.py."""
-    campaign = (REPO_ROOT / "osimflow" / "campaign.py").read_text()
+    """Pull every "step=" constant from osimflow/campaign/__init__.py."""
+    campaign = (REPO_ROOT / "osimflow" / "campaign" / "__init__.py").read_text()
     return sorted(set(re.findall(r'step="([A-Z_]+)"', campaign)))
 
 

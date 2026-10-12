@@ -358,7 +358,7 @@ Check the job's `MaxRSS` in Slurm accounting:
 sacct -j <job_id> --format=MaxRSS,MaxVMSize,State
 ```
 
-If `MaxRSS` is close to the requested memory, increase `mem_gb` in the executor (edit `osimflow/campaign.py` or the `SlurmExecutor` constructor defaults).
+If `MaxRSS` is close to the requested memory, increase `mem_gb` in the executor (edit `osimflow/campaign/__init__.py` or the `SlurmExecutor` constructor defaults).
 
 ### Job Failed with Time Limit
 
@@ -370,7 +370,7 @@ The default `time_min` for the simulation step is 240 minutes. If your models ne
 sacct --format=JobID,Elapsed --name=osimflow*
 ```
 
-2. Adjust `time_min` in `osimflow/campaign.py:step_run_openstudio_sim`.
+2. Adjust `time_min` in `osimflow/campaign/__init__.py:step_run_openstudio_sim`.
 
 ### Singularity: "image not found"
 
@@ -486,7 +486,7 @@ For models with >2000 thermal zones that need more memory:
 
 ```bash
 # Override SlurmExecutor defaults via environment or BYOS work function
-# See osimflow/campaign.py for where to adjust cpus, memory_mb, time_min
+# See osimflow/campaign/__init__.py for where to adjust cpus, memory_mb, time_min
 OSIMFLOW_SLURM_LOGS=/scratch/$USER/osimflow-logs \
 osimflow run \
   --executor slurm \

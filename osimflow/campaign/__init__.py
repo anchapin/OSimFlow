@@ -51,18 +51,84 @@ from typing import Any
 
 import yaml
 
-from ._campaign_analysis import CampaignAnalysisMixin
-from ._campaign_artifacts import CampaignArtifactWriter
-from ._campaign_baseline import (
+from ..algorithms import AlgorithmRegistry, BaseAlgorithm
+from ..apply_params import (
+    _build_mappings,
+    preflight_check,
+)
+from ..cache import (
+    CacheKey,
+    _container_digest_for,
+    digest_pinned_image_ref,
+    sha256_of_dict,
+    sha256_of_files,
+)
+from ..chaos import ChaosEngine
+from ..config import CampaignConfig
+from ..cosign import (
+    DEFAULT_COSIGN_OIDC_ISSUER,
+    CosignVerificationError,
+    build_cosign_image_ref,
+    triangulate_image_ref,
+    verify_image_signature,
+    write_cosign_receipt,
+)
+from ..data_point_manager import DataPointManager
+from ..distributed_cache import build_cache, campaign_state_namespace
+from ..distributed_jobqueue import build_job_queue
+from ..document_store import build_document_store
+from ..errors import OSimFlowRuntimeError
+from ..executors import BaseExecutor, Handle
+from ..executors.transport import ResultTransportConfig
+from ..json_utils import safe_json_dumps, safe_json_loads
+from ..manifest import _validate_coordinator_url
+from ..measures import MeasureRegistry, UnmappedVariableError
+from ..notifications.alerting import AlertManager, build_alert_manager
+from ..observability.mlflow_hook import (
+    log_mlflow_artifacts,
+    log_mlflow_metrics,
+    log_mlflow_params,
+    maybe_end_mlflow_run,
+    maybe_start_mlflow_run,
+)
+from ..observability.monitoring import (
+    RunTrace,
+    WorkerRecoveryManager,
+    sample_log_paths,
+)
+from ..registry import CampaignRegistry
+from ..s3_campaign import (
+    CLAIM_ACQUIRED,
+    CLAIM_ALREADY_SUBMITTED,
+    CampaignDetached,
+    S3CampaignStore,
+    SubmitClaim,
+    batch_job_name,
+    new_handoff,
+)
+from ..storage import ResultStorageUploader, build_result_storage
+from ..taskqueue import ConsumerQueue
+from ..work import (
+    SevereEnergyPlusError,
+    aggregate_results,
+    default_apply_parameters,
+    extract_kpis,
+    generate_plots,
+    preflight_run_model,
+    run_openstudio_sim,
+)
+from .analysis import CampaignAnalysisMixin
+from .artifacts import CampaignArtifactWriter
+from .baseline import (
     baseline_sample_id as _baseline_sid_from_cfg,
 )
-from ._campaign_baseline import (
+from .baseline import (
     compute_baseline_comparison,
     compute_improvement_range,
     read_all_kpis,
 )
-from ._campaign_chaos import CampaignChaosWiring
-from ._campaign_code_hashes import (
+from .chaos import CampaignChaosWiring
+from .code_hashes import (
     _algorithm_code_digest,  # noqa: F401  — re-exported test seam
     _byos_file_hash,  # noqa: F401  — re-exported test seam
     _combine_code_hash,  # noqa: F401  — re-exported test seam
@@ -70,8 +136,8 @@ from ._campaign_code_hashes import (
     code_hash_with_byos,
     compute_code_hashes,
 )
-from ._campaign_cost_tracker import CampaignCostTracker
-from ._campaign_dag import (  # noqa: F401 — re-exported
+from .cost_tracker import CampaignCostTracker
+from .dag import (  # noqa: F401 — re-exported
     DAGStep,
     SampleDict,
     SimResult,
@@ -88,23 +154,23 @@ from ._campaign_dag import (  # noqa: F401 — re-exported
     _sig_run_sim,
     _sig_validate_measure,
 )
-from ._campaign_epw import CampaignEpwResolver
-from ._campaign_fanout import (
+from .epw import CampaignEpwResolver
+from .fanout import (
     FanoutDeps,
 )
-from ._campaign_fanout import (
+from .fanout import (
     compute_await_deadline as _compute_await_deadline_impl,
 )
-from ._campaign_fanout import (
+from .fanout import (
     dispatch_step_work as _dispatch_step_work_impl,
 )
-from ._campaign_fanout import (
+from .fanout import (
     mark_sample_failed as _mark_sample_failed_impl,
 )
-from ._campaign_fanout import (
+from .fanout import (
     submit_and_await_all as _submit_and_await_all_impl,
 )
-from ._campaign_helpers import (  # noqa: F401 — re-exported
+from .helpers import (  # noqa: F401 — re-exported
     _make_mlflow_param_view,
     _package_content_digest,
     _scoped_dry_run_env,
@@ -113,98 +179,32 @@ from ._campaign_helpers import (  # noqa: F401 — re-exported
     cast_samples,
     cast_variables,
 )
-from ._campaign_hooks import (
+from .hooks import (
     hook_env as _build_hook_env,
 )
-from ._campaign_hooks import (
+from .hooks import (
     maybe_fire_webhook,
     run_finalize_script,
     run_init_script,
 )
-from ._campaign_kpis import CampaignKpisMixin
-from ._campaign_lifecycle import (
+from .kpis import CampaignKpisMixin
+from .lifecycle import (
     CampaignLifecycle,
     CampaignPauseRequested,
     handle_signal,
 )
-from ._campaign_lifecycle import (
+from .lifecycle import (
     CancelRegistry as _CancelRegistry,  # noqa: F401  — re-exported test seam
 )
-from ._campaign_lifecycle import (
+from .lifecycle import (
     cancel_registry as _cancel_registry,
 )
-from ._campaign_observability import ObservabilityManager
-from ._campaign_optimization import CampaignOptimizationMixin
-from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
-from ._campaign_sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
-from ._campaign_sharding import CampaignSharding
-from ._campaign_types import SampleSpec, VariableSpec  # noqa: F401  — re-exported API
-from .algorithms import AlgorithmRegistry, BaseAlgorithm
-from .apply_params import (
-    _build_mappings,
-    preflight_check,
-)
-from .cache import (
-    CacheKey,
-    _container_digest_for,
-    digest_pinned_image_ref,
-    sha256_of_dict,
-    sha256_of_files,
-)
-from .chaos import ChaosEngine
-from .config import CampaignConfig
-from .cosign import (
-    DEFAULT_COSIGN_OIDC_ISSUER,
-    CosignVerificationError,
-    build_cosign_image_ref,
-    triangulate_image_ref,
-    verify_image_signature,
-    write_cosign_receipt,
-)
-from .data_point_manager import DataPointManager
-from .distributed_cache import build_cache, campaign_state_namespace
-from .distributed_jobqueue import build_job_queue
-from .document_store import build_document_store
-from .errors import OSimFlowRuntimeError
-from .executors import BaseExecutor, Handle
-from .executors.transport import ResultTransportConfig
-from .json_utils import safe_json_dumps, safe_json_loads
-from .manifest import _validate_coordinator_url
-from .measures import MeasureRegistry, UnmappedVariableError
-from .notifications.alerting import AlertManager, build_alert_manager
-from .observability.mlflow_hook import (
-    log_mlflow_artifacts,
-    log_mlflow_metrics,
-    log_mlflow_params,
-    maybe_end_mlflow_run,
-    maybe_start_mlflow_run,
-)
-from .observability.monitoring import (
-    RunTrace,
-    WorkerRecoveryManager,
-    sample_log_paths,
-)
-from .registry import CampaignRegistry
-from .s3_campaign import (
-    CLAIM_ACQUIRED,
-    CLAIM_ALREADY_SUBMITTED,
-    CampaignDetached,
-    S3CampaignStore,
-    SubmitClaim,
-    batch_job_name,
-    new_handoff,
-)
-from .storage import ResultStorageUploader, build_result_storage
-from .taskqueue import ConsumerQueue
-from .work import (
-    SevereEnergyPlusError,
-    aggregate_results,
-    default_apply_parameters,
-    extract_kpis,
-    generate_plots,
-    preflight_run_model,
-    run_openstudio_sim,
-)
+from .observability import ObservabilityManager
+from .optimization import CampaignOptimizationMixin
+from .quota import CampaignQuotaGuard, QuotaExceededError
+from .sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
+from .sharding import CampaignSharding
+from .types import SampleSpec, VariableSpec  # noqa: F401  — re-exported API
 
 
 def _osimflow_version() -> str:
@@ -252,13 +252,13 @@ _RESULT_STORAGE_CLOSE_TIMEOUT_S = 120.0
 
 
 # NOTE (issue #1462): ``QuotaExceededError`` is defined in
-# ``osimflow._campaign_quota`` and re-exported here (it stays in
+# ``osimflow.campaign.quota`` and re-exported here (it stays in
 # ``__all__``) so the public import paths
 # ``osimflow.campaign.QuotaExceededError`` /
 # ``osimflow.QuotaExceededError`` are unchanged.
 #
 # NOTE (issue #1539): ``CampaignAbortError`` is defined in
-# ``osimflow._campaign_sample_trace`` (raised by the 3-strike
+# ``osimflow.campaign.sample_trace`` (raised by the 3-strike
 # checkpoint-failure abort, issue #739) and re-exported here the same
 # way, so ``osimflow.campaign.CampaignAbortError`` /
 # ``osimflow.CampaignAbortError`` are public import paths.
@@ -353,15 +353,15 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
 
 
 # NOTE (issue #1462): ``_CancelRegistry`` and the ``_cancel_registry``
-# singleton now live in ``osimflow._campaign_lifecycle`` and are
+# singleton now live in ``osimflow.campaign.lifecycle`` and are
 # re-exported above — tests import both names from this module.
 
 
 # NOTE (issue #1462): the code-hash machinery (import-closure walking,
 # ``_byos_file_hash``, ``_combine_code_hash``, ``compute_code_hashes``,
 # ``code_hash_with_byos``) and the default chaos-engine builder now
-# live in ``osimflow._campaign_code_hashes`` and
-# ``osimflow._campaign_chaos`` respectively.
+# live in ``osimflow.campaign.code_hashes`` and
+# ``osimflow.campaign.chaos`` respectively.
 
 
 def _resolve_work_fn(
@@ -381,7 +381,7 @@ def _resolve_work_fn(
     if explicit_fn is not None:
         return explicit_fn
     if script_path is not None:
-        from .byos import load_user_function  # noqa: PLC0415
+        from ..byos import load_user_function  # noqa: PLC0415
 
         log.info("loading BYOS %s from %s", label, script_path)
         return load_user_function(
@@ -838,7 +838,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
     def _enforce_start_quota(self) -> None:
         """Fail fast at ``run()`` start if the resource quota is violated.
 
-        Delegates to :class:`~osimflow._campaign_quota.CampaignQuotaGuard`
+        Delegates to :class:`~osimflow.campaign.quota.CampaignQuotaGuard`
         (issue #1462); raises ``QuotaExceededError`` on violation.
         """
         self._quota.enforce_start_quota()
@@ -968,7 +968,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
     def _compute_code_hashes(self, cfg: CampaignConfig | None = None) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
 
-        Delegates to :func:`osimflow._campaign_code_hashes.compute_code_hashes`
+        Delegates to :func:`osimflow.campaign.code_hashes.compute_code_hashes`
         (issue #1462).  The delegation preserves the historical unbound
         call shape ``Campaign._compute_code_hashes(stub)`` — the
         underlying function reads no real instance state and falls back
@@ -985,7 +985,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Cache-key ``code_sha256`` optionally mixed with a BYOS hash.
 
         Delegates to
-        :func:`osimflow._campaign_code_hashes.code_hash_with_byos`
+        :func:`osimflow.campaign.code_hashes.code_hash_with_byos`
         (issue #1462).  Returns ``code_hashes["bin"]`` unchanged when the
         BYOS entry is the ``"byos-unset"`` sentinel so existing cached
         entries keep hitting; otherwise the SHA-256 of ``bin|byos``.
@@ -1054,7 +1054,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Record a per-sample failure for the given step (issue #1570).
 
         Delegates to
-        :func:`osimflow._campaign_fanout.mark_sample_failed`
+        :func:`osimflow.campaign.fanout.mark_sample_failed`
         (issue #1542) with a call-time dependency bundle so
         instance-level patches of ``_job_queue`` /
         ``_checkpoint_sample`` / ``_maybe_alert`` / ``_obs`` keep
@@ -1072,7 +1072,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Derive the per-step orchestrator-side await deadline (issue #1566).
 
         Delegates to
-        :func:`osimflow._campaign_fanout.compute_await_deadline`
+        :func:`osimflow.campaign.fanout.compute_await_deadline`
         (issue #1542): ``cfg.await_timeout_s`` (the
         ``--sample-await-timeout-s`` opt-in) honoured directly when
         set, otherwise ``max(DEFAULT_STEP_RESOURCES[step]
@@ -1092,7 +1092,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         ``patch.object(campaign, "_maybe_alert")``, ...) applied
         after construction behave exactly as before the fanout
         extraction.  The bundle is the complete set of dependencies
-        :func:`osimflow._campaign_fanout.submit_and_await_all`
+        :func:`osimflow.campaign.fanout.submit_and_await_all`
         needs; it deliberately carries no Campaign back-reference.
         """
         return FanoutDeps(
@@ -1128,7 +1128,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Submit all samples to the executor, then await all results concurrently.
 
         Delegates to
-        :func:`osimflow._campaign_fanout.submit_and_await_all`
+        :func:`osimflow.campaign.fanout.submit_and_await_all`
         (issue #1542 — the fan-out wait loop extracted from
         ``campaign.py`` with its own unit tests).  This is the core
         of the concurrent fan-out fix (issue #286); see the fanout
@@ -1170,7 +1170,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Submit one per-sample step to the configured substrate (issue #1679).
 
         Thin delegator to
-        :func:`osimflow._campaign_fanout.dispatch_step_work`.  See
+        :func:`osimflow.campaign.fanout.dispatch_step_work`.  See
         that helper for the full behavioural contract.  Picks
         ``task_queue.submit`` when set, otherwise
         ``executor.submit``; the two arg/kwargs surfaces are
@@ -1183,7 +1183,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         Used by ``step_apply_parameters``,
         ``step_run_openstudio_sim`` (primary fan-out and the
         auto-recovery resubmit callback), and the EXTRACT_KPIS step
-        in :class:`osimflow._campaign_kpis.CampaignKpisMixin` —
+        in :class:`osimflow.campaign.kpis.CampaignKpisMixin` —
         the four hand-rolled ``if self.task_queue is not None: ...
         else: self.executor.submit(...)`` branches collapse into
         this single helper (issue #1679 acceptance criterion).
@@ -1227,7 +1227,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """Compute baseline comparison metrics and store on the run trace.
 
         Delegates to
-        :mod:`osimflow._campaign_baseline` (issue #1462).  No-op when
+        :mod:`osimflow.campaign.baseline` (issue #1462).  No-op when
         no baseline is configured.
         """
         compute_baseline_comparison(self.cfg, self.trace, kpi_files)
@@ -1330,7 +1330,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
 
     # ------------------------------------------------------------------
     # Shell hooks (issue #108 → #1462: logic lives in
-    # osimflow._campaign_hooks; thin delegators below).
+    # osimflow.campaign.hooks; thin delegators below).
     # ------------------------------------------------------------------
     def _run_init_script(self) -> None:
         """Run the init script before the first campaign step.

@@ -75,21 +75,21 @@ tests/integration tests/unit`` + ``PYTEST_COV_FLAGS
 --cov-fail-under=82``). Aggregate ``TOTAL`` was 85.20% (above the 82%
 gate) and the per-module readings were::
 
-    osimflow/_campaign_artifacts.py           91.28%
-    osimflow/_campaign_analysis.py            15.79% (fanout-oracle subset; full gate higher)
-    osimflow/_campaign_baseline.py            98.44%
-    osimflow/_campaign_chaos.py               29.33%   (raised to ~99.00% on the issue #1692 branch — `tests/unit/work/test_chaos_engine_wiring.py` covers `build_default_chaos_engine`, `CampaignChaosWiring.__init__`, and `maybe_inject` directly)
-    osimflow/_campaign_code_hashes.py         92.99%
-    osimflow/_campaign_cost_tracker.py        91.75%
-    osimflow/_campaign_epw.py                 89.52%
-    osimflow/_campaign_fanout.py             83.94% (fanout-oracle subset; full gate higher)
-    osimflow/_campaign_hooks.py               72.17%
-    osimflow/_campaign_lifecycle.py           78.81%
-    osimflow/_campaign_observability.py       91.39%
-    osimflow/_campaign_quota.py               97.94%
-    osimflow/_campaign_sample_trace.py        90.43%
-    osimflow/_campaign_types.py              100.00%
-    osimflow/_campaign_sharding.py            86.05%
+    osimflow/campaign/artifacts.py           91.28%
+    osimflow/campaign/analysis.py            15.79% (fanout-oracle subset; full gate higher)
+    osimflow/campaign/baseline.py            98.44%
+    osimflow/campaign/chaos.py               29.33%   (raised to ~99.00% on the issue #1692 branch — `tests/unit/work/test_chaos_engine_wiring.py` covers `build_default_chaos_engine`, `CampaignChaosWiring.__init__`, and `maybe_inject` directly)
+    osimflow/campaign/code_hashes.py         92.99%
+    osimflow/campaign/cost_tracker.py        91.75%
+    osimflow/campaign/epw.py                 89.52%
+    osimflow/campaign/fanout.py             83.94% (fanout-oracle subset; full gate higher)
+    osimflow/campaign/hooks.py               72.17%
+    osimflow/campaign/lifecycle.py           78.81%
+    osimflow/campaign/observability.py       91.39%
+    osimflow/campaign/quota.py               97.94%
+    osimflow/campaign/sample_trace.py        90.43%
+    osimflow/campaign/types.py              100.00%
+    osimflow/campaign/sharding.py            86.05%
     osimflow/executors/__init__.py            91.91%
     osimflow/executors/aws_batch_executor.py  95.15%
     osimflow/executors/azure_batch_executor.py 83.19%
@@ -141,7 +141,7 @@ see commit body) are::
     osimflow/byos.py                           88.30%  (367 stmts)
     osimflow/byos_contract.py                 100.00%   (52 stmts; pure declarations)
     osimflow/cache.py                          97.32%  (411 stmts)
-    osimflow/campaign.py                       85.47%  (main orchestrator; re-seeded by issue #1890 split)
+    osimflow/campaign/__init__.py                    85.47%  (main orchestrator; re-seeded by issue #1890 split)
     osimflow/chaos.py                          93.94%  (229 stmts)
     osimflow/circuit_breaker.py               100.00%   (98 stmts; issue #1111)
     osimflow/client.py                         83.77%  (451 stmts)
@@ -244,23 +244,23 @@ COVERAGE_DATA = REPO_ROOT / ".coverage"
 # the docstring above; do not raise them above the freshly measured %.
 FLOORS: dict[str, float] = {
     # --- osimflow/_campaign_*.py collaborators (#1462/#1463/#1464) ---
-    "osimflow/_campaign_artifacts.py": 90.28,  # measured 91.28%
-    "osimflow/_campaign_analysis.py": 99.00,  # measured 100.00% (#1675; full gate — error branches + numeric sanity)
-    "osimflow/_campaign_baseline.py": 97.44,  # measured 98.44%
-    "osimflow/_campaign_chaos.py": 98.00,  # measured 99.00% (issue #1692; `build_default_chaos_engine` + `CampaignChaosWiring.__init__` + `maybe_inject` now directly tested in `tests/unit/work/test_chaos_engine_wiring.py`)
-    "osimflow/_campaign_code_hashes.py": 91.99,  # measured 92.99%
-    "osimflow/_campaign_cost_tracker.py": 90.75,  # measured 91.75%
-    "osimflow/_campaign_epw.py": 88.52,  # measured 89.52%
-    "osimflow/_campaign_fanout.py": 82.94,  # measured 83.94% (#1542; fanout-oracle subset — full gate measures higher)
-    "osimflow/_campaign_hooks.py": 71.17,  # measured 72.17%
-    "osimflow/_campaign_kpis.py": 76.00,  # measured 77.00% (issue #1679; EXTRACT_KPIS step + worker direct-to-storage publish extracted from Campaign)
-    "osimflow/_campaign_optimization.py": 76.00,  # measured 77.00% (issue #1679; generational loop + Pareto persistence extracted from Campaign)
-    "osimflow/_campaign_lifecycle.py": 77.81,  # measured 78.81%
-    "osimflow/_campaign_observability.py": 90.39,  # measured 91.39%
-    "osimflow/_campaign_quota.py": 96.94,  # measured 97.94%
-    "osimflow/_campaign_sample_trace.py": 89.43,  # measured 90.43%
-    "osimflow/_campaign_types.py": 99.0,  # measured 100% (#1542; TypedDict declarations)
-    "osimflow/_campaign_sharding.py": 85.05,  # measured 86.05%
+    "osimflow/campaign/artifacts.py": 90.28,  # measured 91.28%
+    "osimflow/campaign/analysis.py": 99.00,  # measured 100.00% (#1675; full gate — error branches + numeric sanity)
+    "osimflow/campaign/baseline.py": 97.44,  # measured 98.44%
+    "osimflow/campaign/chaos.py": 98.00,  # measured 99.00% (issue #1692; `build_default_chaos_engine` + `CampaignChaosWiring.__init__` + `maybe_inject` now directly tested in `tests/unit/work/test_chaos_engine_wiring.py`)
+    "osimflow/campaign/code_hashes.py": 91.99,  # measured 92.99%
+    "osimflow/campaign/cost_tracker.py": 90.75,  # measured 91.75%
+    "osimflow/campaign/epw.py": 88.52,  # measured 89.52%
+    "osimflow/campaign/fanout.py": 82.94,  # measured 83.94% (#1542; fanout-oracle subset — full gate measures higher)
+    "osimflow/campaign/hooks.py": 71.17,  # measured 72.17%
+    "osimflow/campaign/kpis.py": 76.00,  # measured 77.00% (issue #1679; EXTRACT_KPIS step + worker direct-to-storage publish extracted from Campaign)
+    "osimflow/campaign/optimization.py": 76.00,  # measured 77.00% (issue #1679; generational loop + Pareto persistence extracted from Campaign)
+    "osimflow/campaign/lifecycle.py": 77.81,  # measured 78.81%
+    "osimflow/campaign/observability.py": 90.39,  # measured 91.39%
+    "osimflow/campaign/quota.py": 96.94,  # measured 97.94%
+    "osimflow/campaign/sample_trace.py": 89.43,  # measured 90.43%
+    "osimflow/campaign/types.py": 99.0,  # measured 100% (#1542; TypedDict declarations)
+    "osimflow/campaign/sharding.py": 85.05,  # measured 86.05%
     # --- osimflow/executors/*.py ---
     "osimflow/executors/__init__.py": 90.91,  # measured 91.91%
     "osimflow/executors/_rate_limiter.py": 95.00,  # measured 96.00% (issue #1563; shared token bucket)
@@ -306,7 +306,7 @@ FLOORS: dict[str, float] = {
     "osimflow/byos.py": 87.30,  # measured 88.30%
     "osimflow/byos_contract.py": 99.00,  # measured 100.00% (declarations)
     "osimflow/cache.py": 96.32,  # measured 97.32%
-    "osimflow/campaign.py": 84.47,  # measured 85.47% (CI; dropped from 86.50% only because #1890 moved 100%-covered code out)
+    "osimflow/campaign/__init__.py": 84.47,  # measured 85.47% (CI; dropped from 86.50% only because #1890 moved 100%-covered code out)
     "osimflow/chaos.py": 92.94,  # measured 93.94%
     "osimflow/circuit_breaker.py": 99.00,  # measured 100.00% (issue #1111)
     "osimflow/client.py": 82.77,  # measured 83.77%
@@ -375,8 +375,8 @@ FLOORS: dict[str, float] = {
     "osimflow/_health_redis.py": 92.00,  # measured 93.00%
     "osimflow/_health_types.py": 99.00,  # measured 100.00%
     # Split out of campaign.py (issue #1890); readings from the CI-flag suite.
-    "osimflow/_campaign_dag.py": 99.00,  # measured 100.00%
-    "osimflow/_campaign_helpers.py": 99.00,  # measured 100.00%
+    "osimflow/campaign/dag.py": 99.00,  # measured 100.00%
+    "osimflow/campaign/helpers.py": 99.00,  # measured 100.00%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors
@@ -405,7 +405,7 @@ FLOORS: dict[str, float] = {
 # assertion below flags any in-scope file missing from the table.
 GLOBS = (
     "osimflow/*.py",
-    "osimflow/_campaign_*.py",
+    "osimflow/campaign/*.py",
     "osimflow/executors/*.py",
     "osimflow/_work_scripts/*.py",
     "osimflow/api/*.py",
@@ -440,6 +440,26 @@ OMITTED: frozenset[str] = frozenset(
         "osimflow/_storage_base.py",
         "osimflow/_storage_endpoint.py",
         "osimflow/_storage_retry.py",
+        # Issue #1891 sys.modules aliases of osimflow/campaign/*.
+        "osimflow/_campaign_analysis.py",
+        "osimflow/_campaign_artifacts.py",
+        "osimflow/_campaign_baseline.py",
+        "osimflow/_campaign_chaos.py",
+        "osimflow/_campaign_code_hashes.py",
+        "osimflow/_campaign_cost_tracker.py",
+        "osimflow/_campaign_dag.py",
+        "osimflow/_campaign_epw.py",
+        "osimflow/_campaign_fanout.py",
+        "osimflow/_campaign_helpers.py",
+        "osimflow/_campaign_hooks.py",
+        "osimflow/_campaign_kpis.py",
+        "osimflow/_campaign_lifecycle.py",
+        "osimflow/_campaign_observability.py",
+        "osimflow/_campaign_optimization.py",
+        "osimflow/_campaign_quota.py",
+        "osimflow/_campaign_sample_trace.py",
+        "osimflow/_campaign_sharding.py",
+        "osimflow/_campaign_types.py",
         # Issue #1891 sys.modules aliases of osimflow/observability/*.
         "osimflow/monitoring.py",
         "osimflow/mlflow_hook.py",

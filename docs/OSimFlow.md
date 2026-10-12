@@ -68,11 +68,11 @@ The Minimum Viable Product (MVP) for OSimFlow will **focus on delivering a robus
 
 ## 4. Technical Architecture Overview
 
-OSimFlow's architecture is a **custom Python driver** (`osimflow/campaign.py`) that owns a 7-step DAG of independent steps. Each step submits its work to a `BaseExecutor` (`osimflow/executors/`), which can target local threads, Slurm, AWS Batch, or any future substrate that conforms to the same `submit()` → `Handle` interface. Caching is explicit and SQLite-backed (`osimflow/cache.py`), with content-hashed keys covering inputs, code, and container digest.
+OSimFlow's architecture is a **custom Python driver** (`osimflow/campaign/__init__.py`) that owns a 7-step DAG of independent steps. Each step submits its work to a `BaseExecutor` (`osimflow/executors/`), which can target local threads, Slurm, AWS Batch, or any future substrate that conforms to the same `submit()` → `Handle` interface. Caching is explicit and SQLite-backed (`osimflow/cache.py`), with content-hashed keys covering inputs, code, and container digest.
 
 > **Why a custom driver?** The architecture decision record at `.agents/results/architecture/0001-workflow-framework.md` documents the rationale. The empirical spike results in `.agents/results/decision-verdict.md` confirm the chosen path satisfies the §5.2 MVP acceptance criteria. The PRD scope, target audience, and MVP deliverables are unchanged by the framework choice.
 
-### 4.1. Core Workflow (`osimflow/campaign.py`)
+### 4.1. Core Workflow (`osimflow/campaign/__init__.py`)
 The `Campaign` class owns the 7-step DAG. Its `run()` method is the public entry point:
 
 ```python
@@ -84,7 +84,7 @@ campaign = Campaign(cfg, executor)
 result = campaign.run()
 ```
 
-The 7-step DAG (matches `osimflow/campaign.py:_STEP_DEPENDENCIES`, per AGENTS.md §3):
+The 7-step DAG (matches `osimflow/campaign/__init__.py:_STEP_DEPENDENCIES`, per AGENTS.md §3):
 
 ```
 variables.yml ──► GENERATE_SAMPLES ──► PREFLIGHT_RUN_MODEL ──► VALIDATE_MEASURE_VARIABLES
@@ -106,7 +106,7 @@ variables.yml ──► GENERATE_SAMPLES ──► PREFLIGHT_RUN_MODEL ──►
 
 The actual step bodies live in `osimflow/work.py` and call the existing `bin/*.py` stubs as subprocesses (so the BYOS contract is identical to the public function signature).
 
-### 4.2. Key Steps (`osimflow/campaign.py` methods)
+### 4.2. Key Steps (`osimflow/campaign/__init__.py` methods)
 
 Each step is a `Campaign` method that:
 1. Computes a `CacheKey` from inputs + code hash + container digest.

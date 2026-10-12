@@ -1,0 +1,279 @@
+"""CampaignCostTracker for Campaign — wraps CostTracker lifecycle and accumulation.
+
+This module extracts cost tracking operations from the Campaign class,
+including:
+- CostTracker construction from CampaignConfig
+- Per-step cost recording
+- Per-sample cost accumulation
+- Campaign-level cost summary finalization
+
+The CampaignCostTracker is constructed with a CampaignConfig and a campaign_id,
+and exposes methods for the Campaign to record and accumulate costs
+throughout the campaign lifecycle.
+"""
+
+from __future__ import annotations
+
+import inspect
+import logging
+from typing import Any, Union
+
+from ..config import CampaignConfig
+from ..cost_tracking import (
+    DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
+    DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
+    CostTracker,
+)
+from ..executors import ExecutorRegistry
+from ..executors.base import BaseExecutor
+
+log = logging.getLogger("osimflow.campaign")
+
+_ExecutorArg = Union["BaseExecutor", str]
+
+
+def _supports_spot_from_name(name: str) -> bool:
+    """Fallback for backward compatibility when only executor name is available.
+
+    Looks up the executor class via :meth:`ExecutorRegistry.get` and reads
+    its ``supports_spot_market`` class attribute — the same source of
+    truth the executor-instance path uses. Issue #1393 closed the
+    dispatch-table hazard that left ``azure_batch`` and ``google_batch``
+    silently reporting flat-rate (no spot savings) for callers passing
+    only an executor name string.
+
+    Returns ``False`` for unknown executor names (best-effort static
+    detection — the underlying registry raises ``ValueError`` for
+    unregistered names, which we absorb at ``DEBUG`` level so that the
+    fallback never breaks a cost-tracker caller).
+
+    Notes
+    -----
+    ``BaseExecutor.supports_spot_market`` is a ``@property`` that defaults
+    to ``False``; spot-capable subclasses (``AWSBatchExecutor``,
+    ``AzureBatchExecutor``, ``GoogleBatchExecutor``) shadow it with a
+    plain class attribute set to ``True``. A naive
+    ``getattr(cls, "supports_spot_market", False)`` on a flat-rate
+    subclass returns the inherited *property descriptor object* — which
+    is truthy — so we use :func:`inspect.getattr_static` to read the raw
+    class attribute without triggering the descriptor protocol, then
+    fall back to ``False`` when only the inherited property is visible.
+    """
+    try:
+        cls = ExecutorRegistry.get(name)
+    except ValueError:
+        log.debug(
+            "_supports_spot_from_name: unknown executor %r; assuming flat-rate",
+            name,
+        )
+        return False
+    raw = inspect.getattr_static(cls, "supports_spot_market", False)
+    if isinstance(raw, property):
+        return False
+    return bool(raw)
+
+
+def _compute_spot_savings_static(total_cost: float, executor: _ExecutorArg | None) -> float:
+    """Compute estimated spot savings. Supports both executor instance and string name."""
+    if total_cost <= 0:
+        return 0.0
+
+    supports_spot: bool
+    if executor is None:
+        supports_spot = False
+    elif isinstance(executor, BaseExecutor):
+        supports_spot = executor.supports_spot_market
+    else:
+        supports_spot = _supports_spot_from_name(executor)
+
+    if not supports_spot:
+        return 0.0
+
+    savings_ratio = (
+        DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+    ) / DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+    return round(total_cost * savings_ratio, 6)
+
+
+class CampaignCostTracker:
+    """Manages cost tracker lifecycle and per-sample cost accumulation.
+
+    This class encapsulates cost tracking operations for a Campaign,
+    constructing the underlying CostTracker at initialization and
+    providing methods to record per-step costs and accumulate
+    campaign-level totals.
+
+    Parameters
+    ----------
+    campaign_id
+        Unique campaign identifier (used for CostTracker initialization).
+    cfg
+        Campaign configuration used to determine pricing and backend.
+    executor
+        A BaseExecutor instance (preferred) or an executor name string.
+        When an executor instance is provided, the ``supports_spot_market``
+        property is queried directly. When a string is provided,
+        ``_supports_spot_from_name`` resolves the class via
+        ``ExecutorRegistry`` and reads the class attribute (issue #1393).
+
+    Attributes
+    ----------
+    tracker : CostTracker | None
+        The underlying cost tracker, or None if cost tracking is disabled.
+    """
+
+    def __init__(
+        self,
+        campaign_id: str,
+        cfg: CampaignConfig,
+        executor: _ExecutorArg,
+    ) -> None:
+        if isinstance(executor, BaseExecutor):
+            self._executor: BaseExecutor | str = executor
+            self._executor_name: str = executor.name
+        else:
+            self._executor = executor
+            self._executor_name = executor
+        self._tracker: CostTracker | None = self._build_tracker(
+            campaign_id=campaign_id,
+            cfg=cfg,
+        )
+
+    # ------------------------------------------------------------------
+    # Tracker construction
+    # ------------------------------------------------------------------
+    def _build_tracker(
+        self,
+        campaign_id: str,
+        cfg: CampaignConfig,
+    ) -> CostTracker | None:
+        """Build a CostTracker from CampaignConfig, or None if disabled.
+
+        Returns None when ``cfg.enable_cost_tracking`` is False (zero overhead).
+        """
+        if not cfg.enable_cost_tracking:
+            return None
+        try:
+            from ..cost_tracking import build_cost_tracker  # noqa: PLC0415
+
+            return build_cost_tracker(
+                campaign_id=campaign_id,
+                executor_type=self._executor_name,
+                result_storage_backend=cfg.result_storage_backend,
+                result_storage_bucket=cfg.result_storage_bucket,
+                result_storage_prefix=str(cfg.outdir.name),
+                result_storage_endpoint=cfg.result_storage_endpoint,
+                track_costs=cfg.enable_cost_tracking,
+                aws_on_demand_per_vcpu_hour=cfg.cost_on_demand_price,
+                aws_spot_per_vcpu_hour=cfg.cost_spot_price,
+                slurm_cost_per_node_hour=getattr(cfg, "slurm_cost_per_node_hour", 0.0),
+            )
+        except Exception as exc:
+            log.warning("could not initialize cost tracker: %s — continuing without", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Per-step cost recording
+    # ------------------------------------------------------------------
+    def record_step_costs(
+        self,
+        step_name: str,
+        cost_usd: float,
+        spot_savings_usd: float = 0.0,
+    ) -> None:
+        """Record aggregated costs from a completed fan-out step.
+
+        Parameters
+        ----------
+        step_name
+            The step name (e.g., "APPLY_PARAMETERS", "RUN_OPENSTUDIO_SIM").
+        cost_usd
+            Total cost in USD for the step.
+        spot_savings_usd
+            Estimated spot savings for the step.
+        """
+        if self._tracker is None:
+            return
+        self._tracker.record_actual(step_name, cost_usd, spot_savings_usd)
+
+    # ------------------------------------------------------------------
+    # Cost accumulation helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def sum_sample_costs(
+        sample_state: dict[str, dict[str, object]],
+        executor: _ExecutorArg | None = None,
+    ) -> tuple[float, float]:
+        """Sum per-sample costs from sample state accumulator.
+
+        Parameters
+        ----------
+        sample_state
+            The Campaign's ``_sample_state`` dict mapping sample_id to
+            per-sample state dicts containing ``cost_usd`` entries.
+        executor
+            A BaseExecutor instance or executor name string. When provided,
+            the ``supports_spot_market`` property is used to determine
+            spot savings. When None, no spot savings are computed.
+
+        Returns
+        -------
+        tuple[float, float]
+            Tuple of (total_cost, total_savings) where savings is
+            computed using the executor-specific pricing model.
+        """
+        total_cost = 0.0
+        for state in sample_state.values():
+            cost_usd = state.get("cost_usd")
+            if cost_usd is not None:
+                total_cost += float(str(cost_usd))
+        return total_cost, _compute_spot_savings_static(total_cost, executor)
+
+    def compute_spot_savings(self, total_cost: float) -> float:
+        """Compute estimated spot savings from on-demand total cost.
+
+        Uses the executor's ``supports_spot_market`` property when an
+        executor instance is available, otherwise looks up the class
+        via ``ExecutorRegistry`` and reads the class attribute
+        (issue #1393).
+
+        Parameters
+        ----------
+        total_cost
+            Total on-demand cost in USD.
+
+        Returns
+        -------
+        float
+            Estimated savings if jobs ran on spot instances (0.0 for
+            flat-rate executors).
+        """
+        return _compute_spot_savings_static(total_cost, self._executor)
+
+    # ------------------------------------------------------------------
+    # Campaign-level summary
+    # ------------------------------------------------------------------
+    def finalize(self) -> dict[str, Any] | None:
+        """Build and return the campaign cost summary.
+
+        Returns None if cost tracking is disabled.
+
+        Returns
+        -------
+        dict[str, Any] | None
+            Cost summary dict suitable for assigning to ``RunTrace.cost_summary``,
+            or None if cost tracking is not enabled.
+        """
+        if self._tracker is None:
+            return None
+        try:
+            summary = self._tracker.finalize()
+            return summary.to_dict()
+        except Exception as exc:
+            log.warning("could not finalize cost summary: %s", exc, exc_info=True)
+            return None
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return True if cost tracking is enabled."""
+        return self._tracker is not None

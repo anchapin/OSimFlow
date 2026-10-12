@@ -8,10 +8,10 @@ API; everything else is an implementation detail.
 
 from typing import TYPE_CHECKING
 
-from ._campaign_observability import ObservabilityManager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
 from .campaign import Campaign, CampaignAbortError, CampaignError, QuotaExceededError
+from .campaign.observability import ObservabilityManager
 from .chaos import (
     ChaosEngine,
     ChaosResult,
