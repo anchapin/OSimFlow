@@ -44,6 +44,13 @@ Docker Swarm, OpenStudio CLI).
 2. Add or update a workflow under `.github/workflows/<substrate>-e2e.yml`
    that exports the env var and runs the test against real
    infrastructure (or the workflow must `workflow_dispatch`-only).
+   Substrates with the plain checkout → setup → install → pytest shape
+   (Slurm, PBS, Dask, Docker Swarm, Kubernetes) call the shared
+   `.github/workflows/substrate-e2e-reusable.yml` (`workflow_call`,
+   issue #1896); the caller keeps its own `on:` triggers, `permissions:`
+   and test path, so the trigger column below is still read from the
+   `<substrate>-e2e.yml` file. Cloud-OIDC (Azure, Google), Nomad and the
+   `scripts/e2e_gate.py` workflows (AWS Batch, OpenStudio CLI) stay bespoke.
 3. Add a row to the matrix below.
 4. Reference the new file in `AGENTS.md` §3 (CLI flags) / §5
    (directory map) as appropriate, and run `make contract` to confirm

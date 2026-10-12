@@ -32,21 +32,11 @@ permissions:
 
 jobs:
   dask-e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Install OSimFlow with dev + dask extras
-        run: pip install -e ".[dev,dask]"
-
-      - name: Run Dask-JobQueue E2E
-        env:
-          OSIMFLOW_DASK_E2E: "1"
-          OSIMFLOW_DASK_QUEUE: ${{ vars.OSIMFLOW_DASK_QUEUE }}
-        run: .venv/bin/pytest tests/integration/test_real_dask_campaign.py -v --timeout=1800
+    uses: ./.github/workflows/substrate-e2e-reusable.yml
+    with:
+      timeout-minutes: 15
+      install-command: pip install -e ".[dev,dask]"
+      test-path: tests/integration/test_real_dask_campaign.py
+      test-env: |
+        OSIMFLOW_DASK_E2E=1
+        OSIMFLOW_DASK_QUEUE=${{ vars.OSIMFLOW_DASK_QUEUE }}

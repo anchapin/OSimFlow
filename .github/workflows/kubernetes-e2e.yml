@@ -32,26 +32,12 @@ permissions:
 
 jobs:
   kubernetes-e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Install OSimFlow with dev + kubernetes extras
-        run: pip install -e ".[dev,kubernetes]"
-
-      - name: Write kubeconfig from secret
-        run: |
-          mkdir -p "$HOME/.kube"
-          printf '%s' "${{ secrets.KUBECONFIG }}" > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
-          echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
-
-      - name: Run real Kubernetes E2E
-        env:
-          OSIMFLOW_KUBERNETES_E2E: 1
-          OSIMFLOW_KUBERNETES_NAMESPACE: ${{ vars.OSIMFLOW_KUBERNETES_NAMESPACE }}
-        run: .venv/bin/pytest tests/integration/test_kubernetes_executor_real.py -v --timeout=1800
+    uses: ./.github/workflows/substrate-e2e-reusable.yml
+    with:
+      install-command: pip install -e ".[dev,kubernetes]"
+      test-path: tests/integration/test_kubernetes_executor_real.py
+      test-env: |
+        OSIMFLOW_KUBERNETES_E2E=1
+        OSIMFLOW_KUBERNETES_NAMESPACE=${{ vars.OSIMFLOW_KUBERNETES_NAMESPACE }}
+    secrets:
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}

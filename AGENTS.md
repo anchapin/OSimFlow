@@ -444,7 +444,9 @@ in `ci.yml`, which must not gain workflow-level `paths` filters. Per-substrate E
 `workflow_dispatch`-only; their integration tests are skip-gated in
 normal CI. The full real-E2E coverage matrix (gate, trigger, CI
 workflow, contract) lives at `docs/substrate-coverage.md`
-(issue #1020).
+(issue #1020). The Slurm / PBS / Dask / Docker Swarm / Kubernetes
+callers share `.github/workflows/substrate-e2e-reusable.yml`
+(`workflow_call`, issue #1896) and keep their own triggers and test paths.
 
 For every new public surface, add a test in `tests/unit/` or
 `tests/integration/`. Executor integration tests follow

@@ -40,7 +40,9 @@ def _iter_uses_lines(path: Path) -> list[tuple[int, str, str]]:
         if stripped.startswith("#"):
             continue
         match = USES_RE.match(line)
-        if match:
+        if match and not match.group("value").startswith("./"):
+            # Local reusable workflows (``./.github/workflows/*.yml``) are
+            # versioned with the caller's commit; they cannot be SHA-pinned.
             found.append((lineno, line, match.group("value")))
     return found
 

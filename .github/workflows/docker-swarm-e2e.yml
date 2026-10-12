@@ -31,34 +31,18 @@ permissions:
 
 jobs:
   docker-swarm-e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Install OSimFlow with dev extras + docker SDK
-        run: |
-          pip install -e ".[dev]"
-          pip install docker
-
-      - name: Initialize Docker Swarm
-        run: |
-          set -euo pipefail
-          docker swarm init || true
-          echo "Swarm node info:"
-          docker info --format '{{.Swarm.ControlAvailable}}'
-
-      - name: Run Docker Swarm E2E
-        env:
-          OSIMFLOW_DOCKER_SWARM_E2E: "1"
-          OSIMFLOW_DOCKER_SWARM_IMAGE: ${{ vars.OSIMFLOW_DOCKER_SWARM_IMAGE || 'python:3.12-slim' }}
-        run: .venv/bin/pytest tests/integration/test_real_docker_swarm_campaign.py -v --timeout=1800
-
-      - name: Cleanup Swarm services
-        if: always()
-        run: docker service rm osimflow-0 osimflow-1 osimflow-2 2>/dev/null || true
+    uses: ./.github/workflows/substrate-e2e-reusable.yml
+    with:
+      timeout-minutes: 15
+      install-command: |
+        pip install -e ".[dev]"
+        pip install docker
+      setup-script: |
+        docker swarm init || true
+        echo "Swarm node info:"
+        docker info --format '{{.Swarm.ControlAvailable}}'
+      test-path: tests/integration/test_real_docker_swarm_campaign.py
+      test-env: |
+        OSIMFLOW_DOCKER_SWARM_E2E=1
+        OSIMFLOW_DOCKER_SWARM_IMAGE=${{ vars.OSIMFLOW_DOCKER_SWARM_IMAGE || 'python:3.12-slim' }}
+      cleanup-script: docker service rm osimflow-0 osimflow-1 osimflow-2 2>/dev/null || true
