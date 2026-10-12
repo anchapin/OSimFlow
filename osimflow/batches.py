@@ -206,7 +206,7 @@ def _execute(
         argv = build_run_argv(common, entry, outdir)
         if dry_run:
             log.info("dry-run %s: %s", cname, " ".join(argv))
-            print(" ".join(argv))
+            sys.stdout.write(" ".join(argv) + "\n")
             results.append(
                 BatchResult(
                     str(entry["id"]), str(entry["name"]), cname, str(outdir), "dry-run", None, 0.0

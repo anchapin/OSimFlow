@@ -553,7 +553,7 @@ def main() -> int:  # noqa: PLR0912
 
     if args.negotiate_version:
         result = negotiate_version()
-        print(json.dumps(result))
+        sys.stdout.write(json.dumps(result) + "\n")
         return 0
 
     logging.basicConfig(
@@ -597,14 +597,14 @@ def main() -> int:  # noqa: PLR0912
         else:
             _upload_artifacts_for_object_storage(result)
         result_json = json.dumps({"ok": True, "result": encode_transport_value(result)})
-        print(result_json)
+        sys.stdout.write(result_json + "\n")
         return 0
     except Exception as exc:  # noqa: BLE001
         log.exception("remote runner failed")
         if remapper is not None and context is not None:
             _upload_failure_artifacts(remapper, context)
         error_json = json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
-        print(error_json, file=sys.stderr)
+        sys.stderr.write(error_json + "\n")
         return 1
     finally:
         if scratch is not None:

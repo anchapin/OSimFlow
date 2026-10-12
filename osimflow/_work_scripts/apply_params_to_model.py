@@ -71,9 +71,8 @@ def main() -> int:
             args.parameter_set,
             type(parameters).__name__,
         )
-        print(
-            f"ERROR: parameter set must be a JSON object (got {type(parameters).__name__})",
-            file=sys.stderr,
+        sys.stderr.write(
+            f"ERROR: parameter set must be a JSON object (got {type(parameters).__name__})\n"
         )
         return 4
 
@@ -96,7 +95,7 @@ def main() -> int:
         # Pre-flight failure: print the error to stderr and exit non-zero
         # so the work layer's subprocess.run can detect the failure.
         log.error("Pre-flight check failed for sample_id=%s: %s", args.sample_id, exc)
-        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.stderr.write(f"ERROR: {exc}\n")
         return 1
     except OpenStudioBindingsMissingError as exc:
         log.error(
@@ -106,7 +105,7 @@ def main() -> int:
             args.sample_id,
             exc,
         )
-        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.stderr.write(f"ERROR: {exc}\n")
         return 3
     except NotImplementedError as exc:
         # Bindings are installed (or this is not an .osm path); the
@@ -119,7 +118,7 @@ def main() -> int:
             args.sample_id,
             exc,
         )
-        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.stderr.write(f"ERROR: {exc}\n")
         return 5
 
     log.info(

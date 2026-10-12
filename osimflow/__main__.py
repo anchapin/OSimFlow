@@ -4081,8 +4081,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             if is_tui_available():
                 tui = RichTUI(cfg.outdir)
                 log.info("Rich TUI enabled")
-        except Exception:
-            pass  # degrade silently
+        except Exception:  # noqa: BLE001 - TUI is optional; degrade to plain output
+            log.debug("Rich TUI unavailable", exc_info=True)
     try:
         if tui is not None:
             from osimflow.tui import RichTUI  # noqa: PLC0415, F811

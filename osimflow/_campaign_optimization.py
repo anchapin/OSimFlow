@@ -437,7 +437,7 @@ class CampaignOptimizationMixin:
                 objective_names = sorted(k for k, v in kpis.items() if isinstance(v, (int, float)))
                 if objective_names:
                     break
-            except Exception:
+            except (OSError, ValueError, AttributeError):
                 continue
 
         if not objective_names:

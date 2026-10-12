@@ -196,7 +196,7 @@ def cli_actor() -> str:
     """
     try:
         username = pwd.getpwuid(os.getuid()).pw_name
-    except Exception:
+    except (KeyError, OSError):
         username = "root"
     if username == "root" and "_CONDA_DEFAULT_ENV" in os.environ:
         username = "root"
@@ -277,7 +277,7 @@ class AuditLogger:
                 f.write(line)
                 f.flush()
                 os.fsync(f.fileno())
-        except Exception as exc:
+        except (OSError, TypeError, ValueError) as exc:
             log.warning("failed to write audit event: %s", exc)
 
     def campaign_created(

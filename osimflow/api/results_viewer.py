@@ -443,7 +443,7 @@ async def results_timeseries(  # noqa: PLR0912,PLR0915
         try:
             conn = sqlite3.connect(str(sql_path))
             conn.row_factory = sqlite3.Row
-        except Exception:
+        except sqlite3.Error:
             continue
 
         try:

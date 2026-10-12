@@ -141,8 +141,8 @@ class ResultsDatabase:
             self._conn.commit()
             self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._conn.execute("PRAGMA optimize")
-        except Exception:
-            pass
+        except sqlite3.Error:
+            log.debug("results db checkpoint on close failed", exc_info=True)
         with contextlib.suppress(Exception):
             self._conn.close()
         self._conn = None
