@@ -306,7 +306,7 @@ FLOORS: dict[str, float] = {
     "osimflow/byos.py": 87.30,  # measured 88.30%
     "osimflow/byos_contract.py": 99.00,  # measured 100.00% (declarations)
     "osimflow/cache.py": 96.32,  # measured 97.32%
-    "osimflow/campaign.py": 84.50,  # measured 85.47% in CI after #1890 split moved 100%-covered code out (ratio effect, no tests lost)
+    "osimflow/campaign.py": 84.47,  # measured 85.47% (CI; dropped from 86.50% only because #1890 moved 100%-covered code out)
     "osimflow/chaos.py": 92.94,  # measured 93.94%
     "osimflow/circuit_breaker.py": 99.00,  # measured 100.00% (issue #1111)
     "osimflow/client.py": 82.77,  # measured 83.77%
