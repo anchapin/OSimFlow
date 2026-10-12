@@ -77,7 +77,7 @@ def test_real_google_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
     example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "variables.yml"
+    example_vars = REPO_ROOT / "examples" / "179d_variables.yml"
 
     workdir = tmp_path / "work"
     workdir.mkdir()
