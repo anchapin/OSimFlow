@@ -53,7 +53,7 @@ Real layered structure:
 Orchestrator → Executor → Work function
 ```
 
-- **Orchestrator** — `osimflow/campaign.py` (`Campaign` class) drives
+- **Orchestrator** — `osimflow/campaign/__init__.py` (`Campaign` class) drives
   the 7-step DAG.
 - **Executor** — `osimflow/executors/`; 10 concrete executors
   (`LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
@@ -185,12 +185,12 @@ Re-running with the same `--outdir` is a cache hit on every step
 (50 s cold → 0.1 s warm — see `decision-verdict.md` §1). Per-step
 artifacts land at `${outdir}/{work,sim,kpis,plots,run.json,…}`.
 
-### DAG steps (driven by `osimflow/campaign.py`)
+### DAG steps (driven by `osimflow/campaign/__init__.py`)
 
 `GENERATE_LHS_SAMPLES`, `PREFLIGHT_RUN_MODEL`, `APPLY_PARAMETERS`,
 `RUN_OPENSTUDIO_SIM`, `EXTRACT_KPIS`, `AGGREGATE_RESULTS`,
 `GENERATE_BASIC_PLOTS`. Cross-step file deps are declared in
-`_STEP_DEPENDENCIES` near the top of `osimflow/campaign.py` — do not
+`_STEP_DEPENDENCIES` near the top of `osimflow/campaign/__init__.py` — do not
 bypass `_verify_step_inputs` when adding a step.
 
 ### CLI subcommands
@@ -341,7 +341,7 @@ Adding a public file, executor, executor config module, `bin/*.py` script, or
   surface).
 - **Cache key rule:** any code that affects per-step behavior
   must be hashed into the cache key. See
-  `osimflow/campaign.py:_compute_code_hashes`. Editing
+  `osimflow/campaign/__init__.py:_compute_code_hashes`. Editing
   `osimflow/_work_scripts/*.py` OR `bin/*.py` invalidates the
   affected step automatically via `code_hashes["bin"]` SHA-256
   (union, sorted + deduped — issue #1021). Editing
@@ -350,7 +350,7 @@ Adding a public file, executor, executor config module, `bin/*.py` script, or
   The resolved algorithm's own implementation code is
   additionally digest-hashed into the `GENERATE_*_SAMPLES`
   key (`_algorithm_code_digest` in
-  `osimflow/_campaign_code_hashes.py`, issue #1636) —
+  `osimflow/campaign/code_hashes.py`, issue #1636) —
   upgrading a same-named third-party algorithm plugin
   invalidates cached samples. Do not bypass this hashing.
 - **Executor resource directives:** `cpus`, `memory_mb`,
@@ -495,13 +495,13 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; own the platform's `XConfig` + `add_arguments` hook in a new `osimflow/executor_configs/<name>.py` module (issue #1575); transport options arrive via the single `transport: ResultTransportConfig \| None` parameter on `_do_submit()` / the handle (issue #1541 — do NOT add per-field `result_transport_mode` / `result_storage_*` kwargs); or declare an entry point under `[project.entry-points."osimflow.executors"]` |
 | Verify a third-party executor plug-in against the contract (issue #1478) | subclass `osimflow.testing.ExecutorConformanceSuite` in the plug-in's test module and point its `executor_factory` at the plug-in; for non-pytest use `osimflow.testing.run_executor_conformance`. Suite covers submit/Handle lifecycle, transport.py result-reference handling, resource directives, fanout chunk size, and health-check registration. |
 | Verify a third-party algorithm plug-in against the contract (issue #1565) | subclass `osimflow.testing.AlgorithmConformanceSuite` in the plug-in's test module and point its `algorithm_factory` at the plug-in (typically `AlgorithmRegistry.get("my_plugin_name")`); for non-pytest use `osimflow.testing.run_algorithm_conformance`. Suite covers `n_samples` exactness, seed determinism, variable-name/order stability, dtype coercion via `osimflow.config.coerce_variable_type`, and cache-key reproducibility. Example: `class TestMyAlgoConformance(AlgorithmConformanceSuite): algorithm_factory = staticmethod(lambda: AlgorithmRegistry.get("my_plugin"))`. |
-| Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
+| Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign/__init__.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
 | Add a user-facing CLI flag | executor-specific: the `add_arguments` hook in `osimflow/executor_configs/<name>.py` **and** (if it maps to a config field) the matching `CampaignConfig`/`XConfig` field + `load_config` parser. Campaign-wide: `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser. Either way `docs/agents-reference.md` ("CLI flags") must list the new flag (`make contract` enforces it — the list is derived from the hooks/parser, issue #1575) |
 | Change KPI output schema | `osimflow/_work_scripts/extract_kpis.py` (dict shape) **and** `osimflow/_work_scripts/aggregate_results.py` (column ordering); update `docs/agents-reference.md` / §8 of this file if it affects the contract |
-| Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
+| Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign/__init__.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
 | Work with safe expression evaluation | `osimflow/_eval_safe.py` (`safe_eval`, `ExpressionError`); used by chaos engine for variable expansion |
-| Add a new cache invalidation rule | `osimflow/campaign.py:_compute_code_hashes` **and** a test in `tests/integration/test_cache_invalidation.py` |
+| Add a new cache invalidation rule | `osimflow/campaign/__init__.py:_compute_code_hashes` **and** a test in `tests/integration/test_cache_invalidation.py` |
 | Add a distributed-cache invalidation rule (issues #993, #1389) | `osimflow/distributed_cache.py:DistributedCache` **and** a test in `tests/integration/test_distributed_cache_invalidation.py` (skip-gated on `fakeredis` / live Redis; asserts cross-worker Redis pub/sub broadcast) |
 | Add an export format | new module in `osimflow/exporters/`, add the `--target` choice to `osimflow/__main__.py` export subcommand |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture (the stub is already there for `OSIMFLOW_STUB_SIM=1`) |

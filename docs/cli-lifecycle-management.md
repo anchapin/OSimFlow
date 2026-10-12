@@ -405,7 +405,7 @@ GENERATE_BASIC_PLOTS  (single-shot)
 
 ### Cache Key and Restart Behaviour
 
-The Campaign uses SHA-256 hashes of `bin/*.py` files in the cache key (`osimflow/campaign.py:_compute_code_hashes`). Editing a wrapper script invalidates the cache for that step, forcing a clean re-run. This means a CLI wrapper that crashes and restarts will correctly re-run the full step on retry.
+The Campaign uses SHA-256 hashes of `bin/*.py` files in the cache key (`osimflow/campaign/__init__.py:_compute_code_hashes`). Editing a wrapper script invalidates the cache for that step, forcing a clean re-run. This means a CLI wrapper that crashes and restarts will correctly re-run the full step on retry.
 
 ### Sample-Level Independence
 
@@ -625,7 +625,7 @@ Set the `worker_id` field on the handle to a value that lets you correlate logs 
 - [`osimflow/executors/__init__.py`](osimflow/executors/__init__.py) — `run_subprocess`, `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `NomadExecutor`
 - [`osimflow/executors/kubernetes_executor.py`](osimflow/executors/kubernetes_executor.py) — `KubernetesExecutor`, `restart_policy`
 - [`osimflow/executors/base.py`](osimflow/executors/base.py) — `BaseExecutor`, `Handle`
-- [`osimflow/campaign.py`](osimflow/campaign.py) — Campaign retry logic, cache key construction
+- [`osimflow/campaign/__init__.py`](osimflow/campaign/__init__.py) — Campaign retry logic, cache key construction
 - [AGENTS.md §4](../AGENTS.md) — CLI flags, 6-step DAG, DAG step names
 - [Resource Allocation Guide](resource-allocation.md) — per-step `time_min` defaults and tuning
 - [Observability Guide](observability.md) — `run.json` trace and optional MLflow integration

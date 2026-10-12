@@ -5,7 +5,7 @@
 > interpret a `benchmarks.json` artifact.
 
 The performance benchmark is a small, deterministic regression test
-for **orchestrator overhead** — the glue code in `osimflow/campaign.py`,
+for **orchestrator overhead** — the glue code in `osimflow/campaign/__init__.py`,
 `osimflow/executors/`, and `osimflow/cache.py` that surrounds the
 per-sample work functions. It is the implementation of PRD §5.2
 *"Initial 'Performance Benchmarking' workflow within CI/CD to track
@@ -78,7 +78,7 @@ A failing artifact shows `cold_wall_s ≥ threshold_cold_s` and
 
 - A `bin/*.py` edit that adds a slow import (e.g. a heavy ML
   library) without a `try/except` lazy import. The cache key in
-  `osimflow/campaign.py:_compute_code_hashes` includes the
+  `osimflow/campaign/__init__.py:_compute_code_hashes` includes the
   `bin/*.py` hash, so an edit invalidates every step — the cold
   run re-runs the whole campaign from scratch, which is exactly
   what we want for a regression test.

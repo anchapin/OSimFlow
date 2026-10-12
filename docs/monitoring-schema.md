@@ -105,7 +105,7 @@ One entry per DAG step, in execution order.
 
 ### Step names
 
-These correspond to the seven-step DAG in `osimflow/campaign.py`:
+These correspond to the seven-step DAG in `osimflow/campaign/__init__.py`:
 
 | Step name | Fan-out | Notes |
 |---|---|---|
@@ -129,7 +129,7 @@ These correspond to the seven-step DAG in `osimflow/campaign.py`:
 
 > **Future:** mixed cache hits (`HIT×K / MISS×M` for `K+M = N`) are not yet
 > emitted — the current implementation records the *majority* cache status.
-> See `osimflow/campaign.py` for the per-step logic.
+> See `osimflow/campaign/__init__.py` for the per-step logic.
 
 ---
 
@@ -513,7 +513,7 @@ The canonical implementation lives in:
 | `SampleTrace` dataclass | `osimflow/observability/monitoring.py` |
 | `GenerationTrace` dataclass | `osimflow/observability/monitoring.py` |
 | `RunTrace` class and `to_dict()` | `osimflow/observability/monitoring.py` |
-| Trace population (step hooks) | `osimflow/campaign.py` |
+| Trace population (step hooks) | `osimflow/campaign/__init__.py` |
 | Chaos engine feeding `chaos_invocations` | `osimflow/chaos.py` |
 | Circuit breakers feeding `circuit_breaker_states` | `osimflow/circuit_breaker.py` |
 | `Alert` payloads feeding `alerts_fired` | `osimflow/alerting.py` |

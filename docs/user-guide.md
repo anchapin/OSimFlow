@@ -1583,7 +1583,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 
 #### `--max-sample-retries`: which DAG steps honor it
 
-`--max-sample-retries` (default `3`, `0` disables retry) controls **orchestrator-side** retry on the per-sample fan-out submits that execute the heavy work of a campaign. As of the post-#1394 fan-out fix, `osimflow/campaign.py` forwards `max_retries=self.cfg.max_sample_retries` at **eight submission sites** spanning **three DAG steps**:
+`--max-sample-retries` (default `3`, `0` disables retry) controls **orchestrator-side** retry on the per-sample fan-out submits that execute the heavy work of a campaign. As of the post-#1394 fan-out fix, `osimflow/campaign/__init__.py` forwards `max_retries=self.cfg.max_sample_retries` at **eight submission sites** spanning **three DAG steps**:
 
 | DAG step | What gets retried | Why it can fail transiently |
 |---|---|---|

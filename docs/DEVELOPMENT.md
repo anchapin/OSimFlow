@@ -62,7 +62,7 @@ OSimFlow uses a three-layer architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Orchestrator (osimflow/campaign.py + _campaign_*.py)           │
+│  Orchestrator (osimflow/campaign/__init__.py + _campaign_*.py)           │
 │                                                                 │
 │  Campaign.run() drives the 7-step DAG:                          │
 │                                                                 │
@@ -157,23 +157,23 @@ OSimFlow/
 ├── osimflow/                    # The main Python package
 │   ├── __init__.py              # Public API surface (__all__)
 │   ├── __main__.py              # CLI entry point (osimflow run ...)
-│   ├── campaign.py              # Campaign orchestrator — the 7-step DAG
+│   ├── campaign/__init__.py           # Campaign orchestrator — the 7-step DAG
 │   │
-│   ├── _campaign_lifecycle.py   # CampaignLifecycle + CancelSignal protocol: cancel/pause/resume + signal handlers
-│   ├── _campaign_fanout.py      # Fan-out wait loop: submit_and_await_all + failure marking + await deadline
-│   ├── _campaign_analysis.py    # CampaignAnalysisMixin: Sobol + UQ analysis steps
-│   ├── _campaign_types.py       # SampleSpec / VariableSpec TypedDicts (re-exported from campaign)
-│   ├── _campaign_quota.py       # CampaignQuotaGuard: quota fail-fast + fan-out bounding
-│   ├── _campaign_sharding.py    # CampaignSharding: shard selection + shard labels
-│   ├── _campaign_chaos.py       # Chaos-engine wiring + schedule-aware injection hook
-│   ├── _campaign_code_hashes.py # Cache-key code hashing (AST import closure)
-│   ├── _campaign_artifacts.py   # campaign_meta / provenance / manifest writers + archiving
-│   ├── _campaign_epw.py         # variables.yml loading + EPW resolution/validation
-│   ├── _campaign_hooks.py       # init/finalize shell hooks + completion webhook
-│   ├── _campaign_sample_trace.py # Per-sample SampleTrace + checkpointing/abort
-│   ├── _campaign_baseline.py    # Baseline KPI comparison
-│   ├── _campaign_observability.py # ObservabilityManager: backend lifecycle
-│   ├── _campaign_cost_tracker.py  # Cost-tracking wiring
+│   ├── campaign/lifecycle.py   # CampaignLifecycle + CancelSignal protocol: cancel/pause/resume + signal handlers
+│   ├── campaign/fanout.py      # Fan-out wait loop: submit_and_await_all + failure marking + await deadline
+│   ├── campaign/analysis.py    # CampaignAnalysisMixin: Sobol + UQ analysis steps
+│   ├── campaign/types.py       # SampleSpec / VariableSpec TypedDicts (re-exported from campaign)
+│   ├── campaign/quota.py       # CampaignQuotaGuard: quota fail-fast + fan-out bounding
+│   ├── campaign/sharding.py    # CampaignSharding: shard selection + shard labels
+│   ├── campaign/chaos.py       # Chaos-engine wiring + schedule-aware injection hook
+│   ├── campaign/code_hashes.py # Cache-key code hashing (AST import closure)
+│   ├── campaign/artifacts.py   # campaign_meta / provenance / manifest writers + archiving
+│   ├── campaign/epw.py         # variables.yml loading + EPW resolution/validation
+│   ├── campaign/hooks.py       # init/finalize shell hooks + completion webhook
+│   ├── campaign/sample_trace.py # Per-sample SampleTrace + checkpointing/abort
+│   ├── campaign/baseline.py    # Baseline KPI comparison
+│   ├── campaign/observability.py # ObservabilityManager: backend lifecycle
+│   ├── campaign/cost_tracker.py  # Cost-tracking wiring
 │   │
 │   ├── work.py                  # Per-step work functions + BYOS contract
 │   ├── byos.py                  # BYOS script loader
@@ -693,7 +693,7 @@ class TestMyExecutor:
 
 | File | Env var | When | Tracking issue |
 |---|---|---|---|
-| `osimflow/_campaign_helpers.py` | `OSIMFLOW_DOCKER_SWARM_DRY_RUN` | `--dry-run` | #976 |
+| `osimflow/campaign/helpers.py` | `OSIMFLOW_DOCKER_SWARM_DRY_RUN` | `--dry-run` | #976 |
 
 If you add new `os.environ[...] = ...` assignments in production code,
 document them in this table and ensure dependent tests use
@@ -1195,33 +1195,33 @@ end through the `Campaign` orchestrator.
 ## 8. Adding a New DAG Step
 
 Each step is a method on the `Campaign` class in
-`osimflow/campaign.py`. The `Campaign` remains the DAG driver, but
+`osimflow/campaign/__init__.py`. The `Campaign` remains the DAG driver, but
 since issue #1462 the cross-cutting concerns are extracted into
 `_campaign_*.py` collaborators — before touching `Campaign`, check
 whether your change belongs in one of them:
 
 - Lifecycle (cancel/pause/resume, SIGINT/SIGTERM handling) →
-  `osimflow/_campaign_lifecycle.py` (`CampaignLifecycle`; the
+  `osimflow/campaign/lifecycle.py` (`CampaignLifecycle`; the
   `CancelSignal` protocol — `request_cancel` / `request_pause` /
   `request_resume` — is the explicit surface Campaign satisfies,
   issue #1542)
 - Fan-out wait loop (concurrent await, per-sample failure marking,
   await deadline, worker auto-recovery resubmit) →
-  `osimflow/_campaign_fanout.py` (`submit_and_await_all` /
+  `osimflow/campaign/fanout.py` (`submit_and_await_all` /
   `mark_sample_failed` / `compute_await_deadline` + `FanoutDeps`,
   issue #1542; Campaign keeps thin call-time delegating methods so
   `patch.object(campaign, ...)` seams keep working)
 - Analysis steps (Sobol sensitivity / UQ indices) →
-  `osimflow/_campaign_analysis.py` (`CampaignAnalysisMixin`,
+  `osimflow/campaign/analysis.py` (`CampaignAnalysisMixin`,
   issue #1542)
 - Quota enforcement (start fail-fast, mid-campaign hard limits,
   `max_concurrent_samples` fan-out bounding) →
-  `osimflow/_campaign_quota.py` (`CampaignQuotaGuard`)
+  `osimflow/campaign/quota.py` (`CampaignQuotaGuard`)
 - Sharding (shard partition/range selection, shard labels) →
-  `osimflow/_campaign_sharding.py` (`CampaignSharding`)
+  `osimflow/campaign/sharding.py` (`CampaignSharding`)
 - Per-sample trace assembly, trace-ID minting, incremental
   checkpointing, consecutive-failure abort →
-  `osimflow/_campaign_sample_trace.py`
+  `osimflow/campaign/sample_trace.py`
   (`CampaignSampleTraceRecorder`)
 
 Here is the step-by-step guide.
@@ -1305,7 +1305,7 @@ def run(self) -> dict[str, object]:
 ```
 
 Cross-step file dependencies are declared in `_STEP_DEPENDENCIES`
-near the top of `osimflow/campaign.py`; add your step's inputs there
+near the top of `osimflow/campaign/__init__.py`; add your step's inputs there
 so `_verify_step_inputs` fails fast when an upstream artifact is
 missing. Do not bypass that verification.
 
@@ -1334,7 +1334,7 @@ self.trace.step_item_done("MY_NEW_STEP", status="ok")
 If the step is per-sample, update `self._sample_state[sid]` with the
 exit code so `_finalize_samples()` can compute the sample's overall
 status. The per-sample `SampleTrace` assembly and incremental
-checkpointing live in `osimflow/_campaign_sample_trace.py`
+checkpointing live in `osimflow/campaign/sample_trace.py`
 (`CampaignSampleTraceRecorder`).
 
 ### Step 6: Update AGENTS.md and docs
@@ -1418,7 +1418,7 @@ return CampaignConfig(
 )
 ```
 
-3. In `osimflow/campaign.py`, read `self.cfg.my_new_flag` wherever
+3. In `osimflow/campaign/__init__.py`, read `self.cfg.my_new_flag` wherever
    needed.
 
 ### Both kinds: Update AGENTS.md
@@ -1539,7 +1539,7 @@ semantics. Re-running a campaign with the same inputs is nearly free.
 
 ### Cache key construction
 
-Each `step_*` method in `osimflow/campaign.py` constructs a `CacheKey`:
+Each `step_*` method in `osimflow/campaign/__init__.py` constructs a `CacheKey`:
 
 ```python
 key = CacheKey(
@@ -1568,7 +1568,7 @@ key = CacheKey(
 ### Code hashing
 
 The Campaign computes code hashes at construction time
-(`osimflow/campaign.py:_compute_code_hashes`). The ``bin`` hash
+(`osimflow/campaign/__init__.py:_compute_code_hashes`). The ``bin`` hash
 covers the union of ``bin/*.py`` and ``osimflow/_work_scripts/*.py``
 (dev checkout), plus ``osimflow/work.py`` and
 ``osimflow/apply_params.py`` (the per-sample work layer — issue #1022).
@@ -1577,7 +1577,7 @@ The ``work`` hash covers only ``osimflow/work.py`` and is used by
 (``cfg.custom_apply_script`` / ``cfg.custom_kpi_extractor``) are mixed
 into the per-sample key via ``_combine_code_hash`` (issue #1011).
 The resolved algorithm's implementation files are digest-hashed
-(``_algorithm_code_digest`` in ``osimflow/_campaign_code_hashes.py``)
+(``_algorithm_code_digest`` in ``osimflow/campaign/code_hashes.py``)
 and mixed into the ``GENERATE_*_SAMPLES`` step's ``code_sha256`` via
 the same ``_combine_code_hash`` convention, so a same-named
 third-party algorithm plugin upgrade invalidates cached samples
@@ -1586,7 +1586,7 @@ algorithms cap at ``osimflow/algorithms/``).
 
 ```python
 def _compute_code_hashes(self) -> dict[str, str]:
-    # (simplified — see osimflow/campaign.py for the full implementation)
+    # (simplified — see osimflow/campaign/__init__.py for the full implementation)
     bin_files = sorted(set(bin_dir.glob("*.py") + work_dir.glob("*.py")))
     work_file = Path(inspect.getfile(work))
     apply_params_file = Path(inspect.getfile(apply_params))

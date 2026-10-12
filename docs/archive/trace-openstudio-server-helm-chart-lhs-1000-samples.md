@@ -769,7 +769,7 @@ Python driver:
 
 | Traditional openstudio-server | OSimFlow replacement |
 |------------------------------|----------------------|
-| Rails API (`nrel/openstudio-server`) | `osimflow/campaign.py` (Python) |
+| Rails API (`nrel/openstudio-server`) | `osimflow/campaign/__init__.py` (Python) |
 | MongoDB | `osimflow/cache.py` (SQLite) + pluggable `ResultStorage` |
 | Redis queue | `osimflow/distributed_cache.py` (Redis pub/sub) |
 | Docker Swarm worker (`start-workers`) | `osimflow/executors/` (submitit/Slurm/AWS Batch/etc.) |

@@ -505,7 +505,7 @@ aws logs get-log-events \
 ```
 
 Common causes:
-- **Exit code 137**: OOM kill. Increase `memory_mb` in the campaign (edit `osimflow/campaign.py` or use BYOS).
+- **Exit code 137**: OOM kill. Increase `memory_mb` in the campaign (edit `osimflow/campaign/__init__.py` or use BYOS).
 - **Exit code 1**: OpenStudio error. Check `eplusout.err` in the task output.
 - **Exit code 127**: Missing `openstudio` binary. The container image may not match the expected version.
 

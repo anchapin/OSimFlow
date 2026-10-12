@@ -364,7 +364,7 @@ The defaults (4 vCPUs, 8 GB memory) are conservative. To reduce costs:
 2. **Reduce `cpus` if OpenStudio doesn't use them.** EnergyPlus parallelism is model-dependent; some models top out at 2 threads. Reducing from 4 to 2 vCPUs halves the vCPU-hour cost.
 3. **Reduce `memory_mb` if possible.** Models under 500 zones typically use < 4 GB. Large models (>2000 zones) may need the full 8 GB.
 
-Note: Per-step resource overrides are set in `osimflow/campaign.py`. To customize, modify the `cpus`, `memory_mb`, and `time_min` arguments in the `executor.submit()` calls, or use the BYOS interface to provide your own work functions.
+Note: Per-step resource overrides are set in `osimflow/campaign/__init__.py`. To customize, modify the `cpus`, `memory_mb`, and `time_min` arguments in the `executor.submit()` calls, or use the BYOS interface to provide your own work functions.
 
 ## Cost Estimation Examples
 
