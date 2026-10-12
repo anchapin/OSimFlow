@@ -313,6 +313,16 @@ do, **the CI-resolved set is the merge gate**. If CI fails locally
 green code, re-run `make install` to re-resolve with pip, or compare
 `.venv/bin/pip freeze` against the CI `uv pip freeze` output.
 
+To reproduce CI's exact resolution locally, run `make install-locked`
+(`uv sync --locked` with the same extras into the same `.venv`; requires
+[uv](https://docs.astral.sh/uv/)). Run `make doctor` (`tools/doctor.py`)
+at any time to check the venv, installed extras and OpenStudio CLI and
+to print the next step (issue #1895).
+
+`docs/openapi.json` and `osimflow/_byos_runner_generated.py` are
+generated; `.gitattributes` marks them `linguist-generated` so GitHub
+collapses them in PR diffs. Regenerate via `make contract`.
+
 The uv version in CI is pinned through setup-uv's `version:` input and
 must stay **identical in every workflow that uses setup-uv**
 (`ci.yml`, `bench.yml`, `release.yml`, `release-installers.yml`,
