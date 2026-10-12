@@ -164,10 +164,10 @@ see commit body) are::
     osimflow/measure_resolver.py               82.26%  (186 stmts)
     osimflow/measure_versioning.py             90.21%  (143 stmts)
     osimflow/measures.py                       53.09%  (258 stmts)
-    osimflow/mlflow_hook.py                   100.00%   (67 stmts)
-    osimflow/monitoring.py                     87.39%  (364 stmts)
+    osimflow/observability/mlflow_hook.py          100.00%   (67 stmts)
+    osimflow/observability/monitoring.py        87.39%  (364 stmts)
     osimflow/notifications/notify.py          100.00%  (143 stmts)
-    osimflow/observability.py                  97.17%  (246 stmts)
+    osimflow/observability/__init__.py         97.17%  (246 stmts)
     osimflow/offline_bundle.py                 94.20%   (69 stmts; issue #1640)
     osimflow/pareto.py                         97.09%  (172 stmts)
     osimflow/registry.py                       98.20%  (167 stmts)
@@ -329,11 +329,11 @@ FLOORS: dict[str, float] = {
     "osimflow/measure_resolver.py": 81.26,  # measured 82.26%
     "osimflow/measure_versioning.py": 89.21,  # measured 90.21%
     "osimflow/measures.py": 52.09,  # measured 53.09%
-    "osimflow/mlflow_hook.py": 99.00,  # measured 100.00%
-    "osimflow/monitoring.py": 86.39,  # measured 87.39%
+    "osimflow/observability/mlflow_hook.py": 99.00,  # measured 100.00%
+    "osimflow/observability/monitoring.py": 86.39,  # measured 87.39%
     "osimflow/notifications/notify.py": 99.00,
     "osimflow/notifications/__init__.py": 99.00,  # package docstring only  # measured 100.00%
-    "osimflow/observability.py": 96.17,  # measured 97.17%
+    "osimflow/observability/__init__.py": 96.17,  # measured 97.17%
     "osimflow/server_csv.py": 79.0,  # measured 80% (issue #1872)
     "osimflow/osw_results.py": 88.0,  # measured 89% (issue #1871)
     "osimflow/s3_campaign.py": 90.0,
@@ -411,6 +411,7 @@ GLOBS = (
     "osimflow/api/*.py",
     "osimflow/notifications/*.py",
     "osimflow/storage/*.py",
+    "osimflow/observability/*.py",
 )
 
 # Documented omission list (issue #1694). Files that match the globs
@@ -438,6 +439,9 @@ OMITTED: frozenset[str] = frozenset(
         "osimflow/_storage_base.py",
         "osimflow/_storage_endpoint.py",
         "osimflow/_storage_retry.py",
+        # Issue #1891 sys.modules aliases of osimflow/observability/*.
+        "osimflow/monitoring.py",
+        "osimflow/mlflow_hook.py",
     }
 )
 

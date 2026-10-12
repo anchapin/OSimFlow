@@ -111,7 +111,7 @@ Legend:
 
 ## Observability real sinks (separate row group)
 
-The `osimflow/observability.py` pluggable backends
+The `osimflow/observability/__init__.py` pluggable backends
 (`CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`)
 each have a real-sink round-trip test gated on the same umbrella
 env var plus per-sink readiness vars. The CI workflow provisions

@@ -43,7 +43,7 @@ from ._campaign_observability import ObservabilityManager
 from ._campaign_sample_trace import CampaignAbortError
 from .config import CampaignConfig
 from .executors import Handle, get_step_resources
-from .monitoring import RunTrace, WorkerRecoveryManager
+from .observability.monitoring import RunTrace, WorkerRecoveryManager
 
 log = logging.getLogger("osimflow.campaign")
 

@@ -44,7 +44,7 @@ from ._campaign_sample_trace import CampaignSampleTraceRecorder
 from ._campaign_types import SampleSpec
 from .algorithms import BaseAlgorithm
 from .config import CampaignConfig
-from .monitoring import GenerationTrace, RunTrace
+from .observability.monitoring import GenerationTrace, RunTrace
 from .pareto import ParetoFront, ParetoSolution
 
 log = logging.getLogger("osimflow.campaign")

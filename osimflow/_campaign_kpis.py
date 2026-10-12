@@ -45,7 +45,7 @@ from .cache import CacheKey, sha256_of_dict
 from .config import CampaignConfig
 from .executors import BaseExecutor, Handle
 from .executors.transport import ResultTransportConfig
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 from .storage import ResultStorageUploader
 from .taskqueue import ConsumerQueue
 from .work import publish_kpi_results

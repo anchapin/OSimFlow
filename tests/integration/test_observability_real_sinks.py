@@ -5,7 +5,7 @@ per-backend sink endpoints are configured.  The whole module is skipped
 by default so it never runs in PR CI and does not affect the coverage
 gate (the tests report as ``s``/skipped, not errors).
 
-The three pluggable backends in ``osimflow/observability.py``
+The three pluggable backends in ``osimflow/observability/__init__.py``
 (:class:`~osimflow.observability.CloudWatchBackend`,
 :class:`~osimflow.observability.PrometheusBackend`,
 :class:`~osimflow.observability.OpenTelemetryBackend`) are otherwise

@@ -19,8 +19,8 @@ from .cost_tracking import (
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
 )
 from .errors import OSimFlowRuntimeError
-from .monitoring import RunTrace, SampleTrace
 from .observability import new_trace_id
+from .observability.monitoring import RunTrace, SampleTrace
 
 log = logging.getLogger("osimflow.campaign")
 

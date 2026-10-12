@@ -1,0 +1,687 @@
+"""BYO monitoring for OSimFlow campaigns.
+
+Three always-on pieces (per `.agents/results/monitoring-decision.md`):
+
+  1. `RunTrace` collects per-step + per-sample metrics and writes a single
+     `run.json` to `${outdir}/run.json` at the end of the campaign.
+     Schema is documented in `docs/monitoring-schema.md`.
+
+  2. `tqdm` progress bar for terminal users. Soft-dependency: if tqdm
+     is not installed, the progress hook degrades to a logger.info
+     line per step.
+
+  3. Per-sample stdout/stderr log files at
+     `${outdir}/work/sim/<sample_id>/stdout.log` and `stderr.log`.
+     The Campaign writes the per-step `subprocess.run(...)` outputs
+     into these files so the user can `cat` them without re-running.
+
+Optional pieces (deferred to post-MVP):
+  - MLflow integration (~30 LoC) behind a `--mlflow_tracking_uri` flag.
+  - Streamlit dashboard for browsing past `run.json` files (~100 LoC).
+"""
+
+from __future__ import annotations
+
+__all__ = ["RunTrace", "StepTrace"]
+
+import dataclasses
+import json
+import logging
+import os
+import threading
+import time
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
+
+log = logging.getLogger("osimflow.monitoring")
+
+HEARTBEAT_INTERVAL_SEC = 30
+STALE_THRESHOLD_SEC = 60
+
+# Soft dependency: tqdm is preferred but not required.
+try:
+    from tqdm.auto import tqdm
+
+    _HAS_TQDM = True
+except ImportError:  # pragma: no cover
+    tqdm = None
+    _HAS_TQDM = False
+
+
+@dataclasses.dataclass
+class StepTrace:
+    """One row in the run.json `steps` array."""
+
+    step: str
+    cache: str  # "HIT", "MISS", "HIT×N", "MISS×N", "SKIPPED"
+    elapsed_s: float
+    exit_code: int
+
+    def to_dict(self) -> dict[str, object]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
+class SampleTrace:
+    """One row in the run.json `per_sample` array."""
+
+    sample_id: str
+    status: str  # "ok", "failed", "cached"
+    elapsed_s: float
+    apply_exit_code: int = 0
+    sim_exit_code: int = 0
+    extract_exit_code: int = 0
+    eplusout_sql: str | None = None  # path if produced
+    error_summary: str | None = None
+    stdout_log: str | None = None
+    stderr_log: str | None = None
+    quality_valid: bool | None = None
+    quality_warnings: int | None = None
+    quality_failures: int | None = None
+    generation: int | None = None  # generation index for iterative algorithms (issue #106)
+    # Per-data-point worker tracking (issue #105).
+    worker_id: str | None = None  # Batch job ID / Slurm job ID / Nomad alloc ID / "local"
+    worker_ip: str | None = None  # IP address or hostname of the worker
+    worker_region: str | None = None  # AWS region / Nomad datacenter
+    # Per-sample cost tracking (issue #126).
+    cost_usd: float | None = None  # estimated cost for this sample
+    billed_duration_seconds: float | None = None  # wall time billed
+    # runner.registerValue outputs captured from OpenStudio CLI (issue #251).
+    register_values: dict[str, object] | None = None
+    # Per-sample trace ID for distributed observability correlation
+    # (issue #436). Minted via ``osimflow.observability.new_trace_id``
+    # and forwarded to every ObservabilityBackend call for this sample
+    # so CloudWatch / Prometheus / OTel metrics can be joined to a
+    # single sample's execution.
+    trace_id: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
+
+
+@dataclasses.dataclass
+class GenerationTrace:
+    """Per-generation summary for iterative algorithms (issue #270).
+
+    Written to ``run.json`` under the ``generations`` key so users can
+    track optimisation progress across generations.
+    """
+
+    generation: int
+    n_samples: int
+    n_succeeded: int
+    n_failed: int
+    converged: bool = False
+    best_objective: float | None = None
+    elapsed_s: float = 0.0
+
+    def to_dict(self) -> dict[str, object]:
+        return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
+
+
+class RunTrace:
+    """The per-campaign monitoring record. Written to run.json at end."""
+
+    SCHEMA_VERSION = 1
+
+    def __init__(self, campaign_id: str, config_summary: dict[str, object]):
+        self.campaign_id = campaign_id
+        self.started_at = time.time()
+        self.finished_at: float | None = None
+        self.config_summary = config_summary
+        self.steps: list[StepTrace] = []
+        self.per_sample: list[SampleTrace] = []
+        # Per-generation summary for iterative algorithms (issue #270).
+        self.generations: list[GenerationTrace] = []
+        # Baseline comparison data (issue #64). Populated after
+        # EXTRACT_KPIS when cfg.baseline is defined. Contains keys
+        # like baseline_eui, min_improvement_pct, max_improvement_pct.
+        self.baseline_comparison: dict[str, object] | None = None
+        # Pre/post campaign hook timing (issue #108).
+        self.init_script_duration_s: float | None = None
+        self.finalize_script_duration_s: float | None = None
+        # Per-campaign cost tracking (issue #126).
+        self.total_cost_usd: float = 0.0
+        self.spot_savings_usd: float = 0.0
+        # Campaign-level cost summary (issue #447). Set by CostTracker.finalize()
+        # when enable_cost_tracking is True.
+        self.cost_summary: dict[str, object] | None = None
+        # Cache hit rate (issue #426). Set by Campaign._finalize_samples() after
+        # AGGREGATE_RESULTS so the value is available in run.json.
+        self.cache_hit_rate: float | None = None
+        # Chaos fault invocations (issue #1013). One row per call to
+        # ``Campaign._maybe_inject_chaos`` that actually exercised a
+        # fault injector — i.e. the engine was enabled, the schedule
+        # matched, and at least one registered injector ran. Stored as
+        # a list of dicts so ``run.json`` shows the recovery evidence
+        # the integration test asserts on.
+        self.chaos_invocations: list[dict[str, object]] = []
+        # Chaos schedule (issue #1191). Set once at campaign start from
+        # ``cfg.chaos.schedule`` so run.json records which schedule was active.
+        self.chaos_schedule: str | None = None
+        # Circuit-breaker final states (issue #1191). Populated from
+        # ``CircuitBreaker`` instances at campaign end; keys are the
+        # breaker names (e.g. "cache:campaign_id", "docs:namespace").
+        self.circuit_breaker_states: dict[str, str] | None = None
+        # Alerts fired (issue #1191). One dict per alert dispatched with
+        # event_type, severity, and delivery_status keys.
+        self.alerts_fired: list[dict[str, object]] | None = None
+        # Failure-accounting errors (issue #1674). One dict per
+        # exception swallowed by the fan-out drain loop because the
+        # failure-recording path itself raised (job-queue
+        # ``mark_failed`` filesystem error, non-abort
+        # ``checkpoint_sample`` raise, observability
+        # ``record_sample_status`` raise). Such a sample appears in
+        # neither the succeeded nor failed accounting, so run.json
+        # must surface the hole explicitly instead of silently
+        # dropping the sample. Appended from the fan-out drain loop
+        # (campaign thread) — plain ``list.append`` is atomic and the
+        # drain is sequential.
+        self.accounting_errors: list[dict[str, object]] = []
+        self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
+        # Timestamp when the campaign was paused (None if not paused).
+        self.paused_at: float | None = None
+        # Campaign-level error summary set when an unhandled exception causes failure.
+        self.error_summary: str | None = None
+        # tqdm handles; one per fan-out step that wants a progress bar.
+        self._bars: dict[str, Any] = {}
+        # Serializes run.json disk writes (issues #1627 / #1634).
+        # ``update_sample`` is an unlocked read-modify-write called
+        # concurrently from fan-out checkpoint threads, and ``write``
+        # races those checkpoints at campaign start / cancel / end.
+        # One lock guards both so a last-writer-wins rename can never
+        # drop checkpointed rows, and so two writers never share a
+        # tmp path mid-rename.
+        self._io_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Step hooks (called by the Campaign)
+    # ------------------------------------------------------------------
+    def step_started(self, step: str, total: int | None = None) -> None:
+        """Optionally show a tqdm bar for the step. Total = expected item count."""
+        if _HAS_TQDM and total and total > 1:
+            self._bars[step] = tqdm(total=total, desc=step, unit="sample")
+        else:
+            log.info("step %s started", step)
+
+    def step_item_done(self, step: str, status: str = "ok") -> None:
+        bar = self._bars.get(step)
+        if bar is not None:
+            bar.update(1)
+            if status != "ok":
+                bar.set_postfix_str(f"last={status}")
+        # No-op for non-bar case (per-item log spam avoided).
+
+    def step_finished(self, step: str, cache: str, elapsed_s: float, exit_code: int) -> None:
+        bar = self._bars.pop(step, None)
+        if bar is not None:
+            bar.close()
+        self.steps.append(
+            StepTrace(
+                step=step,
+                cache=cache,
+                elapsed_s=elapsed_s,
+                exit_code=exit_code,
+            )
+        )
+        log.info("step %s done cache=%s elapsed=%.2fs exit=%d", step, cache, elapsed_s, exit_code)
+
+    def sample_done(self, trace: SampleTrace) -> None:
+        self.per_sample.append(trace)
+
+    def generation_done(self, trace: GenerationTrace) -> None:
+        """Record a completed generation (issue #270)."""
+        self.generations.append(trace)
+
+    def record_alert(self, alert: object) -> None:
+        """Record an alert dispatched by AlertManager (issue #1308).
+
+        ``alert`` is an :class:`osimflow.alerting.Alert` dataclass
+        serialised to a plain dict so the trace stays JSON-friendly.
+        """
+        if self.alerts_fired is None:
+            self.alerts_fired = []
+        d: dict[str, object] = {}
+        for key in ("rule_name", "event_type", "severity", "message", "delivery_status"):
+            v = getattr(alert, key, None)
+            if v is not None:
+                d[key] = v
+        d["timestamp"] = getattr(alert, "timestamp", None)
+        self.alerts_fired.append(d)
+
+    def record_chaos_invocation(
+        self,
+        step: str,
+        when: str,
+        target_id: str,
+        results: Sequence[object],
+    ) -> None:
+        """Record a chaos fault invocation (issue #1013).
+
+        ``results`` is a sequence of :class:`osimflow.chaos.ChaosResult`
+        instances; each is serialised to a plain dict so the trace
+        stays JSON-friendly. ``when`` is one of ``"before_step"``,
+        ``"after_step"``, ``"per_sample"`` and matches the value
+        the Campaign set in ``cfg.chaos.schedule``.
+        """
+        serialised: list[dict[str, object]] = []
+        for r in results:
+            fault_type = getattr(r, "fault_type", None)
+            fault_value = getattr(fault_type, "value", None)
+            serialised.append(
+                {
+                    "fault_type": fault_value,
+                    "target_id": getattr(r, "target_id", target_id),
+                    "injected": bool(getattr(r, "injected", False)),
+                    "duration_s": float(getattr(r, "duration_s", 0.0) or 0.0),
+                    "error": getattr(r, "error", None),
+                }
+            )
+        self.chaos_invocations.append(
+            {
+                "step": step,
+                "when": when,
+                "target_id": target_id,
+                "results": serialised,
+            }
+        )
+
+    def record_accounting_error(self, step: str, sample_id: str, error: str) -> None:
+        """Record a failure-accounting error swallowed by the fan-out drain (issue #1674).
+
+        ``error`` is the stringified exception raised by the
+        failure-recording path itself (not the original per-sample
+        error, which was already routed through
+        ``mark_sample_failed``). Stored as a plain dict so the trace
+        stays JSON-friendly and run.json shows which samples went
+        missing from the succeeded/failed accounting.
+        """
+        self.accounting_errors.append(
+            {
+                "step": step,
+                "sample_id": sample_id,
+                "error": error[:500],
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+    def finalize(self) -> None:
+        self.finished_at = time.time()
+
+    def to_dict(self) -> dict[str, object]:
+        n_succeeded = sum(1 for s in self.per_sample if s.status == "ok")
+        n_failed = sum(1 for s in self.per_sample if s.status == "failed")
+        n_quality_failures = sum(1 for s in self.per_sample if s.quality_valid is False)
+        n_quality_warnings = sum(
+            1
+            for s in self.per_sample
+            if s.quality_warnings is not None
+            and s.quality_warnings > 0
+            and s.quality_valid is not False
+        )
+        d: dict[str, object] = {
+            "schema_version": self.SCHEMA_VERSION,
+            "campaign_id": self.campaign_id,
+            "status": self.status,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "elapsed_s": (self.finished_at or time.time()) - self.started_at,
+            # NOTE: This is the only status key in this dict - do not duplicate (issue #6241b5d)
+            "config": self.config_summary,
+            "summary": {
+                "n_samples": len(self.per_sample),
+                "n_succeeded": n_succeeded,
+                "n_failed": n_failed,
+            },
+            "quality_summary": {
+                "n_quality_failures": n_quality_failures,
+                "n_quality_warnings": n_quality_warnings,
+                "n_quality_ok": n_succeeded - n_quality_failures - n_quality_warnings,
+            },
+            "steps": [s.to_dict() for s in self.steps],
+            "per_sample": [s.to_dict() for s in self.per_sample],
+        }
+        # Per-generation summary (issue #270). Only present when the
+        # campaign ran multiple generations (iterative algorithms).
+        if self.generations:
+            d["generations"] = [g.to_dict() for g in self.generations]
+        if self.baseline_comparison is not None:
+            d["baseline_comparison"] = self.baseline_comparison
+        if self.init_script_duration_s is not None:
+            d["init_script_duration_s"] = self.init_script_duration_s
+        if self.finalize_script_duration_s is not None:
+            d["finalize_script_duration_s"] = self.finalize_script_duration_s
+        # Cost summary (issue #126). Always present; defaults to 0.0.
+        d["total_cost_usd"] = self.total_cost_usd
+        d["spot_savings_usd"] = self.spot_savings_usd
+        # Cost summary (issue #447). Present when enable_cost_tracking is True.
+        if self.cost_summary is not None:
+            d["cost_summary"] = self.cost_summary
+        # Cache hit rate (issue #426).
+        if self.cache_hit_rate is not None:
+            d["cache_hit_rate"] = self.cache_hit_rate
+        # Chaos invocations (issue #1013). Always present as a list
+        # so downstream tooling can rely on the key — the value is
+        # ``[]`` when chaos was never enabled or never fired.
+        d["chaos_invocations"] = list(self.chaos_invocations)
+        # Failure-accounting errors (issue #1674). Always present as
+        # a list so downstream tooling can rely on the key — the
+        # value is ``[]`` when no accounting path raised; a non-empty
+        # list means those samples are missing from both the
+        # succeeded and failed accounting.
+        d["accounting_errors"] = list(self.accounting_errors)
+        # Chaos schedule (issue #1191). Present when chaos is configured.
+        if self.chaos_schedule is not None:
+            d["chaos_schedule"] = self.chaos_schedule
+        # Circuit-breaker states (issue #1191). Present when circuit breakers exist.
+        if self.circuit_breaker_states is not None:
+            d["circuit_breaker_states"] = self.circuit_breaker_states
+        # Alerts fired (issue #1191). Present when alerts were dispatched.
+        if self.alerts_fired is not None:
+            d["alerts_fired"] = list(self.alerts_fired)
+        # Paused timestamp (issue #553). Present when the campaign has been paused.
+        if self.paused_at is not None:
+            d["paused_at"] = self.paused_at
+        # Campaign-level error summary (issue #737). Present when the campaign failed.
+        if self.error_summary is not None:
+            d["error_summary"] = self.error_summary
+        return d
+
+    def _atomic_write(self, path: Path, payload: dict[str, object]) -> None:
+        """Write *payload* to *path* via tmp + rename.
+
+        The tmp name embeds the pid and thread id (issues #1627 /
+        #1634) so concurrent writers — even ones not holding
+        ``_io_lock`` — never write through the same tmp path while
+        another thread is mid-rename.
+        """
+        tmp = path.with_suffix(f".{os.getpid()}-{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(payload, indent=2, default=str))
+        tmp.rename(path)
+
+    def update_sample(self, trace: SampleTrace) -> None:
+        """Update a single sample entry in run.json (incremental checkpoint).
+
+        Reads the existing run.json, merges *trace* into the ``per_sample``
+        list (updates existing entry or appends), and writes atomically.
+        Used by the Campaign to checkpoint per-sample progress after each
+        step completes so SSE clients see live updates without waiting for
+        campaign end.
+
+        Concurrency (issues #1627 / #1634): the whole read-merge-write
+        sequence runs under ``_io_lock``, shared with ``write()`` —
+        fan-out checkpoint threads cannot lose each other's rows or
+        collide on a shared tmp file, and the campaign-level
+        ``write()`` cannot interleave with a checkpoint.
+
+        Error handling: a corrupted (unparseable) run.json logs a
+        WARNING and raises ``json.JSONDecodeError``; I/O errors
+        propagate unchanged. Callers that count checkpoint failures
+        (``CampaignSampleTraceRecorder.checkpoint_sample``, issue #739)
+        depend on these exceptions surfacing — a silent return here
+        would leave the 3-strike counter unreachable (issue #1634).
+
+        If run.json does not exist yet (campaign just started but the file
+        was not yet written), creates a minimal run.json with the sample
+        entry so monitoring tools always have something to read.
+        """
+        path = Path(self._checkpoint_path) if hasattr(self, "_checkpoint_path") else None
+        if path is None:
+            return
+
+        with self._io_lock:
+            if not path.exists():
+                data: dict[str, object] = {
+                    "schema_version": self.SCHEMA_VERSION,
+                    "campaign_id": self.campaign_id,
+                    "started_at": self.started_at,
+                    "finished_at": None,
+                    "elapsed_s": time.time() - self.started_at,
+                    "config": self.config_summary,
+                    "summary": {
+                        "n_samples": 1,
+                        "n_succeeded": 1 if trace.status == "ok" else 0,
+                        "n_failed": 1 if trace.status == "failed" else 0,
+                    },
+                    "quality_summary": {
+                        "n_quality_failures": 0,
+                        "n_quality_warnings": 0,
+                        "n_quality_ok": 1 if trace.status == "ok" else 0,
+                    },
+                    "steps": [],
+                    "per_sample": [trace.to_dict()],
+                    "total_cost_usd": 0.0,
+                    "spot_savings_usd": 0.0,
+                }
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._atomic_write(path, data)
+                log.info("created incremental run.json at %s", path)
+                return
+
+            try:
+                data = cast(dict[str, Any], json.loads(path.read_text()))
+            except json.JSONDecodeError as exc:
+                log.warning(
+                    "run.json at %s is corrupted and cannot be parsed; failing "
+                    "this checkpoint so the consecutive-failure counter can "
+                    "react (issue #1634): %s",
+                    path,
+                    exc,
+                )
+                raise
+
+            samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
+            replaced = False
+            for i, s in enumerate(samples):
+                if s.get("sample_id") == trace.sample_id:
+                    samples[i] = trace.to_dict()
+                    replaced = True
+                    break
+            if not replaced:
+                samples.append(trace.to_dict())
+            data["per_sample"] = samples
+
+            n_succeeded = sum(1 for s in samples if s.get("status") == "ok")
+            n_failed = sum(1 for s in samples if s.get("status") == "failed")
+            if "summary" not in data:
+                data["summary"] = {}
+            data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
+            data["summary"]["n_failed"] = n_failed  # type: ignore[index]
+            data["summary"]["n_samples"] = len(samples)  # type: ignore[index]
+
+            self._atomic_write(path, data)
+
+    def write(self, path: Path) -> None:
+        """Write the run.json trace to disk. Idempotent.
+
+        Atomic (tmp + rename, issue #1634) and serialized against
+        concurrent ``update_sample`` checkpoints via ``_io_lock``
+        (issue #1627) so a campaign-start / cancel / final write can
+        never interleave with a fan-out checkpoint's
+        read-modify-write.
+        """
+        with self._io_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Record path so update_sample() can do incremental writes.
+            self._checkpoint_path = str(path)
+            self._atomic_write(path, self.to_dict())
+        log.info("wrote run trace to %s", path)
+
+
+# ---------------------------------------------------------------------------
+# Per-sample log files
+# ---------------------------------------------------------------------------
+def sample_log_paths(outdir: Path, sample_id: str) -> tuple[Path, Path]:
+    """Return the (stdout.log, stderr.log) paths for a sample's run step.
+
+    The Campaign creates these by passing them to the executor's `submit()`
+    call so the per-step subprocess writes to a known location.
+    """
+    d = outdir / "work" / "sim" / sample_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "stdout.log", d / "stderr.log"
+
+
+# ---------------------------------------------------------------------------
+# Worker heartbeat (issue #341)
+# ---------------------------------------------------------------------------
+
+
+class WorkerHeartbeat:
+    """Writes a heartbeat file every HEARTBEAT_INTERVAL_SEC while a job runs.
+
+    The heartbeat file is written to
+    ``${outdir}/work/sim/<sample_id>/heartbeat.json`` and contains:
+    ``worker_id``, ``sample_id``, ``last_seen`` (ISO timestamp), and
+    ``job_handle`` state. A watchdog can use this to detect stale workers.
+    """
+
+    def __init__(
+        self,
+        outdir: Path,
+        sample_id: str,
+        worker_id: str,
+        job_handle_state: str = "running",
+    ) -> None:
+        self.outdir = outdir
+        self.sample_id = sample_id
+        self.worker_id = worker_id
+        self.job_handle_state = job_handle_state
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._path: Path | None = None
+
+    def _heartbeat_path(self) -> Path:
+        if self._path is None:
+            d = self.outdir / "work" / "sim" / self.sample_id
+            d.mkdir(parents=True, exist_ok=True)
+            self._path = d / "heartbeat.json"
+        return self._path
+
+    def _write(self) -> None:
+        data = {
+            "worker_id": self.worker_id,
+            "sample_id": self.sample_id,
+            "last_seen": datetime.now(UTC).isoformat(),
+            "job_handle": self.job_handle_state,
+        }
+        path = self._heartbeat_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.rename(path)
+
+    def start(self) -> None:
+        """Start the background heartbeat writer thread."""
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name=f"heartbeat-{self.sample_id}"
+        )
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop_event.wait(HEARTBEAT_INTERVAL_SEC):
+            try:
+                self._write()
+            except Exception as exc:
+                log.warning("heartbeat write failed for %s: %s", self.sample_id, exc)
+
+    def stop(self) -> None:
+        """Stop the heartbeat writer and write a final 'stopped' entry."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        self.job_handle_state = "stopped"
+        try:
+            self._write()
+        except Exception as exc:
+            log.warning("final heartbeat write failed for %s: %s", self.sample_id, exc)
+
+    def update_state(self, state: str) -> None:
+        """Update the job_handle state (e.g. 'completed', 'failed')."""
+        self.job_handle_state = state
+        try:
+            self._write()
+        except Exception as exc:
+            log.warning("heartbeat state update failed for %s: %s", self.sample_id, exc)
+
+
+def check_heartbeat(outdir: Path, sample_id: str) -> bool:
+    """Return True if the heartbeat for *sample_id* is stale (> STALE_THRESHOLD_SEC old).
+
+    A stale heartbeat indicates the worker has not updated it in the
+    expected interval, suggesting the job is hung or the worker crashed.
+    """
+    path = outdir / "work" / "sim" / sample_id / "heartbeat.json"
+    if not path.is_file():
+        return True
+    try:
+        data = json.loads(path.read_text())
+        last_seen_str = data.get("last_seen")
+        if not last_seen_str:
+            return True
+        last_seen = datetime.fromisoformat(last_seen_str)
+        age = time.time() - last_seen.timestamp()
+        return age > STALE_THRESHOLD_SEC
+    except (json.JSONDecodeError, OSError, ValueError):
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Worker auto-recovery (issue #443)
+# ---------------------------------------------------------------------------
+
+
+class WorkerRecoveryManager:
+    """Monitors worker heartbeats and tracks recovery attempts for stale workers.
+
+    When a worker becomes stale (heartbeat not updated for STALE_THRESHOLD_SEC),
+    the job is considered crashed/hung and eligible for auto-recovery.
+    This class tracks which samples have been auto-recovered and their
+    recovery attempt counts to avoid infinite recovery loops.
+    """
+
+    def __init__(self, outdir: Path) -> None:
+        self.outdir = outdir
+        # Track recovery attempts per sample: {sample_id: attempt_count}
+        self._recovery_attempts: dict[str, int] = {}
+
+    def is_stale(self, sample_id: str) -> bool:
+        """Return True if the heartbeat for *sample_id* is stale."""
+        return check_heartbeat(self.outdir, sample_id)
+
+    def can_recover(self, sample_id: str, max_retries: int) -> bool:
+        """Return True if *sample_id* can be recovered (hasn't exceeded max retries)."""
+        attempts = self._recovery_attempts.get(sample_id, 0)
+        return attempts < max_retries
+
+    def record_attempt(self, sample_id: str) -> None:
+        """Record a recovery attempt for *sample_id*."""
+        self._recovery_attempts[sample_id] = self._recovery_attempts.get(sample_id, 0) + 1
+
+    def get_attempt_count(self, sample_id: str) -> int:
+        """Return the number of recovery attempts for *sample_id*."""
+        return self._recovery_attempts.get(sample_id, 0)
+
+    def reset(self, sample_id: str) -> None:
+        """Reset recovery state for *sample_id* after successful completion."""
+        self._recovery_attempts.pop(sample_id, None)
+
+    def check_and_recover(self, sample_id: str, max_retries: int) -> tuple[bool, int]:
+        """Check if *sample_id* is stale and can be recovered.
+
+        Returns
+        -------
+        tuple[bool, int]
+            (can_recover, attempt_count) where can_recover is True if the
+            heartbeat is stale and recovery hasn't exceeded max_retries.
+        """
+        if not self.is_stale(sample_id):
+            return False, 0
+        if not self.can_recover(sample_id, max_retries):
+            return False, self.get_attempt_count(sample_id)
+        self.record_attempt(sample_id)
+        return True, self.get_attempt_count(sample_id)

@@ -30,7 +30,7 @@ from typing import Any
 
 from .config import CampaignConfig
 from .errors import OSimFlowRuntimeError
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 
 log = logging.getLogger("osimflow.campaign")
 

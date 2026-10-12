@@ -19,7 +19,7 @@ import yaml
 
 from .config import CampaignConfig
 from .json_utils import safe_json_dumps
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 
 log = logging.getLogger("osimflow.campaign")
 

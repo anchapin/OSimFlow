@@ -26,7 +26,7 @@ from ._campaign_observability import ObservabilityManager
 from ._campaign_types import SampleSpec
 from .algorithms import AlgorithmRegistry, parse_failure_threshold
 from .config import CampaignConfig
-from .monitoring import RunTrace
+from .observability.monitoring import RunTrace
 
 log = logging.getLogger("osimflow.campaign")
 

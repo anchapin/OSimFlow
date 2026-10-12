@@ -441,4 +441,4 @@ Regardless of the backend, monitor:
 - **Disk / bucket usage**: Campaign artifact growth can be large.
 - **Replication lag**: For managed MongoDB Atlas or DocumentDB replicas, monitor `oplog.tail_lag` or `rs.status().replicationLag`.
 
-The existing `osimflow/observability.py` pluggable observability backend can be extended to emit database metrics alongside campaign metrics.
+The existing `osimflow/observability/__init__.py` pluggable observability backend can be extended to emit database metrics alongside campaign metrics.
