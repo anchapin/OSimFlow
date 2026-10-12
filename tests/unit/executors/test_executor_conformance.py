@@ -104,7 +104,7 @@ class TestRunExecutorConformance:
 
     def test_run_executor_conformance_campaign_opt_in(self, tmp_path: Path) -> None:
         """Opt-in stub campaign produces all four artifacts."""
-        example = Path(__file__).resolve().parents[2] / "example_package"
+        example = Path(__file__).resolve().parents[3] / "example_package"
         if not example.is_dir():
             pytest.skip(f"example_package not found at {example}")
         report = run_executor_conformance(

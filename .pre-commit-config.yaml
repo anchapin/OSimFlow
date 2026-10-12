@@ -39,6 +39,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: forbidden-artifact-files
+        name: forbid simulation artifacts (eplusout.*, *.osm, *.osw, ...)
+        entry: .venv/bin/python tools/check_forbidden_files.py
+        language: system
+        pass_filenames: true
+
       - id: mypy-osimflow
         name: mypy --strict (osimflow/)
         entry: .venv/bin/mypy osimflow
