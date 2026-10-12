@@ -190,7 +190,7 @@ def test_real_docker_swarm_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     # --- Hermetic fixtures (same pattern as test_aws_batch_real.py) ---
     example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "variables.yml"
+    example_vars = REPO_ROOT / "examples" / "179d_variables.yml"
 
     workdir = tmp_path / "work"
     workdir.mkdir()

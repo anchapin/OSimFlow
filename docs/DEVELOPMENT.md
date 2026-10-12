@@ -1930,7 +1930,7 @@ passed / 68 skipped in every run.
 | Slowest single test | 62.8 s (`tests/unit/test_campaign.py::TestTeardownBestEffort::test_bounded_result_storage_close_does_not_stall_teardown`); ~2.8 s after issue #1866 (the stub backend no longer parks the campaign thread) | ci.yml run 37983046757 |
 | Sum of slowest 20 tests | 314 s of CPU time (of ~1200 s total serial) | ci.yml run 37983046757 |
 
-xdist worker-count experiment (`ci-xdist-experiment.yml`, same
+xdist worker-count experiment (a one-off workflow, since removed — issue #1885; same
 `make test-cov` invocation, two repetitions each; pytest-reported time):
 
 | `-n` | Run 1 | Run 2 | Speed-up vs `-n 1` |
@@ -1955,8 +1955,8 @@ Recommendation:
   tail, so a larger runner or sharding would give diminishing returns on top
   of this; see #1857 for the decision. The 62.8 s teardown test is worth
   investigating on its own.
-- Re-run the experiment (`gh workflow run ci-xdist-experiment.yml`) before
-  changing runner size or worker count.
+- Re-measure (temporarily vary `PYTEST_WORKERS` in a throwaway workflow)
+  before changing runner size or worker count.
 
 ### "Coverage gate fails"
 

@@ -21,7 +21,7 @@ from osimflow.executors import LocalExecutor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
+EXAMPLE_VARS_YML = REPO_ROOT / "examples" / "179d_variables.yml"
 
 # campaign_workdir, template_pkg, and outdir fixtures come from conftest.py.
 # campaign_workdir uses test_variables.yml which has variables matching
