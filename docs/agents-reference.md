@@ -376,7 +376,7 @@ name in this section.
   `osimflow-fanout` threads) so a cancelled campaign always
   returns to write `run.json` instead of hanging on the pool
   context exit.  Standalone unit tests:
-  `tests/unit/test_campaign_fanout.py`; `Campaign` keeps thin
+  `tests/unit/campaign/test_campaign_fanout.py`; `Campaign` keeps thin
   call-time delegating methods (`_submit_and_await_all` /
   `_mark_sample_failed` / `_compute_await_deadline` +
   `_fanout_deps`) so the historical test seams

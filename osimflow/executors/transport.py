@@ -417,7 +417,7 @@ def resolve_and_materialize(
     primitives and assert their kwargs see the expected ``transport_mode``
     + ``result_storage_*`` arguments. New tests should prefer patching
     :func:`resolve_and_materialize` directly on the executor module
-    under test (see ``tests/unit/test_result_transport_contract.py``).
+    under test (see ``tests/unit/executors/test_result_transport_contract.py``).
     """
     resolved = resolve_result_for_callback(
         result_hint,

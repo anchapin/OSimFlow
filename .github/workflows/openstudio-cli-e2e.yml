@@ -127,7 +127,7 @@ jobs:
           OSIMFLOW_OPENSTUDIO_VERSION: ${{ steps.inputs.outputs.openstudio_version }}
         run: |
           .venv/bin/pytest \
-            tests/unit/test_run_openstudio_sim.py::TestRealOpenStudioE2E \
+            tests/unit/work/test_run_openstudio_sim.py::TestRealOpenStudioE2E \
             -v --timeout=600 --no-cov -ra \
             --junitxml=e2e-artifacts/openstudio-cli-e2e-junit.xml
 

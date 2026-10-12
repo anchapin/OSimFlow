@@ -3,8 +3,8 @@
 Issue #1564: shared SQLite access primitive in :mod:`osimflow._sqlite_store`.
 
 Replaces the per-module one-off lock tests that previously lived in
-``tests/unit/test_cache.py`` (``test_multiprocess_concurrent_close_no_aux_file_race``),
-``tests/unit/test_document_store.py`` (``test_concurrent_workers_distinct_ids``,
+``tests/unit/cache/test_cache.py`` (``test_multiprocess_concurrent_close_no_aux_file_race``),
+``tests/unit/results/test_document_store.py`` (``test_concurrent_workers_distinct_ids``,
 ``test_concurrent_workers_unique_index``), and the per-store thread tests
 in ``test_results_db`` / ``test_event_log`` / ``test_registry``.  Those
 tests stay in place for now (issue #1564 leaves them as-is for a

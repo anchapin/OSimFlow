@@ -10,7 +10,7 @@ The three pluggable backends in ``osimflow/observability.py``
 :class:`~osimflow.observability.PrometheusBackend`,
 :class:`~osimflow.observability.OpenTelemetryBackend`) are otherwise
 exercised exclusively via ``unittest.mock`` (see
-``tests/unit/test_observability_*.py``).  These tests validate that the
+``tests/unit/observability/test_observability_*.py``).  These tests validate that the
 wire format — metric names, label/dimension shapes, and API call
 signatures — actually lands in a real metric sink.
 

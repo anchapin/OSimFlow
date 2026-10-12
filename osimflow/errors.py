@@ -15,7 +15,7 @@ This module introduces:
   exception class in ``osimflow/`` (outside ``client.py`` and the
   ``api/`` package, which carry their own transport-shaped hierarchy)
   is a subclass of this root. The contract is pinned by
-  ``tests/unit/test_exception_hierarchy.py``.
+  ``tests/unit/config/test_exception_hierarchy.py``.
 * :class:`OSimFlowRuntimeError` — intermediate layer that keeps every
   exception that was historically a ``RuntimeError`` catchable by
   ``except RuntimeError``. Preserves the existing contract surface so

@@ -506,8 +506,8 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add an export format | new module in `osimflow/exporters/`, add the `--target` choice to `osimflow/__main__.py` export subcommand |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture (the stub is already there for `OSIMFLOW_STUB_SIM=1`) |
 | Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/`; IAM roles in `iam.tf`, job definition in `job-definition.tf`; `terraform validate` is in CI on `infra/` path changes |
-| Add a REST API endpoint | new route in `osimflow/api/app.py` **and** a test in `tests/unit/api/test_api_core.py`; re-run `python scripts/generate_openapi.py --output docs/openapi.json` afterwards; add a typed method + test in `osimflow/client.py` / `tests/unit/test_client.py` |
-| Add or modify a health check | `osimflow/health.py` (`_check_*` function, register in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py` |
+| Add a REST API endpoint | new route in `osimflow/api/app.py` **and** a test in `tests/unit/api/test_api_core.py`; re-run `python scripts/generate_openapi.py --output docs/openapi.json` afterwards; add a typed method + test in `osimflow/client.py` / `tests/unit/api/test_client.py` |
+| Add or modify a health check | `osimflow/health.py` (`_check_*` function, register in `run_health_checks`) **and** a test in `tests/unit/config/test_health_check.py` |
 | Sweep stale remote branches | `scripts/sweep-stale-branches.sh` (dry-run default; `--apply` deletes proven-merged; `--include-orphaned` also opts into abandoned branches; `--worktree` scans stale local worktrees) + `.github/workflows/branch-cleanup.yml` (nightly dry-run, posts to issue #1003; manual `apply=true`+`confirm=DELETE`); see `docs/branch-protection.md` §"Stale branch sweep" (issue #1003) |
 
 ### Tool selection
@@ -568,7 +568,7 @@ context-mode / codebase-memory-mcp are exposed):
   which measure's value wins at runtime is **undefined**. This is the only
   documented env-var bypass of a pre-flight check — no undocumented
   exceptions should exist. Tested in
-  `tests/unit/test_apply_params.py:TestPreflightCrossMeasureConflict`;
+  `tests/unit/apply_params/test_apply_params.py:TestPreflightCrossMeasureConflict`;
   documented in `docs/user-guide.md` §9. The email notifier's
   `OSIMFLOW_SMTP_*` knobs (credentials from env only, never committed
   config) are documented in `docs/user-guide.md` §4.4.

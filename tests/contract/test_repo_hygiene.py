@@ -42,7 +42,7 @@ ALLOWLISTED_NON_TEST_MODULES: dict[str, str] = {
         "shared helper module imported by the real-substrate integration tests"
     ),
     # Evidence verifiers imported by test_aws_batch_acceptance.py and
-    # tests/unit/test_aws_batch_acceptance_evidence.py (issue #1815).
+    # tests/unit/executors/test_aws_batch_acceptance_evidence.py (issue #1815).
     "integration/_aws_batch_acceptance.py": (
         "AWS Batch acceptance evidence helpers imported by live + unit tests"
     ),

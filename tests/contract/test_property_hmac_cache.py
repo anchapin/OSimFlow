@@ -333,7 +333,7 @@ class TestBuildTransportSignatureEnv:
     ) -> None:
         """The signature the executor emits must verify against the
         canonicalized settings the runner reconstructs. Mirrors the
-        executor / runner contract ``tests/unit/test_result_transport_hmac.py``
+        executor / runner contract ``tests/unit/executors/test_result_transport_hmac.py``
         pins with examples — this property version covers the same
         surface fuzzed over the full settings shape."""
 

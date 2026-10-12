@@ -194,6 +194,6 @@ This ADR can be superseded when:
   `distributed_jobqueue.py` is plane 3).
 - `osimflow/executors/base.py` — `Handle` definition.
 - `osimflow/taskqueue.py` — `TaskHandle(Handle)` + the queue ABCs.
-- `tests/unit/test_taskqueue.py` — pins
+- `tests/unit/cache/test_taskqueue.py` — pins
   `issubclass(TaskHandle, Handle)` and the `job_id`/`task_id`
   mirroring.

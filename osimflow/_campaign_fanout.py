@@ -27,7 +27,7 @@ failure-marking path of issue #1570):
 Issue #1542 rule: this collaborator must NOT import or
 type-reference ``Campaign`` — every dependency is explicit and
 duck-typed, so the wait loop has standalone unit tests
-(``tests/unit/test_campaign_fanout.py``) that need no Campaign
+(``tests/unit/campaign/test_campaign_fanout.py``) that need no Campaign
 instance.
 """
 

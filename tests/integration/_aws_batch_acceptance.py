@@ -2,7 +2,7 @@
 
 Pure, offline helpers: every function inspects files already retrieved to the
 controller outdir, so the verifiers themselves are unit-tested in normal CI
-(``tests/unit/test_aws_batch_acceptance_evidence.py``) while the live test
+(``tests/unit/executors/test_aws_batch_acceptance_evidence.py``) while the live test
 (``tests/integration/test_aws_batch_acceptance.py``) is skip-gated.
 
 Why a stricter check than "SQLite with tables": ``osimflow.work`` stub mode

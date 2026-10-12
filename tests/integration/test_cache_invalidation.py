@@ -55,7 +55,7 @@ def test_sha256_of_files_is_relocation_stable(tmp_path: Path) -> None:
     """Issue #1558: the same content tree rooted at two different
     absolute directories must produce identical ``sha256_of_files``
     output. Pinning this here (alongside the dedicated unit tests in
-    ``tests/unit/test_cache_key_portability.py``) keeps the
+    ``tests/unit/cache/test_cache_key_portability.py``) keeps the
     invalidation suite honest about the input-key half of the cache
     key — a regression that reintroduced the absolute-path prefix
     would break this assertion and surface as a cache-invalidation
