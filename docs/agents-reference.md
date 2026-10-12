@@ -497,6 +497,14 @@ name in this section.
   `detect_openstudio_version`,
   `get_compatible_container_tag`,
   `verify_version_compatibility`.
+- `osimflow/_health_types.py`, `osimflow/_health_executors.py`,
+  `osimflow/_health_redis.py` — pieces split out of `health.py` (issue
+  #1890): `CheckStatus` / `CheckCategory` / `CheckResult` /
+  `HealthReport`, the per-executor substrate checks (`_check_local`,
+  `_check_slurm`, … + `_check_task_payload_signing`), and the Redis
+  deployment-mode check. `health.py` re-exports every moved name and keeps
+  the dispatch table, `run_health_checks`, and the formatters; they log
+  under the `osimflow.health` logger.
 - `osimflow/health.py` — `osimflow health` subcommand
   (`CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`,
   `run_health_checks`). One `_check_<executor>()` per

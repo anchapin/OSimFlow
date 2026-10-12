@@ -962,6 +962,9 @@ def test_import_closure_excludes_third_party_and_stdlib() -> None:
         "_storage_base",
         "_storage_endpoint",
         "_storage_retry",
+        "_health_executors",
+        "_health_redis",
+        "_health_types",
     ):
         assert (package_root / f"{name}.py") in closure, name
     assert (package_root / "storage.py") in closure
