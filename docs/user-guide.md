@@ -1816,8 +1816,8 @@ cross-links for depth.
 |---|---|
 | `osimflow run` | Run a parametric campaign — the main command. See [§3 Quick Start](#3-quick-start) and [§5 Running Campaigns](#5-running-campaigns). |
 | `osimflow warm-cache` | Pre-populate the simulation cache with `--n_warm` pilot samples (default 10) before a campaign; accepts the full `run` flag surface. See [§7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior). |
-| `osimflow import-gem-osa` | Import openstudio-bem-to-surrogate-gem `parametric_space*.json` / `measure_space*.json` / `osa_workflow*.json` into one campaign dir per batch plus `batches.json`. Flags: `--output-dir`, `--batch`, `--template-package`, `--configs`. See [migration-openstudio-server.md](migration-openstudio-server.md). |
-| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.8](#78-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](pat-migration.md). |
+| `osimflow import-gem-osa` | Import openstudio-bem-to-surrogate-gem `parametric_space*.json` / `measure_space*.json` / `osa_workflow*.json` into one campaign dir per batch plus `batches.json`. Flags: `--output-dir`, `--batch`, `--template-package`, `--configs`. See [migration-openstudio-server.md](migration/openstudio-server.md). |
+| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.8](#78-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](migration/pat.md). |
 | `osimflow export` | Export campaign state to an external format (`--target pat`) with `--variables` / `--n_samples` / `--algorithm`. |
 | `osimflow serve` | Start the REST API server (flags above; requires `pip install osimflow[api]`). See [api.md](api.md). |
 | `osimflow dashboard` | Launch a local ephemeral dashboard for campaign results (`--port`, default 8000). |
@@ -1941,11 +1941,12 @@ exempt — see `tools/check_docs_sync.py::INDEX_EXEMPT_DOCS`).
 
 | Document | Description |
 |---|---|
-| [Migration from openstudio-server](migration-openstudio-server.md) | Migrating from PAT and openstudio-server |
-| [PAT Migration](pat-migration.md) | PAT-format data import/export |
-| [Algorithm Migration](algorithm-migration.md) | OSS algorithms → OSimFlow equivalents |
-| [Analysis Gem Migration](analysis-gem-migration.md) | openstudio-analysis-gem (Ruby) → OSimFlow Python library |
-| [MongoDB Migration](mongodb-migration.md) | legacy OSS MongoDB collections → SQLite document store (GAP-018) |
+| [Migration index](migration/README.md) | Overview of all migration guides |
+| [Migration from openstudio-server](migration/openstudio-server.md) | Migrating from PAT and openstudio-server |
+| [PAT Migration](migration/pat.md) | PAT-format data import/export |
+| [Algorithm Migration](migration/algorithm.md) | OSS algorithms → OSimFlow equivalents |
+| [Analysis Gem Migration](migration/analysis-gem.md) | openstudio-analysis-gem (Ruby) → OSimFlow Python library |
+| [MongoDB Migration](migration/mongodb.md) | legacy OSS MongoDB collections → SQLite document store (GAP-018) |
 
 #### Substrate Coverage
 

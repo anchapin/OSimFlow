@@ -277,8 +277,8 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-See [aws-batch-terraform.md](aws-batch-terraform.md) for the full
-zero-to-running guide and [container-image-strategy.md](container-image-strategy.md)
+See [aws-batch-terraform.md](../aws-batch-terraform.md) for the full
+zero-to-running guide and [container-image-strategy.md](../container-image-strategy.md)
 for the ECR mirroring strategy.
 
 ### Running on Slurm (HPC)
@@ -298,7 +298,7 @@ osimflow run \
   --openstudio_version 3.10.0
 ```
 
-See [deployment/slurm.md](deployment/slurm.md) for the full Slurm setup
+See [deployment/slurm.md](../deployment/slurm.md) for the full Slurm setup
 guide.
 
 ---
@@ -423,7 +423,7 @@ print(result)
 | `merge(df1, df2, by="id")` | `pd.merge(df1, df2, on="id")` |
 | `ggplot(df, aes(x, y)) + geom_point()` | `df.plot.scatter(x="x", y="y")` or `sns.scatterplot(data=df, x="x", y="y")` |
 
-See the [R to Python BYOS Cheatsheet](../user_scripts/examples/r_to_python_migration.md)
+See the [R to Python BYOS Cheatsheet](../../user_scripts/examples/r_to_python_migration.md)
 for worked examples covering data loading, filtering, aggregation, and
 plotting.
 
@@ -532,7 +532,7 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
 
 For full worked examples covering data loading, filtering, aggregation,
 and plotting, see the
-[R to Python BYOS Cheatsheet](../user_scripts/examples/r_to_python_migration.md).
+[R to Python BYOS Cheatsheet](../../user_scripts/examples/r_to_python_migration.md).
 
 ---
 
@@ -564,7 +564,7 @@ watch -n 5 'cat results/run.json | python -m json.tool'
 watch -n 5 'jq ".summary" results/run.json'
 ```
 
-See [runjson-guide.md](runjson-guide.md) for the full schema reference.
+See [runjson-guide.md](../runjson-guide.md) for the full schema reference.
 
 ### Using MLflow for a Dashboard Experience
 
@@ -884,16 +884,16 @@ static entries that don't need sampling to keep the campaign focused.
 
 ## See Also
 
-- [User Guide](user-guide.md) — Complete OSimFlow usage reference
-- [variables.yml Schema](variables-schema.md) — Full variable and distribution reference
-- [OSA Import Reference (user-guide §7.7)](user-guide.md#77-importing-from-openstudio-analysis-spreadsheet-osa)
-- [R to Python BYOS Cheatsheet](../user_scripts/examples/r_to_python_migration.md) — Worked R→Python examples
-- [Data Analysis Notebook](../examples/notebooks/legacy_migration_analysis.ipynb) — Jupyter cookbook for migrated data
-- [MLflow Integration (user-guide §7.4)](user-guide.md#74-mlflow-integration) — MLflow setup details
-- [Docker Onboarding](docker-onboarding.md) — Container setup for real simulations
-- [AWS Batch Terraform Guide](aws-batch-terraform.md) — Cloud infrastructure setup
-- [eplusout.sql Guide](eplusout-sql-guide.md) — Querying EnergyPlus SQL output
-- [user_scripts/README.md](../user_scripts/README.md) — BYOS script templates
+- [User Guide](../user-guide.md) — Complete OSimFlow usage reference
+- [variables.yml Schema](../variables-schema.md) — Full variable and distribution reference
+- [OSA Import Reference (user-guide §7.7)](../user-guide.md#77-importing-from-openstudio-analysis-spreadsheet-osa)
+- [R to Python BYOS Cheatsheet](../../user_scripts/examples/r_to_python_migration.md) — Worked R→Python examples
+- [Data Analysis Notebook](../../examples/notebooks/legacy_migration_analysis.ipynb) — Jupyter cookbook for migrated data
+- [MLflow Integration (user-guide §7.4)](../user-guide.md#74-mlflow-integration) — MLflow setup details
+- [Docker Onboarding](../docker-onboarding.md) — Container setup for real simulations
+- [AWS Batch Terraform Guide](../aws-batch-terraform.md) — Cloud infrastructure setup
+- [eplusout.sql Guide](../eplusout-sql-guide.md) — Querying EnergyPlus SQL output
+- [user_scripts/README.md](../../user_scripts/README.md) — BYOS script templates
 
 ## Server-compatible results CSV (`download_data.csv` layout)
 

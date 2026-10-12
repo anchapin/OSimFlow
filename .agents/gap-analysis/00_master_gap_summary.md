@@ -188,5 +188,5 @@ This document synthesizes findings from four specialized gap analysis agents cov
   - `03_user_experience_gap_analysis.md`
   - `04_data_handling_gap_analysis.md`
 - OSimFlow PRD: `docs/OSimFlow.md`
-- Migration Guide: `docs/migration-openstudio-server.md`
-- Algorithm Migration: `docs/algorithm-migration.md`
+- Migration Guide: `docs/migration/openstudio-server.md`
+- Algorithm Migration: `docs/migration/algorithm.md`

@@ -476,4 +476,4 @@ cat results/work/sim/sample_0023/stderr.log
 - **[Your First Campaign](your-first-campaign.md)** - Hands-on tutorial
 - **[Advanced Topics](advanced-topics.md)** - BYOS, custom algorithms
 - **[Variables Schema](../variables-schema.md)** - Complete variable syntax
-- **[Migration from openstudio-server](../migration-openstudio-server.md)** - Technical deep dive
+- **[Migration from openstudio-server](../migration/openstudio-server.md)** - Technical deep dive

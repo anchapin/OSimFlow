@@ -2,7 +2,7 @@
 
 Builds, from a campaign output directory, a CSV with the column layout the
 openstudio-bem-to-surrogate gem consumes from the EKS / OpenStack server path
-(``rake download_results``). Layout (see ``docs/migration-openstudio-server.md``):
+(``rake download_results``). Layout (see ``docs/migration/openstudio-server.md``):
 
 1. ``name``, ``_id``, ``status``, ``status_message`` — datapoint identity.
 2. Variable columns ``<measure>.<argument>`` in ``samples.json`` order.

@@ -9,7 +9,7 @@ algorithms to their OSimFlow equivalents, with migration guidance.
 
 **OSS mechanism:** R/Rserve-based genetic algorithm with gradient approximation.
 
-**OSimFlow equivalent:** [`DifferentialEvolutionAlgorithm`](../osimflow/algorithms/de.py)
+**OSimFlow equivalent:** [`DifferentialEvolutionAlgorithm`](../../osimflow/algorithms/de.py)
 (osimflow.algorithms.de, registered as `"de"`).
 
 **Why:** DE is a pure-Python evolutionary algorithm (no R/Rserve dependency).
@@ -102,7 +102,7 @@ osimflow run \
 
 **OSS mechanism:** R/Rserve-based Strength Pareto Evolutionary Algorithm 2.
 
-**OSimFlow equivalent:** [`SPEA2Algorithm`](../osimflow/algorithms/spea2.py)
+**OSimFlow equivalent:** [`SPEA2Algorithm`](../../osimflow/algorithms/spea2.py)
 (`osimflow.algorithms.spea2`, registered as `"spea2"`).
 
 **Status:** Available in this PR (issue #271). No migration needed —

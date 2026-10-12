@@ -698,7 +698,7 @@ if __name__ == "__main__":
 
 ## See Also
 
-- [Migration Guide](../../docs/migration-openstudio-server.md) — Full migration walkthrough
+- [Migration Guide](../../docs/migration/openstudio-server.md) — Full migration walkthrough
 - [user_scripts/README.md](../README.md) — BYOS interface reference
 - [user_scripts/examples/](.) — Worked BYOS examples
 - [eplusout.sql Guide](../../docs/eplusout-sql-guide.md) — Querying EnergyPlus SQL output

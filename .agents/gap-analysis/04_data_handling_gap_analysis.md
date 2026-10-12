@@ -90,7 +90,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server stores all simulation results in MongoDB with a full HTTP query API. OSimFlow writes results to flat files (CSV/Parquet) in `outdir/` with no persistent database and no query API. Cross-campaign analysis requires external tools.
 - **Severity:** Major
 - **openstudio-server approach:** MongoDB `data_points` collection with full CRUD API, enabling real-time web dashboard queries and programmatic access via `GET /analyses/:id/data_points`.
-- **Evidence:** `osimflow/storage.py` provides `ResultStorage` plug-in for cloud blob storage but no query/filter API. `osimflow/cache.py` uses SQLite only for cache metadata, not for results. `docs/gap-analysis-summary.md` issue #342: "No persistent results database with query API."
+- **Evidence:** `osimflow/storage.py` provides `ResultStorage` plug-in for cloud blob storage but no query/filter API. `osimflow/cache.py` uses SQLite only for cache metadata, not for results. `docs/archive/gap-analysis-summary.md` issue #342: "No persistent results database with query API."
 - **Consequence if wrong:** Users managing >100 campaigns must manually parse flat files or build custom ETL pipelines. No ad-hoc querying of historical runs without external tooling.
 
 ---
@@ -100,7 +100,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server ships a Ruby-on-Rails web ResultsViewer for browsing simulation outputs, plotting time series, and downloading data. OSimFlow has no equivalent — results are consumed via CLI output files, optional MLflow UI, or direct file access.
 - **Severity:** Critical
 - **openstudio-server approach:** `ResultsViewer` embedded in the PAT web interface, providing in-browser CSV/JSON export, time-series charting, and per-sample drill-down.
-- **Evidence:** `docs/OSimFlow.md` PRD §3.1 lists "data aggregation and statistical analysis" as in-scope but the implementation is file-only. `docs/gap-analysis-summary.md` issue #337: "No web-based user interface (PAT)." The MLflow integration (`--mlflow_tracking_uri`) provides a partial alternative but requires separate infrastructure.
+- **Evidence:** `docs/OSimFlow.md` PRD §3.1 lists "data aggregation and statistical analysis" as in-scope but the implementation is file-only. `docs/archive/gap-analysis-summary.md` issue #337: "No web-based user interface (PAT)." The MLflow integration (`--mlflow_tracking_uri`) provides a partial alternative but requires separate infrastructure.
 - **Consequence if wrong:** Non-CLI users (architects, managers) cannot browse results interactively. PAT users migrating to OSimFlow lose the primary results exploration workflow.
 
 ---
@@ -110,7 +110,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server/PAT accepts Excel `.xlsx` spreadsheets (PAT Analysis Spreadsheet format) as direct input. OSimFlow's `bin/excel_to_variables.py` converts Excel to `variables.yml` but only supports a subset of distribution types and produces one-way conversion only.
 - **Severity:** Major
 - **openstudio-server approach:** PAT reads `.xlsx` files containing variables, distributions, measure mappings, and algorithm settings directly into the analysis definition.
-- **Evidence:** `osimflow/_work_scripts/excel_to_variables.py` exists and supports uniform, normal, lognormal, triangular, discrete, categorical distributions. However, `docs/migration-openstudio-server.md` §3 documents the two-step import process (PAT export → OSimFlow import) but notes that "static variables with `distribution: static`" may be dropped. `osimflow/importers/osa.py` handles OSA format but not native PAT Excel format.
+- **Evidence:** `osimflow/_work_scripts/excel_to_variables.py` exists and supports uniform, normal, lognormal, triangular, discrete, categorical distributions. However, `docs/migration/openstudio-server.md` §3 documents the two-step import process (PAT export → OSimFlow import) but notes that "static variables with `distribution: static`" may be dropped. `osimflow/importers/osa.py` handles OSA format but not native PAT Excel format.
 - **Consequence if wrong:** Users with existing PAT Excel spreadsheets cannot import them directly. The `excel_to_variables.py` round-trip may lose distribution metadata or custom PAT fields not in the OSimFlow schema.
 
 ---
@@ -120,7 +120,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server stores all runs in MongoDB, enabling cross-analysis comparison via aggregation pipelines. OSimFlow treats each campaign as an independent `outdir/` with no built-in cross-run comparison. Comparing two campaigns requires external tools (pandas, DuckDB).
 - **Severity:** Major
 - **openstudio-server approach:** MongoDB queries joining `analyses` and `data_points` collections across analysis IDs, with web UI comparison views.
-- **Evidence:** `bin/aggregate_results.py` aggregates within a single campaign (`aggregated_results.csv`). No module exists for multi-campaign comparison. `docs/gap-analysis-summary.md` issue #342 notes "no persistent results database with query API" which is the enabling infrastructure.
+- **Evidence:** `bin/aggregate_results.py` aggregates within a single campaign (`aggregated_results.csv`). No module exists for multi-campaign comparison. `docs/archive/gap-analysis-summary.md` issue #342 notes "no persistent results database with query API" which is the enabling infrastructure.
 - **Consequence if wrong:** Teams running iterative design studies must manually align `outdir/` directories for comparison. No automatic baseline drift detection or multi-campaign statistical summaries.
 
 ---
@@ -130,7 +130,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server's ResultsViewer renders interactive time-series charts (hourly/daily/monthly) for any output variable across samples. OSimFlow's `generate_plots.py` produces static PNG/PDF plots only. Time-series data is queryable via SQL from `eplusout.sql` but not browsable interactively.
 - **Severity:** Major
 - **openstudio-server approach:** Ruby/JavaScript web interface with D3-based interactive charts, zoom, filter by sample, and CSV/JSON export.
-- **Evidence:** `bin/generate_plots.py` produces static EUI histograms and Pareto plots. `docs/time-series-management.md` documents the time-series aggregation system but no interactive viewer. `docs/gap-analysis-summary.md` issue #337 (no PAT UI) is the upstream gap.
+- **Evidence:** `bin/generate_plots.py` produces static EUI histograms and Pareto plots. `docs/time-series-management.md` documents the time-series aggregation system but no interactive viewer. `docs/archive/gap-analysis-summary.md` issue #337 (no PAT UI) is the upstream gap.
 - **Consequence if wrong:** Users needing interactive time-series exploration (e.g., zone temperature profiles across 100 samples) must write custom SQL queries or use third-party tools.
 
 ---
@@ -190,7 +190,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 - **Description:** openstudio-server's `openstudio-analysis-gem` provides Ruby-level integration for measure management, analysis gems, and DOE workflows. OSimFlow has no Ruby gem integration layer — measures are sourced from `template_sim_package/measures/` directories only.
 - **Severity:** Minor
 - **openstudio-server approach:** Ruby gem ecosystem via Bundler, `openstudio-analysis-gem` managing measure dependencies and version pinning.
-- **Evidence:** `osimflow/work.py` `_validate_measure_entry_points` checks for `measure.rb` or `measure.py` in measure directories but does not integrate with Ruby gem ecosystem. `docs/packaging-measures.md` exists suggesting measure packaging guidance but no gem integration. `docs/gap-analysis-summary.md` issue #334: "No measure management system."
+- **Evidence:** `osimflow/work.py` `_validate_measure_entry_points` checks for `measure.rb` or `measure.py` in measure directories but does not integrate with Ruby gem ecosystem. `docs/packaging-measures.md` exists suggesting measure packaging guidance but no gem integration. `docs/archive/gap-analysis-summary.md` issue #334: "No measure management system."
 - **Consequence if wrong:** Teams relying on Ruby-based analysis gems (DOE workflows, custom optimization algorithms in Ruby) cannot use them with OSimFlow without rewriting as Python BYOS.
 
 ---
@@ -241,7 +241,7 @@ OSimFlow provides file-based data handling (YAML inputs, CSV/Parquet/SQLite outp
 7. **Build `OSimFlowResultsViewer` (web UI)**
    - FastAPI app serving results from `ResultDatabase` with Plotly.js interactive charts for time-series and scatter plots.
    - Endpoints: `GET /results/<campaign_id>`, `GET /results/<campaign_id>/timeseries?variable=...&resolution=monthly`, `GET /results/<campaign_id>/export`.
-   - See `docs/gap-analysis-summary.md` issue #337.
+   - See `docs/archive/gap-analysis-summary.md` issue #337.
 
 8. **Add cross-run comparison API**
    - Extend `ResultDatabase` to ingest multiple campaigns.
