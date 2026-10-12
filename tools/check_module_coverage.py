@@ -141,7 +141,7 @@ see commit body) are::
     osimflow/byos.py                           88.30%  (367 stmts)
     osimflow/byos_contract.py                 100.00%   (52 stmts; pure declarations)
     osimflow/cache.py                          97.32%  (411 stmts)
-    osimflow/campaign.py                       86.50%  (1581 stmts; main orchestrator)
+    osimflow/campaign.py                       85.47%  (main orchestrator; re-seeded by issue #1890 split)
     osimflow/chaos.py                          93.94%  (229 stmts)
     osimflow/circuit_breaker.py               100.00%   (98 stmts; issue #1111)
     osimflow/client.py                         83.77%  (451 stmts)
