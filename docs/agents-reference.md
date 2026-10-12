@@ -196,6 +196,15 @@ name in this section.
 - `osimflow/cli/lifecycle.py` — `run-batches`, `mark-for-reanalysis`, `merge`,
   `health`, `cancel`, `pause`, run-invocation record/replay.
 - `osimflow/cli/results.py` — `measure` / `query-results` / `export-results`.
+- `osimflow/_campaign_dag.py`, `osimflow/_campaign_helpers.py` — pieces
+  split out of `campaign.py` (issue #1890): the DAG step descriptors
+  (`StepInputs`, `StepOutputs`, `DAGStep`, `SimResult`, `SampleDict`, the
+  per-step `_sig_*` / `_out_*` helpers) and small helpers
+  (`_scoped_dry_run_env`, `_make_mlflow_param_view`,
+  `_package_content_digest`, `cast_samples`, `cast_variables`,
+  `cast_aggregate_result`, `cast_plot_paths`). `campaign.py` re-exports
+  every moved name and keeps the `_STEP_DEPENDENCIES` table (tests patch
+  it there).
 - `osimflow/campaign.py` — `Campaign` orchestrator +
   `CONTAINER_SUBSTRATE_EXECUTORS` (issue #1536: executors whose
   substrate pulls the OpenStudio image; `run()` fails loudly when

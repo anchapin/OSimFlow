@@ -374,6 +374,9 @@ FLOORS: dict[str, float] = {
     "osimflow/_health_executors.py": 58.00,  # measured 59.02% in CI (CI-flag suite)
     "osimflow/_health_redis.py": 92.00,  # measured 93.00%
     "osimflow/_health_types.py": 99.00,  # measured 100.00%
+    # Split out of campaign.py (issue #1890); readings from the CI-flag suite.
+    "osimflow/_campaign_dag.py": 99.00,  # measured 100.00%
+    "osimflow/_campaign_helpers.py": 99.00,  # measured 100.00%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors

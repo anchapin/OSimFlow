@@ -38,7 +38,6 @@ __all__ = ["Campaign", "CampaignAbortError", "CampaignError", "QuotaExceededErro
 
 import contextlib
 import dataclasses
-import hashlib
 import json
 import logging
 import os
@@ -46,9 +45,8 @@ import shutil
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -73,6 +71,23 @@ from ._campaign_code_hashes import (
     compute_code_hashes,
 )
 from ._campaign_cost_tracker import CampaignCostTracker
+from ._campaign_dag import (  # noqa: F401 — re-exported
+    DAGStep,
+    SampleDict,
+    SimResult,
+    StepInputs,
+    StepOutputs,
+    _always_run,
+    _out_kpi_files,
+    _out_parameterized,
+    _out_simulated,
+    _sig_apply,
+    _sig_extract_kpis,
+    _sig_lhs_samples,
+    _sig_preflight,
+    _sig_run_sim,
+    _sig_validate_measure,
+)
 from ._campaign_epw import CampaignEpwResolver
 from ._campaign_fanout import (
     FanoutDeps,
@@ -88,6 +103,15 @@ from ._campaign_fanout import (
 )
 from ._campaign_fanout import (
     submit_and_await_all as _submit_and_await_all_impl,
+)
+from ._campaign_helpers import (  # noqa: F401 — re-exported
+    _make_mlflow_param_view,
+    _package_content_digest,
+    _scoped_dry_run_env,
+    cast_aggregate_result,
+    cast_plot_paths,
+    cast_samples,
+    cast_variables,
 )
 from ._campaign_hooks import (
     hook_env as _build_hook_env,
@@ -249,157 +273,6 @@ class CampaignError(OSimFlowRuntimeError):
     """
 
 
-# Type aliases — these are the schemas of intermediate DAG outputs.
-# Issue #1542: the SampleSpec / VariableSpec TypedDicts live in
-# ``osimflow._campaign_types`` and are re-exported from the top import
-# block so ``from osimflow.campaign import SampleSpec`` (used by tests
-# and collaborators) keeps working.
-SampleDict = dict[str, Path]  # sample_id -> path (per-sample work dir)
-
-
-@dataclasses.dataclass(frozen=True)
-class SimResult:
-    """Structured result from ``step_run_openstudio_sim``.
-
-    The ``success`` field is ``False`` when one or more samples recorded a
-    non‑zero ``sim_exit_code`` (i.e. partial or complete fan‑out failure).
-    Callers can inspect this field instead of needing to parse ``run.json``.
-    """
-
-    samples: SampleDict
-    success: bool
-
-
-@dataclasses.dataclass(frozen=True)
-class StepOutputs:
-    """Describes the files produced by a DAG step."""
-
-    produced: tuple[str, ...] = ()
-    """Glob patterns relative to work_dir (e.g. 'apply/*/modified.osw')."""
-
-    kpi_pattern: str | None = None
-    """For fan-out steps: glob pattern for per-sample KPI JSON files."""
-
-
-@dataclasses.dataclass(frozen=True)
-class StepInputs:
-    """Describes the files required by a DAG step before it can run."""
-
-    required: tuple[str, ...] = ()
-    """Exact file paths required (checked via is_file())."""
-
-    required_patterns: tuple[str, ...] = ()
-    """Glob patterns relative to work_dir; ALL files matching must exist."""
-
-    count: int | None = None
-    """Expected number of files from a fan-out step (None = no check)."""
-
-
-@dataclasses.dataclass(frozen=True)
-class DAGStep:
-    """Describes a DAG step for data-driven execution (issues #1276, #1392).
-
-    Extends ``StepInputs``/``StepOutputs`` with step execution metadata so
-    that ``_run_one_generation`` can iterate over steps from configuration
-    instead of calling step methods by name.
-
-    Issue #1392: each step now declares its own input/output contract via
-    :attr:`inputs_signature` and :attr:`outputs_signature`.  The prior
-    if/elif chain in ``_run_one_generation`` was the only contract for
-    step-method signatures — any new step declared in ``_STEP_DEPENDENCIES``
-    had no documented path to register its own args.  With the new
-    signatures, ``step_method(*inputs_signature(state))`` is generic;
-    new steps just plug in their own callable.
-    """
-
-    inputs: StepInputs
-    outputs: StepOutputs
-    method: str
-    condition: Callable[..., bool] | None = None
-    fan_out: bool = False
-    inputs_signature: Callable[..., tuple[Any, ...]] | None = None
-    """Callable returning the positional arg tuple for ``method``.
-
-    Receives the per-generation state namespace (a ``SimpleNamespace``
-    exposing ``samples``, ``parameterized``, ``simulated``, ``kpi_files``,
-    ``aggregated``, ``campaign``, ``algo``, ``generation``).  Each step's
-    signature callable picks the slots it needs and ignores the rest.
-    When ``None``, ``method`` is called with no args.
-    """
-    outputs_signature: Callable[[Any], tuple[str, Any] | None] | None = None
-    """Callable taking the method's return value and returning
-    ``(slot_name, slot_value)`` to merge into the per-generation state.
-
-    Built-in slot names: ``"parameterized"``, ``"simulated"``,
-    ``"kpi_files"``, ``"aggregated"``.  When ``None``, the return value
-    is ignored (e.g. for ``step_generate_samples`` whose result is
-    captured before the dispatcher loop runs)."""
-
-
-def _always_run(campaign: "Campaign", algo: Any, **kwargs: Any) -> bool:
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Per-step inputs/outputs signatures (issue #1392).
-#
-# These helpers close over the per-generation state namespace exposed by
-# ``_run_one_generation``.  Each step reads only the slots it needs and
-# returns the positional arg tuple for its method.
-#
-# Output-signature helpers take the method's return value and return a
-# ``(slot_name, slot_value)`` pair that the dispatcher writes back into
-# the per-generation state.  Steps whose return value is not consumed by
-# any downstream step leave ``outputs_signature=None``.
-# ---------------------------------------------------------------------------
-
-
-def _sig_lhs_samples(
-    state: Any, campaign: "Campaign", algo: Any, generation: int
-) -> tuple[Any, ...]:
-    return (algo, generation)
-
-
-def _sig_preflight(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
-    return ()
-
-
-def _sig_apply(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
-    return (state.samples, generation)
-
-
-def _sig_validate_measure(
-    state: Any, campaign: "Campaign", algo: Any, generation: int
-) -> tuple[Any, ...]:
-    return ()
-
-
-def _sig_run_sim(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
-    return (state.parameterized, generation)
-
-
-def _sig_extract_kpis(
-    state: Any, campaign: "Campaign", algo: Any, generation: int
-) -> tuple[Any, ...]:
-    return (state.simulated, generation)
-
-
-def _out_parameterized(result: Any) -> tuple[str, Any]:
-    return ("parameterized", result)
-
-
-def _out_simulated(result: Any) -> tuple[str, Any]:
-    """``step_run_openstudio_sim`` returns a ``SimResult`` whose ``.samples``
-    field is the per-sample ``{sample_id: sim_dir}`` mapping the
-    dispatcher feeds into ``step_extract_kpis``."""
-
-    return ("simulated", result.samples)
-
-
-def _out_kpi_files(result: Any) -> tuple[str, Any]:
-    return ("kpi_files", result)
-
-
 # Cross-step data dependency map (issue #850).
 # Maps each step name to the outputs it PRODUCES and the inputs it CONSUMES.
 # Before running a step, _verify_step_inputs() confirms all required inputs
@@ -482,30 +355,6 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
 # NOTE (issue #1462): ``_CancelRegistry`` and the ``_cancel_registry``
 # singleton now live in ``osimflow._campaign_lifecycle`` and are
 # re-exported above — tests import both names from this module.
-
-
-@contextlib.contextmanager
-def _scoped_dry_run_env() -> Iterator[None]:
-    """Set ``OSIMFLOW_DOCKER_SWARM_DRY_RUN=1`` for the duration of a block.
-
-    The ``DockerSwarmExecutor`` reads this env var in
-    ``_is_dev_fallback_enabled()`` to decide whether to fall back to
-    ``LocalExecutor`` during ``--dry-run`` campaigns (issue #944).
-
-    Captures and restores the prior value so the var never leaks across
-    campaigns in a long-lived process (e.g. ``osimflow serve``) or across
-    tests sharing a worker process under ``pytest-xdist`` (issue #976).
-    Restore runs even when the wrapped block raises.
-    """
-    prev = os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN")
-    os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = "1"
-    try:
-        yield
-    finally:
-        if prev is None:
-            os.environ.pop("OSIMFLOW_DOCKER_SWARM_DRY_RUN", None)
-        else:
-            os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = prev
 
 
 # NOTE (issue #1462): the code-hash machinery (import-closure walking,
@@ -3713,102 +3562,3 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 "total_keys": stats.total_keys,
             },
         }
-
-
-# ---------------------------------------------------------------------------
-# MLflow param view (issue #7)
-def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNamespace:
-    """Build a small adapter for `log_mlflow_params`.
-
-    The hook reads attributes via `getattr`, so a `SimpleNamespace` is
-    sufficient. The adapter is built from a `CampaignConfig` + the
-    executor's `name` so the hook does not import `osimflow.config`
-    (avoiding a circular import).
-    """
-    return SimpleNamespace(
-        executor=executor_name,
-        openstudio_version=cfg.openstudio_version,
-        n_samples=cfg.n_samples,
-        archive_intermediates=cfg.archive_intermediates,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Cast helpers — narrow YAML/external `object` types to the strict shapes
-# the rest of the code relies on. The cast is a single audit point.
-# ---------------------------------------------------------------------------
-def _package_content_digest(pkg: Path) -> str:
-    """SHA-256 over the parameterized ``workflow.osw`` / ``model.osm`` bytes."""
-    h = hashlib.sha256()
-    for name in ("workflow.osw", "model.osm"):
-        f = pkg / name
-        if f.is_file():
-            h.update(name.encode())
-            h.update(f.read_bytes())
-    return h.hexdigest()
-
-
-def cast_samples(obj: object) -> list[SampleSpec]:
-    """Narrow a `samples` JSON value to the canonical SampleSpec list."""
-    if not isinstance(obj, list):
-        raise TypeError(f"samples must be a list, got {type(obj).__name__}")
-    out: list[SampleSpec] = []
-    for item in obj:
-        if not isinstance(item, dict):
-            raise TypeError("sample entry must be a dict")
-        sid = item.get("sample_id")
-        values = item.get("values")
-        if not isinstance(sid, str) or not isinstance(values, dict):
-            raise TypeError("sample entry must have str 'sample_id' and dict 'values'")
-        spec = SampleSpec(sample_id=sid, values=values)
-        # Per-sample overrides (GAP-009 / issue #1869) must survive the round-trip.
-        for override in ("seed_model", "weather_file"):
-            override_value = item.get(override)
-            if isinstance(override_value, str) and override_value:
-                spec[override] = override_value
-        out.append(spec)
-    return out
-
-
-def cast_variables(obj: object) -> list[VariableSpec]:
-    """Narrow the `variables` list from variables.yml.
-
-    Each entry is a dict with at least `name` and `distribution` keys,
-    plus distribution-specific numeric fields.
-    """
-    if not isinstance(obj, list):
-        raise TypeError(f"variables must be a list, got {type(obj).__name__}")
-    out: list[VariableSpec] = []
-    for item in obj:
-        if not isinstance(item, dict) or "name" not in item or "distribution" not in item:
-            raise TypeError("variable entry must have 'name' and 'distribution'")
-        v: VariableSpec = {
-            "name": str(item["name"]),
-            "distribution": str(item["distribution"]),
-            "min": float(item.get("min", 0.0)),
-            "max": float(item.get("max", 0.0)),
-            "mean": float(item.get("mean", 0.0)),
-            "sigma": float(item.get("sigma", 0.0)),
-        }
-        out.append(v)
-    return out
-
-
-def cast_aggregate_result(obj: object) -> dict[str, Path]:
-    """Narrow aggregate_results() return to a Path-keyed dict."""
-    if not isinstance(obj, dict):
-        raise TypeError(f"aggregate result must be a dict, got {type(obj).__name__}")
-    out: dict[str, Path] = {}
-    for k, v in obj.items():
-        out[str(k)] = Path(str(v))
-    return out
-
-
-def cast_plot_paths(obj: object) -> list[Path]:
-    """Narrow generate_plots() return to a list[Path]."""
-    if not isinstance(obj, list):
-        raise TypeError(f"plot list must be a list, got {type(obj).__name__}")
-    out: list[Path] = []
-    for item in obj:
-        out.append(Path(str(item)))
-    return out
