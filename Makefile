@@ -50,13 +50,19 @@ PYTEST_CI_FLAGS := -n $(PYTEST_WORKERS) --dist loadgroup --timeout=120 -o faulth
 COVERAGE_PROCESS_START := $(PWD)/pyproject.toml
 PYTEST_COV_FLAGS := --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82
 
-.PHONY: help install lint format typecheck test test-cov test-fast smoke contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
+.PHONY: help install lint format typecheck test test-cov test-fast smoke doctor install-locked contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: | $(VENV) ## pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 	$(PY) -m pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
+
+install-locked: ## uv sync --locked with the dev extras (mirrors CI's resolver; needs uv; issue #1895)
+	uv sync --locked --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
+
+doctor: ## Check venv, extras, OpenStudio CLI and print the next step (issue #1895)
+	@$(PY) tools/doctor.py || { [ -x $(PY) ] || echo "Next step: make install"; exit 1; }
 
 # Bootstrap the virtualenv on fresh clones (issue #1447): created only
 # when absent (order-only prerequisite — never rebuilt once it exists).

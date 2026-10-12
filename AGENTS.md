@@ -134,6 +134,8 @@ make typecheck  # mypy --strict on osimflow/
 make test       # pytest with CI flags, no coverage gate (issue #1476)
 make test-cov   # exact CI test-job invocation, 82% gate  (ci.yml runs this; issues #1417, #1476)
 make test-fast  # pytest tests/contract -x -q -m "not slow and not chaos and not full" (pre-commit mirror; issue #1624)
+make doctor     # check venv / extras / OpenStudio CLI and print the next step (issue #1895; tools/doctor.py)
+make install-locked  # optional: uv sync --locked, mirrors the CI resolver (issue #1895)
 make smoke      # 3-sample stub-mode local campaign into ./results_smoke (no OpenStudio needed; issue #1479)
 make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
 make byos-generate  # regenerate osimflow/_byos_runner_generated.py only

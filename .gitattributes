@@ -1,0 +1,3 @@
+# Collapse generated files in PR diffs (issue #1895).
+docs/openapi.json linguist-generated=true
+osimflow/_byos_runner_generated.py linguist-generated=true
