@@ -2,48 +2,34 @@
 Expand the name of the chart.
 */}}
 {{- define "osimflow.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
+osimflow
+{{- end -}}
 
 {{/*
 Create a default fully qualified app name.
 */}}
 {{- define "osimflow.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
-{{- end }}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 
 {{/*
-Create chart name and version as used by the chart label.
+Create the API deployment (optional — issue #138).
 */}}
-{{- define "osimflow.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{- end }}
+{{- define "osimflow.api.name" -}}
+{{- printf "%s-api" (include "osimflow.fullname" .) -}}
+{{- end -}}
 
 {{/*
-Common labels.
+Create the worker deployment name (optional — issue #583).
 */}}
-{{- define "osimflow.labels" -}}
-{{- include "osimflow.selectorLabels" . | nindent 4 }}
-{{- if and .Chart.AppVersion .Values.image.tag }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-helm.sh/chart: {{ include "osimflow.chart" . }}
-{{- end }}
+{{- define "osimflow.worker.name" -}}
+{{- printf "%s-worker" (include "osimflow.fullname" .) -}}
+{{- end -}}
 
 {{/*
-Selector labels.
+Resolve the worker container image.
+Uses worker.image if set, otherwise falls back to the openstudio image.
 */}}
-{{- define "osimflow.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "osimflow.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
+{{- define "osimflow.worker.image" -}}
+{{- .Values.worker.image | default (printf "%s:%s" .Values.openstudio.repository .Values.openstudio.version) -}}
+{{- end -}}

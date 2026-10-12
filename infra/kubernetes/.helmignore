@@ -2,9 +2,4 @@
 .git/
 .gitignore
 .helmignore
-LICENSE
 README.md
-values.yaml
-Chart.yaml
-templates/*.yaml
-templates/*.tpl

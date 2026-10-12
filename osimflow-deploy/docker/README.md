@@ -52,3 +52,9 @@ osimflow run --openstudio_version 3.10.0 ...
 - [OpenStudio image distribution](../../docs/openstudio-image-distribution.md)
 - [AWS deployment guide](../aws/README.md)
 - [osimflow-deploy README](../README.md)
+
+## Compose files
+
+The Docker Compose stacks (`docker-compose.yml`, `docker-compose.dev.yml`,
+`docker-compose.test.yml`) live at the repository root; this directory holds no
+compose file.

@@ -10,6 +10,7 @@ This directory is a **sub-monorepo** within the main OSimFlow repository. It pro
 |---|---|---|
 | **AWS Batch** | [`infra/aws/terraform/`](../infra/aws/terraform/) | [`aws/README.md`](aws/README.md) · [`docs/aws-batch-terraform.md`](../docs/aws-batch-terraform.md) |
 | **Nomad** | [`infra/nomad/`](../infra/nomad/) | [`nomad/README.md`](nomad/README.md) · [`docs/nomad-production.md`](../docs/nomad-production.md) |
+| **Kubernetes (Helm)** | [`infra/kubernetes/`](../infra/kubernetes/) | [`kubernetes/README.md`](kubernetes/README.md) · [`docs/kubernetes-deployment.md`](../docs/kubernetes-deployment.md) |
 | **Docker** | Upstream `nrel/openstudio` image | [`docker/README.md`](docker/README.md) · [`docs/container-image-strategy.md`](../docs/container-image-strategy.md) |
 
 ## Versioning

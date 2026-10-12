@@ -285,7 +285,7 @@ non-overlapping sample ranges. See ADR-0003 §Pattern 2 for details.
 
 ## Helm Chart Worker Deployment (issue #583)
 
-The OSimFlow Helm chart (`osimflow-deploy/kubernetes/helm/osimflow/`) can deploy a
+The OSimFlow Helm chart (`infra/kubernetes/`) can deploy a
 **worker Deployment** that runs the campaign coordinator natively within the
 cluster, using `KubernetesExecutor` to fan out per-sample Jobs. This enables
 fully containerized OSimFlow campaigns on Kubernetes without requiring an
@@ -294,7 +294,7 @@ external executor (Slurm, AWS Batch).
 ### Enable the Worker
 
 ```bash
-helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+helm install osimflow ./infra/kubernetes \
   --set worker.enabled=true \
   --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0" \
   --set openstudio.version=3.10.0
@@ -319,7 +319,7 @@ helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
 For multi-replica worker deployments with Redis-backed coordination:
 
 ```bash
-helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+helm install osimflow ./infra/kubernetes \
   --set worker.enabled=true \
   --set worker.replica_count=3 \
   --set worker.job_queue=redis \
@@ -331,7 +331,7 @@ helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
 ### Worker with Dask Job Queue
 
 ```bash
-helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+helm install osimflow ./infra/kubernetes \
   --set worker.enabled=true \
   --set worker.job_queue=dask \
   --set worker.dask.scheduler_address="tcp://dask-scheduler:8786" \
@@ -381,7 +381,7 @@ Per-sample Jobs use the values from `resources.cpu` and `resources.memory` in
 Deploy both the REST API server and the worker in the same Helm release:
 
 ```bash
-helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+helm install osimflow ./infra/kubernetes \
   --set api.enabled=true \
   --set worker.enabled=true \
   --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0" \

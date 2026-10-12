@@ -1,51 +1,98 @@
-replicaCount: 1
+# Default values for OSimFlow Helm chart.
 
+# Image pull policy.
 image:
-  repository: ghcr.io/anchapin/scientific_python_image
   pullPolicy: IfNotPresent
-  tag: "latest"
 
-imagePullSecrets: []
-
-nameOverride: ""
-fullnameOverride: ""
-
-serviceAccount:
-  create: true
-  name: osimflow
-  annotations: {}
-
-podAnnotations: {}
-
-podSecurityContext: {}
-
-securityContext: {}
-
-resources:
-  limits:
-    cpu: 4
-    memory: 8Gi
-  requests:
-    cpu: 1
-    memory: 2Gi
-
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
-
+# OpenStudio container image.
 openstudio:
+  # Container image tag (version). Maps to docker tag nrel/openstudio:<version>.
   version: "3.10.0"
-  container: "nrel/openstudio:3.10.0"
+  repository: nrel/openstudio
 
+# Kubernetes Job configuration.
+job:
+  # Default job TTL after completion (seconds).
+  ttl_seconds_after_finish: 300
+  # Default backoff limit for job retries.
+  backoff_limit: 3
+  # Default active deadline seconds (max runtime per job).
+  active_deadline_seconds: 14400  # 4 hours
+
+# Resource defaults for per-sample jobs.
+resources:
+  # CPU request/limit per task (cores).
+  cpu: "1"
+  # Memory request/limit per task (MiB).
+  memory: "2048Mi"
+
+# Executor configuration.
 executor:
-  max_workers: 4
+  # Kubernetes namespace for jobs.
+  namespace: default
+  # Service account name (must exist in namespace).
+  service_account: default
+  # Poll interval for job status (seconds).
   poll_interval_s: 5.0
+  # Max poll interval (seconds).
   max_poll_interval_s: 60.0
 
-persistence:
+# Ingress configuration (optional — for REST API server).
+ingress:
   enabled: false
-  storageClass: ""
-  accessMode: ReadWriteOnce
-  size: 10Gi
+  class_name: nginx
+  host: osimflow.example.com
+  path: /
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# REST API server (optional — issue #138).
+api:
+  enabled: false
+  replica_count: 1
+  service_type: ClusterIP
+  port: 8000
+  # Read-only mode (no campaign start/stop).
+  read_only: true
+
+# Campaign worker Deployment (optional — issue #583).
+# Deploys an in-cluster coordinator that runs OSimFlow campaigns using
+# KubernetesExecutor, faning out per-sample Jobs natively within the cluster.
+worker:
+  enabled: false
+  replica_count: 1
+  service_type: ClusterIP
+  # Image used for the worker. Defaults to the openstudio image.
+  image: ""
+  # Executor type for campaign fan-out. Only "kubernetes" is supported for
+  # in-cluster worker mode.
+  executor: kubernetes
+  # Task queue backend for distributing work across worker replicas:
+  #   "none"   — direct KubernetesExecutor (single-replica, no queue)
+  #   "redis"  — Redis pub/sub for cross-pod coordination (requires redis.enabled)
+  #   "dask"   — Dask.distributed scheduler (requires daskcheduler address)
+  job_queue: none
+  # Redis configuration (used when job_queue=redis).
+  redis:
+    enabled: false
+    host: osimflow-redis
+    port: 6379
+    password: ""
+  # Dask configuration (used when job_queue=dask).
+  dask:
+    scheduler_address: ""
+  # Campaign arguments passed to `osimflow run`. Override to point at a
+  # ConfigMap or PVC containing variables.yml and template_sim_package.
+  campaign_args: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+# MLflow integration (optional — issue #7).
+mlflow:
+  enabled: false
+  tracking_uri: ""
