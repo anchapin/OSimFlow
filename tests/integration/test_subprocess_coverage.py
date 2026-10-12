@@ -4,8 +4,8 @@ Without subprocess coverage measurement, ``osimflow/_work_scripts/*`` was
 invisible to the 82% gate even though ``bin/aggregate_results.py``,
 ``bin/extract_kpis.py``, ``bin/apply_params_to_model.py`` etc. exercise
 it under the stub mode used by the local smoke run and by the existing
-``tests/unit/test_aggregate_results.py`` /
-``tests/unit/test_scripts.py`` subprocess harnesses. The
+``tests/unit/results/test_aggregate_results.py`` /
+``tests/unit/tooling/test_scripts.py`` subprocess harnesses. The
 ``COVERAGE_PROCESS_START`` bootstrap plus ``[tool.coverage.run] patch =
 ["subprocess"]`` plus the new Makefile invocation flips the switch;
 this test pins the configuration so a future regression in any of the

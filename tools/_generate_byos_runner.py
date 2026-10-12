@@ -80,7 +80,7 @@ the in-subprocess ``_INLINE_BYOS_CONTRACT`` dict are regenerated from
 ``osimflow.byos_contract._BYOS_CONTRACT`` on every regeneration, so they
 cannot drift apart.  Adding a new entry to ``byos_contract`` without
 re-running the generator will fail the drift tests in
-``tests/unit/test_byos.py``.
+``tests/unit/byos/test_byos.py``.
 """
 
 from __future__ import annotations

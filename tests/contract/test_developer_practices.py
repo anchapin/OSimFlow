@@ -112,7 +112,7 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # CI runs them in a separate workflow with Docker pre-provisioned.
     #
     # NOTE: we deliberately do NOT add ``-m "not slow"`` here even though
-    # tests/unit/test_manifest_files.py is ``@pytest.mark.slow``. Those
+    # tests/unit/config/test_manifest_files.py is ``@pytest.mark.slow``. Those
     # tests contribute unique coverage of the manifest-writing
     # code in campaign.py. They are kept in this fixture but excluded
     # from the *fast* CI gate (the `test` job runs

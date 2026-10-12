@@ -78,7 +78,7 @@ gate) and the per-module readings were::
     osimflow/_campaign_artifacts.py           91.28%
     osimflow/_campaign_analysis.py            15.79% (fanout-oracle subset; full gate higher)
     osimflow/_campaign_baseline.py            98.44%
-    osimflow/_campaign_chaos.py               29.33%   (raised to ~99.00% on the issue #1692 branch — `tests/unit/test_chaos_engine_wiring.py` covers `build_default_chaos_engine`, `CampaignChaosWiring.__init__`, and `maybe_inject` directly)
+    osimflow/_campaign_chaos.py               29.33%   (raised to ~99.00% on the issue #1692 branch — `tests/unit/work/test_chaos_engine_wiring.py` covers `build_default_chaos_engine`, `CampaignChaosWiring.__init__`, and `maybe_inject` directly)
     osimflow/_campaign_code_hashes.py         92.99%
     osimflow/_campaign_cost_tracker.py        91.75%
     osimflow/_campaign_epw.py                 89.52%
@@ -247,7 +247,7 @@ FLOORS: dict[str, float] = {
     "osimflow/_campaign_artifacts.py": 90.28,  # measured 91.28%
     "osimflow/_campaign_analysis.py": 99.00,  # measured 100.00% (#1675; full gate — error branches + numeric sanity)
     "osimflow/_campaign_baseline.py": 97.44,  # measured 98.44%
-    "osimflow/_campaign_chaos.py": 98.00,  # measured 99.00% (issue #1692; `build_default_chaos_engine` + `CampaignChaosWiring.__init__` + `maybe_inject` now directly tested in `tests/unit/test_chaos_engine_wiring.py`)
+    "osimflow/_campaign_chaos.py": 98.00,  # measured 99.00% (issue #1692; `build_default_chaos_engine` + `CampaignChaosWiring.__init__` + `maybe_inject` now directly tested in `tests/unit/work/test_chaos_engine_wiring.py`)
     "osimflow/_campaign_code_hashes.py": 91.99,  # measured 92.99%
     "osimflow/_campaign_cost_tracker.py": 90.75,  # measured 91.75%
     "osimflow/_campaign_epw.py": 88.52,  # measured 89.52%
@@ -341,7 +341,7 @@ FLOORS: dict[str, float] = {
     "osimflow/offline_bundle.py": 93.20,  # measured 94.20% (issue #1640)
     "osimflow/pareto.py": 96.09,  # measured 97.09%
     "osimflow/registry.py": 97.20,  # measured 98.20%
-    "osimflow/input_staging.py": 76.50,  # measured 78% (issue #1809; tests/unit/test_input_staging.py)
+    "osimflow/input_staging.py": 76.50,  # measured 78% (issue #1809; tests/unit/config/test_input_staging.py)
     "osimflow/remote_runner.py": 81.23,  # measured 82.23%
     "osimflow/results_db.py": 93.83,  # measured 94.83%
     "osimflow/results_query.py": 58.82,  # measured 59.82%

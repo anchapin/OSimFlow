@@ -408,7 +408,7 @@ def _drive_server_lifecycle(
 class _SyncStubExecutor(BaseExecutor):
     """Synchronous stub executor (runs ``fn`` inline) for fast Campaign tests.
 
-    Mirrors ``StubExecutor`` in tests/unit/test_graceful_shutdown.py: it runs
+    Mirrors ``StubExecutor`` in tests/unit/campaign/test_graceful_shutdown.py: it runs
     the work function synchronously in-process so the Campaign's cancellation
     polling and cache-teardown paths are exercised without any real fan-out
     latency. This is the substrate a Coordinator worker uses locally.

@@ -526,7 +526,7 @@ def _check_network() -> CheckResult:
 #  * All 10 checks are registered with ``ExecutorRegistry`` at module
 #    import time (see ``_register_executor_health_checks`` at the bottom
 #    of the file). Adding a new executor without a check breaks the
-#    regression test in tests/unit/test_health_check.py.
+#    regression test in tests/unit/config/test_health_check.py.
 # ---------------------------------------------------------------------------
 
 

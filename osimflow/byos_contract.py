@@ -16,7 +16,7 @@ runner read from here:
   via ``make contract`` (or ``python tools/_generate_byos_runner.py``)
   after editing this file to keep the inline runner in sync.
 
-The structural test in ``tests/unit/test_byos.py`` asserts the generator
+The structural test in ``tests/unit/byos/test_byos.py`` asserts the generator
 produced the expected snapshot — preventing drift between this module
 and the generated runner.
 

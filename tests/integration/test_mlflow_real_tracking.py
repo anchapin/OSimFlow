@@ -1,6 +1,6 @@
 """Real MLflow file-tracking-URI smoke test (issue #948).
 
-Unlike the unit tests in ``tests/unit/test_mlflow_hook.py`` (which inject a
+Unlike the unit tests in ``tests/unit/integrations/test_mlflow_hook.py`` (which inject a
 fake ``mlflow`` module into ``sys.modules``), this test exercises the real
 ``mlflow`` package against a hermetic ``file://`` tracking store — **no server
 required**. It catches API regressions (e.g. ``log_metric`` rejecting a

@@ -910,9 +910,9 @@ class BaseExecutor(abc.ABC):
           ``LocalExecutor``) implements this hook.
         * :meth:`submit` — the legacy full override. Kept working for
           backward compatibility with in-tree test stubs (e.g.
-          ``tests/unit/test_resource_quota.py::_NoOpExecutor``,
-          ``tests/unit/test_pause_lifecycle.py``, ``TestParetoTracking``
-          in ``tests/unit/test_campaign.py``) that pre-date the
+          ``tests/unit/executors/test_resource_quota.py::_NoOpExecutor``,
+          ``tests/unit/campaign/test_pause_lifecycle.py``, ``TestParetoTracking``
+          in ``tests/unit/campaign/test_campaign.py``) that pre-date the
           template-method split. A stub that overrides ``submit()``
           bypasses the rate limiter by design — production executors
           must NOT do this.
@@ -924,7 +924,7 @@ class BaseExecutor(abc.ABC):
         directly (the parent's ``__abstractmethods__`` set would flag
         them as still abstract, raising ``TypeError`` at construction
         time — see the PR #1602 CI regression in
-        ``tests/unit/test_resource_quota.py`` and friends).
+        ``tests/unit/executors/test_resource_quota.py`` and friends).
         """
         raise NotImplementedError(
             f"{type(self).__name__} must override either _do_submit() (recommended, "

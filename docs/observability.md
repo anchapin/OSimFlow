@@ -171,7 +171,7 @@ See `osimflow/observability.py` for the full ABC definition.
 ## Real-sink validation
 
 The observability backends are unit-tested with mocks only (see
-`tests/unit/test_observability_*.py`). To validate the real wire format —
+`tests/unit/observability/test_observability_*.py`). To validate the real wire format —
 metric names, label/dimension shapes, and API call signatures against live
 metric sinks — a set of skip-gated integration tests live in
 `tests/integration/test_observability_real_sinks.py`.

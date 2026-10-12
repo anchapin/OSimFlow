@@ -1,7 +1,7 @@
 """Full-Campaign real-``openstudio.cli`` E2E test exercising all 7 DAG steps.
 
 This is the local/docker real-CLI profile from PRD §5.2 #6 (issue #939). Unlike
-``tests/unit/test_run_openstudio_sim.py::TestRealOpenStudioE2E``, which only
+``tests/unit/work/test_run_openstudio_sim.py::TestRealOpenStudioE2E``, which only
 exercises the ``run_openstudio_sim`` work function in isolation, this test drives
 ``Campaign.run()`` end-to-end with a *real* ``openstudio.cli`` through the full
 7-step DAG::

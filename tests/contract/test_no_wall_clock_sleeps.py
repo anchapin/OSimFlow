@@ -101,7 +101,7 @@ _EXEMPT_MAX_CALLS: dict[str, int] = {
     # subsequent PRs without restructuring osimflow.alerting; each new
     # sleep is structurally required because there is no Event hook on
     # ``dest.received`` to ``wait()`` on.
-    "tests/unit/test_alerting.py": 6,
+    "tests/unit/observability/test_alerting.py": 6,
 }
 
 # Per-file budget of allowed sub-second wall-clock upper-bound assertions
@@ -112,7 +112,7 @@ _EXEMPT_MAX_CALLS: dict[str, int] = {
 _EXEMPT_WALL_CLOCK_ASSERTS: dict[str, int] = {
     # Empty by design: issue #1693 removed the only sub-second wall-clock
     # upper-bound assertion in the merge-gated suite (the
-    # ``elapsed < 0.05`` flake at tests/unit/test_distributed_jobqueue.py
+    # ``elapsed < 0.05`` flake at tests/unit/cache/test_distributed_jobqueue.py
     # had no structural replacement).  Any future per-file budget entry
     # needs an issue-referenced justification, mirroring
     # ``_EXEMPT_MAX_CALLS`` above.
