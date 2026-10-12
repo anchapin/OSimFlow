@@ -24,11 +24,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _USER_GUIDE = REPO_ROOT / "docs" / "user-guide.md"
 _MAIN = REPO_ROOT / "osimflow" / "cli" / "parser.py"
-_STORAGE = REPO_ROOT / "osimflow" / "storage.py"
+_STORAGE = REPO_ROOT / "osimflow" / "_storage_endpoint.py"
 
 _ADD_ARGUMENT_RE = re.compile(r'add_argument\(\s*"(-{2}[a-z0-9-]+)"')
 _LOOPBACK_HOSTS_RE = re.compile(r"_LOOPBACK_HOSTS\s*=\s*frozenset\(\{([^}]*)\}\)")
-_VALIDATOR_RE = re.compile(r"def _validate_storage_endpoint\(.*?(?=^\S)", re.M | re.S)
+_VALIDATOR_RE = re.compile(r"def _validate_storage_endpoint\(.*?(?=^\S|\Z)", re.M | re.S)
 _SECTION_RE = re.compile(
     r"^#### Result storage & cost tracking$.*?(?=^#### )",
     re.M | re.S,
@@ -61,11 +61,11 @@ def _parse_endpoint_flags() -> set[str]:
 
 
 def _validator_body() -> str:
-    """The source of _validate_storage_endpoint in osimflow/storage.py."""
+    """The source of _validate_storage_endpoint (osimflow/_storage_endpoint.py)."""
     match = _VALIDATOR_RE.search(_STORAGE.read_text(encoding="utf-8"))
     assert match, (
         "_validate_storage_endpoint moved or was renamed in "
-        "osimflow/storage.py; update _VALIDATOR_RE here."
+        "osimflow/_storage_endpoint.py; update _VALIDATOR_RE here."
     )
     return match.group(0)
 
