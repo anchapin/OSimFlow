@@ -1322,6 +1322,11 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   to Boto3 `containerOverrides` for `AWSBatchExecutor` (legacy `vcpus`/`memory` on EC2; `resourceRequirements` with a validated, never-rounded vCPU/MiB pair on Fargate job definitions, fractional `cpus` allowed — issue #1808, `docs/aws-batch-terraform.md`). Add
   new resource kinds by extending the `submit()` signature,
   not by adding process-local config.
+- **Quality ratchets (issue #1892):** ruff `BLE001`/`S110`/`T20`/`PGH003`
+  and mypy `ignore-without-code` are enforced on `osimflow/`; existing
+  violations are baselined per file in `pyproject.toml`
+  `[tool.ruff.lint.per-file-ignores]` and may only shrink — never add
+  entries; fix the code instead.
 - **Enforcement:** ruff (lint + format), `mypy --strict`, and
   `make contract`. Run `make precommit` before pushing; CI
   mirrors the same checks. See `docs/DEVELOPMENT.md`.
