@@ -298,6 +298,13 @@ name in this section.
   ADR-0004): a Redis outage fails loud rather than silently diverges,
   and recovery is via `osimflow run --outdir <same>` cache replay
   (see `docs/user-guide.md` §7.7).
+- `osimflow/_document_store_base.py`, `osimflow/_document_store_sqlite.py`
+  — issue #1890 split of `document_store.py`: the base module holds
+  `DocumentStore` ABC, the error classes, `apply_update_operators` and
+  `_document_matches`; the sqlite module holds `SQLiteDocumentStore` and
+  `_build_where_clause`. `osimflow/document_store.py` keeps
+  `RedisDocumentStore`, `_get_redis_sync` (test patch seam),
+  `build_document_store`, and re-exports every historical name.
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
 - `osimflow/monitoring.py` — `RunTrace` (includes

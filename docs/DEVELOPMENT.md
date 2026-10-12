@@ -181,7 +181,9 @@ OSimFlow/
 │   ├── config.py                # CampaignConfig + per-executor config dataclasses
 │   ├── cache.py                 # SQLiteCache + CacheKey
 │   ├── distributed_cache.py     # DistributedCache (Redis) + build_cache
-│   ├── document_store.py        # SQLite/Redis document stores + build_document_store
+│   ├── document_store.py        # Redis document store + build_document_store (re-exports SQLite/base)
+│   ├── _document_store_base.py  # DocumentStore ABC, errors, update/match helpers
+│   ├── _document_store_sqlite.py # SQLiteDocumentStore + SQL where-clause builder
 │   ├── storage.py               # ResultStorage backends (local/S3/GCS/Azure)
 │   ├── taskqueue.py             # Producer/ConsumerQueue ABCs + Dask/NoOp queues
 │   ├── jobqueue.py              # Filesystem JobQueue (crash recovery)

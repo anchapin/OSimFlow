@@ -129,6 +129,8 @@ The measured readings (captured from a full sequential
 see commit body) are::
 
     osimflow/__init__.py                       80.95%  (387 stmts; public API surface — re-export hub)
+    osimflow/_document_store_base.py           88.00%  (107 stmts; issue #1890)
+    osimflow/_document_store_sqlite.py         91.00%  (240 stmts; issue #1890)
     osimflow/_eval_safe.py                     81.36%  (118 stmts)
     osimflow/_sqlite_store.py                   67.69%  (130 stmts)
     osimflow/_subprocess_utils.py               85.45%  (110 stmts)
@@ -150,7 +152,7 @@ see commit body) are::
     osimflow/data_point_manager.py             77.81%  (236 stmts)
     osimflow/distributed_cache.py              87.50%  (392 stmts)
     osimflow/distributed_jobqueue.py           73.38%  (313 stmts)
-    osimflow/document_store.py                 81.19%  (868 stmts)
+    osimflow/document_store.py                 74.00%  (387 stmts; issue #1890 — was 81.19%/868 before split)
     osimflow/errors.py                        100.00%   (34 stmts; exception hierarchy)
     osimflow/event_log.py                     100.00%  (123 stmts)
     osimflow/handoff_record.py                100.00%   (54 stmts; issue #1176)
@@ -293,6 +295,8 @@ FLOORS: dict[str, float] = {
     # docstring seed table.
     "osimflow/__init__.py": 79.95,  # measured 80.95% (public API re-export hub)
     "osimflow/_eval_safe.py": 80.36,  # measured 81.36%
+    "osimflow/_document_store_base.py": 87.00,  # measured 88.00% (issue #1890 split of document_store.py; unit-subset reading)
+    "osimflow/_document_store_sqlite.py": 90.00,  # measured 91.00% (issue #1890 split of document_store.py; unit-subset reading)
     "osimflow/_sqlite_store.py": 66.69,  # measured 67.69%
     "osimflow/_subprocess_utils.py": 84.45,  # measured 85.45%
     "osimflow/aggregation.py": 92.40,  # measured 93.40%
@@ -313,7 +317,7 @@ FLOORS: dict[str, float] = {
     "osimflow/data_point_manager.py": 76.81,  # measured 77.81%
     "osimflow/distributed_cache.py": 86.50,  # measured 87.50%
     "osimflow/distributed_jobqueue.py": 72.38,  # measured 73.38%
-    "osimflow/document_store.py": 80.19,  # measured 81.19%
+    "osimflow/document_store.py": 73.00,  # measured 74.00% unit-subset after issue #1890 split (Redis backend + factory remain; SQLite parts moved to _document_store_*.py)
     "osimflow/errors.py": 99.00,  # measured 100.00% (exception hierarchy)
     "osimflow/event_log.py": 99.00,  # measured 100.00%
     "osimflow/handoff_record.py": 99.00,  # measured 100.00% (issue #1176)
