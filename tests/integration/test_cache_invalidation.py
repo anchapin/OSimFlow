@@ -946,6 +946,17 @@ def test_import_closure_excludes_third_party_and_stdlib() -> None:
     assert (package_root / "algorithms" / "doe_analysis.py") in closure
     assert (package_root / "version_detection.py") in closure
     assert (package_root / "weather.py") in closure
+    # Modules split out of work.py (issue #1890) must stay in the closure so
+    # editing them still invalidates code_hashes["work"].
+    for name in (
+        "_work_artifacts",
+        "_work_env",
+        "_work_heartbeat",
+        "_work_osm_mutations",
+        "_work_retry",
+        "_work_stub",
+    ):
+        assert (package_root / f"{name}.py") in closure, name
     assert (package_root / "storage.py") in closure
     assert (package_root / "__init__.py") not in closure
 

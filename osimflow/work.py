@@ -12,418 +12,89 @@ CLI surface to maintain.
 """
 
 import importlib.resources
-import json
+import json  # noqa: F401  (re-export)
 import logging
 import os
-import random
-import re
+import random  # noqa: F401  (re-export)
+import re  # noqa: F401  (re-export)
 import shutil
-import signal
-import sqlite3
+import signal  # noqa: F401  (re-export)
+import sqlite3  # noqa: F401  (re-export)
 import subprocess
 import sys
 import tempfile
 import threading
-import time
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
+import time  # noqa: F401  (tests patch osimflow.work.time.sleep)
 from pathlib import Path
 from typing import Any
 
-from ._subprocess_utils import run_subprocess  # neutral location (issue #910)
-from .apply_params import OSMAttributeError
-from .errors import OSimFlowRuntimeError
-from .json_utils import safe_json_dumps
-from .osw_results import OUT_OSW_NAME, RUN_LOG_NAME
-from .storage import ResultStorage
-from .version_detection import (
+# Names moved to the _work_* modules (issue #1890) stay importable from
+# osimflow.work; the callers of patched seams remain defined in this module.
+from osimflow._subprocess_utils import run_subprocess  # neutral location (issue #910)
+from osimflow._work_artifacts import (  # noqa: F401
+    _extract_severe_error,
+    _find_sql_in_package_run,
+    _find_workflow_osw,
+    _parse_register_values,
+    _publish_run_artifacts,
+    _reuse_existing_simulation_output,
+)
+from osimflow._work_env import _WORK_SUBPROCESS_ENV_ALLOWLIST, _sanitize_env  # noqa: F401
+from osimflow._work_heartbeat import (  # noqa: F401
+    HEALTH_CHECK_INTERVAL_S,
+    HEARTBEAT_FILENAME,
+    HEARTBEAT_INTERVAL_S,
+    SimulationHealth,
+    SimulationHealthStatus,
+    _write_heartbeat,
+    check_container_health,
+)
+from osimflow._work_osm_mutations import (  # noqa: F401
+    _apply_osm_mutations,
+    _apply_osw_parameters,
+    _apply_single_osm_mutation,
+    _resolve_osm_object,
+    _set_osm_attribute,
+    _set_thermal_zone_schedule,
+)
+from osimflow._work_retry import (  # noqa: F401
+    _NON_TRANSIENT_SUBPROCESS_SIGNALS,
+    _TRANSIENT_EXIT_CODES,
+    _TRANSIENT_MESSAGE_MARKERS,
+    RetryDecision,
+    _is_signal_killed_subprocess,
+    _is_transient_error,
+    classify_failure,
+    run_with_retry,
+)
+from osimflow._work_retry import (
+    SevereEnergyPlusError as SevereEnergyPlusError,  # noqa: PLC0414
+)
+from osimflow._work_retry import (
+    TransientError as TransientError,  # noqa: PLC0414
+)
+from osimflow._work_stub import (  # noqa: F401
+    _STUB_FLOOR_AREA_M2,
+    _stub_eui_for_sample,
+    _write_stub_eplusout_sql,
+)
+from osimflow.apply_params import OSMAttributeError  # noqa: F401
+from osimflow.errors import OSimFlowRuntimeError  # noqa: F401
+from osimflow.json_utils import safe_json_dumps
+from osimflow.osw_results import OUT_OSW_NAME, RUN_LOG_NAME  # noqa: F401
+from osimflow.storage import ResultStorage
+from osimflow.version_detection import (
     VersionDetectionError,
     detect_openstudio_version,
     warn_on_cli_version_mismatch,
 )
-from .weather import EPWValidationError, discover_epw_files, validate_epw_header
+from osimflow.weather import EPWValidationError, discover_epw_files, validate_epw_header
 
 log = logging.getLogger("osimflow.work")
 
 
 # ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-class SevereEnergyPlusError(OSimFlowRuntimeError):
-    """Raised when a preflight simulation encounters severe errors."""
-
-
-class TransientError(OSimFlowRuntimeError):
-    """Raised when a simulation failure is potentially transient and retryable.
-
-    Examples: network timeout, resource contention, temporary file lock,
-    exit code indicating a recoverable condition.
-    """
-
-
-# ---------------------------------------------------------------------------
-# Failure classifier (issue #1568)
-#
-# Single source of truth for whether a work-function failure should be
-# retried. ``classify_failure`` returns a :class:`RetryDecision`; future
-# contributors add cases here rather than scattering substring / exit-code
-# checks across the per-step functions.
-#
-# Two bad interactions were closed in #1568:
-#   1. ``_TRANSIENT_EXIT_CODES`` previously included ``-1`` and ``15``
-#      (SIGTERM positive form), so a subprocess killed by SIGTERM during
-#      graceful shutdown was retried up to ``max_retries`` times — fighting
-#      every ``osimflow resume`` / ``osimflow cancel`` and stretching real-
-#      CLI campaign cancellations by tens of minutes.
-#   2. The message-substring scan matched "timeout" / "timed out" on
-#      ``subprocess.TimeoutExpired`` itself. ``TimeoutExpired`` is already
-#      classified non-transient by exception type (issue #1534), but the
-#      message fallback was a second, redundant trigger that could mask
-#      legitimate kills.
-#
-# Rule of thumb:
-#   * Type-precise matching FIRST (TimeoutError, ConnectionError,
-#     CalledProcessError with signal-kill returncode).
-#   * Narrow message-fallback LAST — only for libraries that raise
-#     stringy exceptions without proper exception types.
-#   * Default = NON_TRANSIENT. Silent retries on unrecognised errors have
-#     masked real bugs in the past; fail loud and let ``--max-sample-retries``
-#     raise the retry budget when a new transient class is added.
-# ---------------------------------------------------------------------------
-class RetryDecision(StrEnum):
-    """Outcome of :func:`classify_failure` (issue #1568).
-
-    * ``TRANSIENT`` — retry with exponential backoff (network blip,
-      resource contention, retryable I/O).
-    * ``NON_TRANSIENT`` — deterministic; re-running does not change the
-      outcome. Propagate immediately.
-    * ``BOUNDED_ZERO_RETRY`` — reserved for a future bounded-retry class
-      (e.g. a 3-strike rule on a specific flake); zero retries today.
-    """
-
-    TRANSIENT = "transient"
-    NON_TRANSIENT = "non_transient"
-    BOUNDED_ZERO_RETRY = "bounded_zero_retry"
-
-
-# Subprocess exit codes that historically correlated with retryable
-# resource contention / shell-side failures in upstream openstudio-server
-# (positive form only — negative returncodes are signal kills and are
-# classified by :data:`_NON_TRANSIENT_SUBPROCESS_SIGNALS` instead).
-# Issue #1568 removed ``-1`` and ``15`` (SIGTERM positive form) — both
-# were misclassified transient and stretched every cancellation by
-# up to ``max_retries`` full simulation attempts.
-_TRANSIENT_EXIT_CODES: frozenset[int] = frozenset([2, 4, 5, 6, 11, 12, 24, 25, 26, 27, 28])
-
-
-# Signal numbers that are deliberate terminations and MUST NOT be retried
-# (issue #1568). Python's subprocess surfaces a signal kill as
-# ``returncode == -signal_number``; the classifier checks both forms.
-_NON_TRANSIENT_SUBPROCESS_SIGNALS: frozenset[int] = frozenset(
-    {
-        signal.SIGTERM,  # graceful cancellation / osimflow cancel
-        signal.SIGKILL,  # OOM-killer / hard kill
-    }
-)
-
-
-# Narrow fallback message-scan — only consulted when type-precise matching
-# missed. Intentionally excludes the bare substring ``"timeout"`` /
-# ``"timed out"`` (issue #1568): those are covered by ``TimeoutError``
-# type-precise matching and were a false-positive trap on
-# ``subprocess.TimeoutExpired``.
-_TRANSIENT_MESSAGE_MARKERS: tuple[str, ...] = (
-    "connection refused",
-    "connection reset",
-    "network is unreachable",
-    "resource busy",
-    "too many open files",
-    "disk full",
-    "i/o error",
-    "io error",
-    "temporary failure",
-)
-
-
-def _is_signal_killed_subprocess(exc: BaseException) -> bool:
-    """Return True if *exc* is a ``CalledProcessError`` killed by a deliberate signal.
-
-    Python's subprocess surfaces signal kills as ``returncode == -signal_number``
-    (e.g. ``-15`` for SIGTERM, ``-9`` for SIGKILL). The positive form is
-    rare but covered defensively for completeness.
-
-    Signal kills are NEVER transient (issue #1568): SIGTERM is graceful
-    cancellation (``osimflow cancel`` / ``osimflow resume``); SIGKILL is
-    usually the OOM-killer or a hard kill — re-executing the same sample
-    would burn the same budget and hit the same wall again.
-    """
-    if not isinstance(exc, subprocess.CalledProcessError):
-        return False
-    rc = exc.returncode
-    if rc is None:
-        return False
-    if rc < 0:
-        return -rc in _NON_TRANSIENT_SUBPROCESS_SIGNALS
-    return rc in _NON_TRANSIENT_SUBPROCESS_SIGNALS
-
-
-def classify_failure(exc: BaseException) -> RetryDecision:
-    """Classify a work-function failure into a retry decision (issue #1568).
-
-    Order of checks — most specific first:
-
-    1. :class:`subprocess.TimeoutExpired` → ``NON_TRANSIENT``. The
-       configured wall-clock bound was hit; re-running burns the same
-       budget and still fails (issue #1534). This MUST be checked before
-       the broader :class:`TimeoutError` branch below because
-       ``TimeoutExpired`` is a ``TimeoutError`` subclass on 3.11+.
-    2. :class:`subprocess.CalledProcessError` killed by SIGTERM/SIGKILL
-       → ``NON_TRANSIENT``. Deliberate termination; retry fights graceful
-       shutdown (issue #1568).
-    3. :class:`osimflow.work.TransientError` → ``TRANSIENT``. Explicit
-       signal from the work layer that this is a retryable condition
-       (e.g. stale container heartbeat — see ``run_openstudio_sim``).
-    4. :class:`ConnectionError` or :class:`TimeoutError` (non-subprocess)
-       → ``TRANSIENT``. Genuine network / read-timeout conditions raised
-       by urllib3, requests, boto3, stdlib socket, etc.
-    5. :class:`subprocess.CalledProcessError` whose ``returncode`` is in
-       the curated :data:`_TRANSIENT_EXIT_CODES` set → ``TRANSIENT``.
-    6. Fallback message-scan against :data:`_TRANSIENT_MESSAGE_MARKERS`
-       → ``TRANSIENT`` if any marker substring matches.
-    7. Default → ``NON_TRANSIENT``. Silent retries on unrecognised errors
-       have masked real bugs in the past; fail loud and add a new branch
-       here when a new transient class is identified.
-    """
-    # Hard non-transient: deliberate termination / wall-clock timeout.
-    # Both MUST be checked before the broader ``TimeoutError`` branch
-    # because ``subprocess.TimeoutExpired`` is a ``TimeoutError`` subclass
-    # on 3.11+.
-    if isinstance(exc, subprocess.TimeoutExpired) or _is_signal_killed_subprocess(exc):
-        return RetryDecision.NON_TRANSIENT
-
-    # Hard transient: explicit work-layer signal or genuine network failure.
-    if isinstance(exc, (TransientError, ConnectionError, TimeoutError)):
-        return RetryDecision.TRANSIENT
-
-    # Subprocess exit-code classification — only applies when we have a
-    # ``CalledProcessError``; default for that branch is ``NON_TRANSIENT``
-    # (an unrecognised exit code should fail loud, not retry silently).
-    if isinstance(exc, subprocess.CalledProcessError):
-        rc = exc.returncode
-        return (
-            RetryDecision.TRANSIENT
-            if rc is not None and rc in _TRANSIENT_EXIT_CODES
-            else RetryDecision.NON_TRANSIENT
-        )
-
-    # Fallback message-scan — only consulted when type-precise matching
-    # missed. Intentionally excludes bare "timeout" / "timed out" markers
-    # (covered by the ``TimeoutError`` branch above).
-    msg = str(exc).lower()
-    if any(marker in msg for marker in _TRANSIENT_MESSAGE_MARKERS):
-        return RetryDecision.TRANSIENT
-
-    return RetryDecision.NON_TRANSIENT
-
-
-def _is_transient_error(exc: BaseException) -> bool:
-    """Back-compat boolean wrapper around :func:`classify_failure`.
-
-    Existing call sites still expect a ``bool``; this shim keeps them
-    green while the classifier carries the full decision surface.
-    """
-    return classify_failure(exc) == RetryDecision.TRANSIENT
-
-
-# ---------------------------------------------------------------------------
-# Subprocess env sanitization (issue #1027)
-#
-# Without ``env=`` on ``subprocess.run(...)``, the child inherits the
-# orchestrator's full environment — including any AWS / GitHub / Redis
-# secrets the orchestrator itself was handed.  Every subprocess call site
-# in this module passes ``env=_sanitize_env()`` so those secrets cannot
-# leak to ``openstudio.cli`` or the Python work scripts.
-#
-# The allowlist here is intentionally narrower than
-# ``osimflow.byos._SAFE_ENV_WHITELIST`` (issue #1007 owns BYOS semantics).
-# ``openstudio.cli`` is a trusted binary that needs PATH and the Python
-# interpreter variables to start; it does not need user-shell vars like
-# ``USER`` / ``USERNAME`` and we don't want any framework flags that are
-# only meaningful to the orchestrator itself.
-#
-# SECURITY — HMAC task-payload secret (issue #1388):
-#   ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and ``OSIMFLOW_TASK_PAYLOAD_SIG``
-#   are the HMAC shared secret and signature that gate which cloud-side
-#   workloads the orchestrator may submit (issue #1177).  Compromise of
-#   the secret lets an attacker forge ``OSIMFLOW_TASK_PAYLOAD`` +
-#   ``OSIMFLOW_TASK_PAYLOAD_SIG`` and pivot into arbitrary
-#   ``python -m osimflow.remote_runner`` invocations on Nomad /
-#   Kubernetes — that is, into the entire step-call surface.  The
-#   legitimate consumer of these vars is *only* ``osimflow.remote_runner``,
-#   which runs inside a Nomad / Kubernetes Job that receives its env
-#   directly from the substrate's Job spec (set by the executor via
-#   :func:`osimflow.task_payload_hmac.build_signature_env`) — it never
-#   reads its env through this allowlist.  Therefore we ship an explicit
-#   allowlist of *named* vars and refuse to forward ``OSIMFLOW_*``
-#   wildcards: every byte that reaches ``bin/*.py`` or the local stub
-#   subprocess must be justified by name.
-# ---------------------------------------------------------------------------
-_WORK_SUBPROCESS_ENV_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        # POSIX basics the child needs to locate binaries, locale data,
-        # and the temp dir.
-        "PATH",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        # Python interpreter variables.  An explicit list rather than the
-        # legacy ``PYTHON*`` prefix keeps the surface tight — a future
-        # ``PYTHON_TEMP_SECRET`` style mistake cannot leak by accident.
-        "PYTHONPATH",
-        "PYTHONHOME",
-        "PYTHONIOENCODING",
-        "PYTHONUNBUFFERED",
-        "PYTHONHASHSEED",
-        # Legitimate OSIMFLOW_* flags consumed by work scripts.
-        # ``OSIMFLOW_STUB_SIM`` is the testing / development escape
-        # hatch (see :func:`_is_stub_mode`); ``OSIMFLOW_RUN_ID`` lets
-        # child logs correlate with the parent campaign;
-        # ``OSIMFLOW_LOG_LEVEL`` lets the CLI surface log-verbosity
-        # overrides.  ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and
-        # ``OSIMFLOW_TASK_PAYLOAD_SIG`` are **deliberately absent** —
-        # see the SECURITY block above (issue #1388).
-        "OSIMFLOW_STUB_SIM",
-        "OSIMFLOW_RUN_ID",
-        "OSIMFLOW_LOG_LEVEL",
-    }
-)
-
-
-def _sanitize_env() -> dict[str, str]:
-    """Return a sanitized env for subprocesses spawned from this module (issue #1027).
-
-    Builds a clean ``dict[str, str]`` from an explicit per-call allowlist
-    (issue #1388):
-
-    * POSIX basics (``PATH``, ``HOME``, ``LANG``, ``LC_ALL``, ``TMPDIR``,
-      ``TEMP``, ``TMP``) — needed to locate binaries, locale data, and
-      the temp directory;
-    * Python interpreter variables (``PYTHONPATH``, ``PYTHONHOME``,
-      ``PYTHONIOENCODING``, ``PYTHONUNBUFFERED``, ``PYTHONHASHSEED``);
-    * a short list of legitimate ``OSIMFLOW_*`` framework flags
-      (``OSIMFLOW_STUB_SIM``, ``OSIMFLOW_RUN_ID``, ``OSIMFLOW_LOG_LEVEL``).
-
-    Everything else from ``os.environ`` (notably ``AWS_*``, ``GITHUB_TOKEN``,
-    ``REDIS_URL``, ``*_SECRET*``, **and the HMAC task-payload secret /
-    signature pair** ``OSIMFLOW_TASK_PAYLOAD_SECRET`` /
-    ``OSIMFLOW_TASK_PAYLOAD_SIG``) is **dropped**.  This is the single
-    defence against accidental credential leakage from the orchestrator
-    to ``openstudio.cli run -w ...`` and the bundled ``bin/*.py`` work
-    scripts.
-    """
-    clean: dict[str, str] = {}
-    for name, value in os.environ.items():
-        if name in _WORK_SUBPROCESS_ENV_ALLOWLIST:
-            clean[name] = value
-    return clean
-
-
-# ---------------------------------------------------------------------------
-# Container / simulation health monitoring (issue #415)
-# ---------------------------------------------------------------------------
-
-HEARTBEAT_INTERVAL_S = 30  # seconds between heartbeat writes
-HEARTBEAT_FILENAME = ".heartbeat.json"
-HEALTH_CHECK_INTERVAL_S = 60  # default health check tolerance (stale if no beat for this long)
-
-
-class SimulationHealthStatus(StrEnum):
-    HEALTHY = "healthy"
-    STALE = "stale"  # no heartbeat within the expected interval
-    UNKNOWN = "unknown"
-
-
-@dataclass
-class SimulationHealth:
-    status: SimulationHealthStatus
-    last_heartbeat: float | None = None
-    pid: int | None = None
-    message: str | None = None
-
-
-def _write_heartbeat(sim_out: Path, pid: int, sample_id: str, version: str) -> None:
-    """Write a heartbeat file for the running simulation.
-
-    The heartbeat is consumed by ``check_container_health`` to detect
-    simulations that have gone silent (container freeze, process deadlock).
-    """
-    heartbeat_path = sim_out / HEARTBEAT_FILENAME
-    payload = {
-        "pid": pid,
-        "sample_id": sample_id,
-        "version": version,
-        "timestamp": time.time(),
-    }
-    try:
-        sim_out.mkdir(parents=True, exist_ok=True)
-        heartbeat_path.write_text(json.dumps(payload), encoding="utf-8")
-    except OSError as exc:
-        log.warning("failed to write heartbeat for %s: %s", sample_id, exc)
-
-
-def check_container_health(
-    sim_out: Path,
-    health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
-) -> SimulationHealth:
-    """Check whether the simulation container is still responsive.
-
-    Returns a ``SimulationHealth`` describing the current state:
-    - HEALTHY: heartbeat is fresh (written within health_check_interval).
-    - STALE: heartbeat exists but is older than health_check_interval.
-    - UNKNOWN: no heartbeat file exists (simulation may not have started yet
-      or the file was deleted).
-
-    The caller can use the STALE status to decide whether to cancel and
-    retry a frozen simulation.  This function does **not** terminate
-    anything — it only reports health status.
-    """
-    heartbeat_path = sim_out / HEARTBEAT_FILENAME
-    if not heartbeat_path.is_file():
-        return SimulationHealth(
-            status=SimulationHealthStatus.UNKNOWN,
-            message="no heartbeat file found",
-        )
-    try:
-        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
-        last_ts = payload.get("timestamp")
-        if last_ts is None:
-            return SimulationHealth(
-                status=SimulationHealthStatus.UNKNOWN, message="heartbeat has no timestamp"
-            )
-        age = time.time() - last_ts
-        if age > health_check_interval:
-            return SimulationHealth(
-                status=SimulationHealthStatus.STALE,
-                last_heartbeat=last_ts,
-                pid=payload.get("pid"),
-                message=f"heartbeat is {age:.0f}s old (threshold {health_check_interval}s)",
-            )
-        return SimulationHealth(
-            status=SimulationHealthStatus.HEALTHY,
-            last_heartbeat=last_ts,
-            pid=payload.get("pid"),
-        )
-    except (OSError, json.JSONDecodeError) as exc:
-        return SimulationHealth(
-            status=SimulationHealthStatus.UNKNOWN,
-            message=f"failed to read heartbeat: {exc}",
-        )
-
-
+# Work-script resolver
 def _heartbeat_writer(
     sim_out: Path,
     sample_id: str,
@@ -441,77 +112,6 @@ def _heartbeat_writer(
     _write_heartbeat(sim_out, pid, sample_id, version)
 
 
-def run_with_retry(
-    func: Callable[..., Path],
-    *args: Any,
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    sample_id: str = "unknown",
-    step_name: str = "step",
-    **kwargs: Any,
-) -> Path:
-    """Run *func* with exponential-backoff retry for transient failures.
-
-    Parameters
-    ----------
-    func
-        Callable to invoke. Must accept *args and **kwargs.
-    *args
-        Positional arguments forwarded to *func*.
-    max_retries
-        Maximum retry attempts (default 3). A value <= 0 disables retries.
-    base_delay
-        Initial backoff delay in seconds (default 1.0). Each retry
-        doubles the delay: delay = base_delay * 2**attempt.
-    sample_id
-        Identifier for log messages.
-    step_name
-        Step name for log messages.
-    **kwargs
-        Keyword arguments forwarded to *func*.
-
-    Returns
-    -------
-    Path
-        The return value of *func* on first success or after retries.
-
-    Raises
-    ------
-    The last exception encountered when all retries are exhausted.
-    """
-    if max_retries <= 0:
-        return func(*args, **kwargs)
-
-    last_exc: BaseException | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return func(*args, **kwargs)
-        except BaseException as exc:  # noqa: BLE001
-            if not _is_transient_error(exc):
-                raise
-            last_exc = exc
-            if attempt == max_retries:
-                break
-            delay = min(base_delay * (2**attempt), 60.0)
-            jittered_delay = random.uniform(0, delay)
-            log.warning(
-                "%s %s transient failure (attempt %d/%d), retrying in %.1fs: %s",
-                step_name,
-                sample_id,
-                attempt + 1,
-                max_retries,
-                jittered_delay,
-                exc,
-            )
-            time.sleep(jittered_delay)
-
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("run_with_retry: unexpected code path")  # pragma: no cover
-
-
-# ---------------------------------------------------------------------------
-# Work-script resolver
 # ---------------------------------------------------------------------------
 def _resolve_work_script(name: str) -> Path:
     """Resolve the path to a work script (e.g. ``generate_lhs.py``).
@@ -666,209 +266,6 @@ def default_apply_parameters(
     return result
 
 
-def _apply_osw_parameters(osw_path: Path, parameters: dict[str, Any]) -> dict[str, Any]:
-    """Apply OSW-level parameters in place; return the remaining ``.osm`` ones.
-
-    Handles the reserved ``__epw_file__`` key (``weather_file``) and every
-    parameter that maps to a measure argument in *osw_path*. Categorical
-    ``{"label": ..., "index": ...}`` values are written as their label.
-    """
-    from .apply_params import (  # noqa: PLC0415
-        EPW_FILE_KEY,
-        _mutate_osw,
-        mutate_osw_weather_file,
-        parse_osw_arguments,
-    )
-
-    remaining = dict(parameters)
-    epw_file = remaining.pop(EPW_FILE_KEY, None)
-    if not osw_path.is_file():
-        if epw_file is not None:
-            log.warning("epw_file requested but no workflow.osw in %s; ignoring", osw_path.parent)
-        return remaining
-    if remaining:
-        mappings = parse_osw_arguments(osw_path)
-        osw_params: dict[str, Any] = {}
-        for key in list(remaining):
-            mapped = mappings.get(key)
-            if mapped is not None and mapped.kind == "measure_argument":
-                value = remaining.pop(key)
-                if isinstance(value, dict) and "label" in value:
-                    value = value["label"]
-                osw_params[key] = value
-        if osw_params:
-            _mutate_osw(osw_path, osw_params, mappings)
-    if epw_file is not None:
-        mutate_osw_weather_file(osw_path, str(epw_file))
-    return remaining
-
-
-def _apply_osm_mutations(
-    model: Any,
-    openstudio: Any,
-    variables: dict[str, Any],
-) -> None:
-    """Apply a dict of variable mutations to an OpenStudio model.
-
-    Supports both simple attribute names and dotted ``Type_name.attr``
-    names. For dotted names, resolves the target object by type and
-    instance name before setting the attribute.
-    """
-    from .apply_params import parse_dotted_name  # noqa: PLC0415
-
-    for name, value in variables.items():
-        _apply_single_osm_mutation(model, openstudio, name, value, parse_dotted_name)
-
-
-def _apply_single_osm_mutation(
-    model: Any,
-    openstudio: Any,
-    name: str,
-    value: Any,
-    parse_dotted_name: Any,
-) -> None:
-    """Apply a single variable mutation to an OpenStudio model.
-
-    Args:
-        name: Variable name, either simple (``"lighting_power_density"``)
-            or dotted (``"SpaceType_Office.lighting_power_density"``).
-        value: The value to set.
-        parse_dotted_name: Callable to parse dotted names.
-    """
-    parsed = parse_dotted_name(name)
-
-    obj: Any = model
-    attribute: str = parsed.attribute
-
-    if parsed.object_type is not None and parsed.object_name is not None:
-        obj = _resolve_osm_object(model, openstudio, parsed.object_type, parsed.object_name)
-        if obj is None:
-            raise OSMAttributeError(
-                f"Cannot resolve {parsed.object_type} '{parsed.object_name}' "
-                f"for variable '{name}'. The object does not exist in the model."
-            )
-
-    coerced: Any = value
-    if isinstance(value, bool):
-        coerced = value
-    elif isinstance(value, int):
-        coerced = float(value)
-    elif isinstance(value, (float, str)):
-        coerced = value
-    else:
-        raise TypeError(
-            f"Cannot coerce parameter value of type {type(value).__name__} "
-            f"for OpenStudio SDK: {value!r}"
-        )
-
-    _set_osm_attribute(obj, openstudio, parsed.object_type, attribute, coerced)
-
-
-def _resolve_osm_object(
-    model: Any,
-    openstudio: Any,
-    object_type: str,
-    object_name: str,
-) -> Any | None:
-    """Resolve an OpenStudio model object by type and instance name."""
-    getter_name = "get" + object_type + "s"
-    getter = getattr(model, getter_name, None)
-    if getter is None:
-        log.warning("Unsupported .osm object type %r — skipping", object_type)
-        return None
-    objects = getter()
-    for obj in objects:
-        if obj.nameString() == object_name:
-            return obj
-    return None
-
-
-def _set_osm_attribute(
-    obj: Any,
-    openstudio: Any,
-    object_type: str | None,
-    attribute: str,
-    value: Any,
-) -> None:
-    """Set an attribute on an OpenStudio model object.
-
-    Dispatches to typed setters for known object/attribute pairs, and
-    falls back to ``setString`` for generic IDD attributes.
-    """
-    setter_map: dict[str, dict[str, Any]] = {
-        "SpaceType": {
-            "lighting_power_density": lambda o, v: o.setLightingPowerPerFloorArea(v),
-        },
-        "ThermalZone": {
-            "cooling_setpoint": lambda o, v: _set_thermal_zone_schedule(
-                o, openstudio, v, "cooling"
-            ),
-            "heating_setpoint": lambda o, v: _set_thermal_zone_schedule(
-                o, openstudio, v, "heating"
-            ),
-        },
-        "Construction": {
-            "u_value": lambda o, v: o.setThermalConductance(v),
-        },
-        "Lights": {
-            "lighting_level": lambda o, v: o.setLightingLevel(v),
-        },
-        "People": {
-            "people_per_floor_area": lambda o, v: o.setPeopleperSpaceFloorArea(v),
-        },
-    }
-
-    if object_type is not None and object_type in setter_map:
-        attr_map = setter_map[object_type]
-        setter = attr_map.get(attribute)
-        if setter is not None:
-            try:
-                setter(obj, value)
-                return
-            except Exception as exc:
-                log.error(
-                    "Failed to set %s.%s=%r: %s",
-                    object_type,
-                    attribute,
-                    value,
-                    exc,
-                    exc_info=True,
-                )
-                raise OSMAttributeError(
-                    f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
-                ) from exc
-
-    if isinstance(value, str):
-        obj.setString(attribute, value)
-    elif isinstance(value, (int, float)):
-        obj.setString(attribute, str(value))
-    else:
-        raise OSMAttributeError(
-            f"No setter for {object_type}.{attribute} with value type "
-            f"{type(value).__name__}. Define an explicit setter in "
-            f"osimflow/work.py."
-        )
-
-
-def _set_thermal_zone_schedule(
-    zone: Any,
-    openstudio: Any,
-    value: float,
-    kind: str,
-) -> None:
-    """Set a constant temperature schedule on a ThermalZone.
-
-    Creates a ScheduleConstant and assigns it as the cooling or heating
-    setpoint schedule on the zone.
-    """
-    schedule = openstudio.openstudiomodelcore.ScheduleConstant(zone.model())
-    schedule.setValue(value)
-    if kind == "cooling":
-        zone.setCoolingSetpointTemperatureSchedule(schedule)
-    else:
-        zone.setHeatingSetpointTemperatureSchedule(schedule)
-
-
 def _apply_parameters_via_cli(
     template: Path,
     sample_id: str,
@@ -970,122 +367,6 @@ def _apply_parameters_stub(
     return out_dir
 
 
-# ---------------------------------------------------------------------------
-# Simulation work: the heavy step. The real `openstudio.cli run -w`
-# invocation lives in `_run_real_openstudio` below (closed #31); a
-# stub fallback for tests is selected via OSIMFLOW_STUB_SIM=1.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Helpers for real OpenStudio CLI invocation (issue #31)
-# ---------------------------------------------------------------------------
-
-
-def _find_workflow_osw(modified_sim_package: Path) -> Path | None:
-    """Locate the workflow.osw in the modified simulation package.
-
-    Searches the package root first, then recursively. Returns the first
-    ``.osw`` found, preferring the root-level file over nested copies.
-    Returns ``None`` when no ``.osw`` exists in the package.
-    """
-    root_osw = modified_sim_package / "workflow.osw"
-    if root_osw.is_file():
-        return root_osw
-    # Fallback: search recursively for any .osw file.
-    for osw in modified_sim_package.rglob("*.osw"):
-        return osw
-    return None
-
-
-def _find_sql_in_package_run(package_run_dir: Path) -> Path | None:
-    """Find an existing ``eplusout.sql`` produced during apply-parameters.
-
-    The OpenStudio workflow can write SQL either directly under ``run/`` or in
-    nested sub-workflow directories (for example ``run/**/SR1/run/eplusout.sql``).
-    Prefer the top-level SQL when present; otherwise return the most recently
-    modified nested SQL as the best candidate for downstream extraction.
-    """
-    top_level_sql = package_run_dir / "eplusout.sql"
-    if top_level_sql.is_file():
-        return top_level_sql
-
-    if not package_run_dir.is_dir():
-        return None
-
-    candidates = [p for p in package_run_dir.rglob("eplusout.sql") if p.is_file()]
-    if not candidates:
-        return None
-
-    try:
-        return max(candidates, key=lambda p: (p.stat().st_mtime, p.stat().st_size))
-    except OSError:
-        # If metadata lookup fails, fall back to deterministic lexical ordering.
-        return sorted(candidates)[-1]
-
-
-def _publish_run_artifacts(package_dir: Path, sim_out: Path) -> None:
-    """Copy ``out.osw`` / ``run.log`` into *sim_out* (issue #1871).
-
-    Done on success and failure so measure-reported values and failure
-    messages survive; best effort, never raises.
-    """
-    run_dir = package_dir / "run"
-    run_log = run_dir / "run.log"
-    if not run_log.is_file() and run_dir.is_dir():
-        # fall back to the shallowest nested log (sub-workflow runs)
-        nested = sorted(run_dir.rglob("run.log"), key=lambda p: (len(p.parts), str(p)))
-        run_log = nested[0] if nested else run_log
-    for src, name in (
-        (package_dir / "out.osw", OUT_OSW_NAME),
-        (run_log, RUN_LOG_NAME),
-    ):
-        try:
-            if src.is_file():
-                sim_out.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, sim_out / name)
-        except OSError:
-            log.warning("could not publish %s to %s", src, sim_out, exc_info=True)
-
-
-def _reuse_existing_simulation_output(
-    modified_sim_package: Path,
-    sim_out: Path,
-    sample_id: str,
-) -> bool:
-    """Reuse simulation outputs produced by apply-parameters when available."""
-    sql_in_sim_out = sim_out / "eplusout.sql"
-    if sql_in_sim_out.is_file():
-        log.info(
-            "simulation already run for sample=%s (eplusout.sql exists in sim_out) - skipping",
-            sample_id,
-        )
-        return True
-
-    package_run_dir = modified_sim_package / "run"
-    sql_in_package_run = _find_sql_in_package_run(package_run_dir)
-    if sql_in_package_run is None:
-        return False
-
-    log.info(
-        "simulation already run for sample=%s (eplusout.sql found at %s) - copying to sim_out",
-        sample_id,
-        sql_in_package_run,
-    )
-    shutil.copy(sql_in_package_run, sql_in_sim_out)
-
-    sql_parent = sql_in_package_run.parent
-    for fname in ["eplusout.err", "eplusout.end", "eplusout.mtd"]:
-        src = sql_parent / fname
-        if not src.is_file() and sql_parent != package_run_dir:
-            src = package_run_dir / fname
-        dst = sim_out / fname
-        if src.is_file() and not dst.is_file():
-            shutil.copy(src, dst)
-
-    return True
-
-
 def _get_openstudio_cmd() -> str:
     """Return the name of the OpenStudio CLI executable on PATH.
 
@@ -1116,173 +397,6 @@ def _is_stub_mode() -> bool:
     a real OpenStudio installation.
     """
     return os.environ.get("OSIMFLOW_STUB_SIM") == "1"
-
-
-# Default conditioned floor area used by the stub eplusout.sql writer
-# (issue #1419).  Picked so a single-zone model has a plausible 100 m²
-# floor — large enough that EUI values come out in the realistic
-# 10-1000 kWh/m²/yr window the validator enforces
-# (see ``osimflow._work_scripts.extract_kpis.DEFAULT_QUALITY_THRESHOLDS``).
-_STUB_FLOOR_AREA_M2: float = 100.0
-
-
-def _stub_eui_for_sample(sample_id: str) -> float:
-    """Return a deterministic per-sample site EUI in MJ/m² for the stub.
-
-    Issue #1419 — the stub must produce values that satisfy the
-    validator's critical-KPI check (``eui_kwh_m2_yr`` and
-    ``total_site_energy_kwh``).  We cycle through five plausible MJ/m²
-    values keyed off the trailing decimal digit of the zero-padded
-    sample id (``0001`` → 1, ``0002`` → 2, …).  Range chosen so the
-    final kWh/m²/yr EUI lands between ~28 and ~64, comfortably inside
-    the 10-1000 kWh/m²/yr validator band and leaving room for
-    per-sample variance that the basic plots can visualise.
-
-    The function is deterministic — same input always returns the same
-    value — so tests are reproducible.
-    """
-    try:
-        n = int(sample_id)
-    except (TypeError, ValueError):
-        n = 0
-    cycle = (100.0, 130.0, 160.0, 190.0, 220.0)
-    return cycle[n % len(cycle)]
-
-
-def _write_stub_eplusout_sql(sim_out: Path, sample_id: str) -> Path:
-    """Write a valid stub ``eplusout.sql`` containing the EnergyPlus
-    schema that ``osimflow._work_scripts.extract_kpis`` actually reads.
-
-    Issue #1419 — the previous stub wrote the literal string
-    ``"-- placeholder sql"`` to ``eplusout.sql``, which is not a valid
-    SQLite database.  ``extract_kpis`` then raised
-    ``sqlite3.DatabaseError: file is not a database``, logged
-    "Corrupt eplusout.sql", and emitted a KPI JSON without the critical
-    KPIs (``eui_kwh_m2_yr`` and ``total_site_energy_kwh``).  Every
-    sample failed the validator, ``AGGREGATE_RESULTS`` ran into
-    downstream ``_verify_step_inputs`` failures, and the campaign died.
-
-    This helper writes a real SQLite database containing the minimal
-    rows for ``TabularDataWithStrings`` (the EnergyPlus denormalised
-    tabular output) and ``Zones`` (per-zone floor area) that satisfy
-    the validator's critical-KPI check.  Values are deterministic
-    functions of *sample_id* so KPI variance still exists for the
-    aggregation and basic-plot steps while staying reproducible across
-    test runs.
-
-    The schema mirrors only the columns ``extract_kpis`` reads — see
-    :func:`osimflow._work_scripts.extract_kpis.extract_kpis_from_sql`
-    and ``_fetch_floor_area``.  End-use, peak-demand, and unmet-hours
-    tables are intentionally omitted; missing tables cause
-    ``extract_kpis`` to silently skip those non-critical KPIs rather
-    than fail.
-
-    Returns:
-        The path to the written ``eplusout.sql`` file.
-    """
-    sql_path = sim_out / "eplusout.sql"
-    site_energy_mj_per_m2 = _stub_eui_for_sample(sample_id)
-    site_energy_mj_total = site_energy_mj_per_m2 * _STUB_FLOOR_AREA_M2
-
-    conn: sqlite3.Connection | None = None
-    try:
-        conn = sqlite3.connect(str(sql_path))
-        cur = conn.cursor()
-
-        # Denormalised tabular data — what ``_fetch_scalar`` reads.
-        # Column order matches the EnergyPlus SQL output convention so
-        # the schema can later be enriched without rewriting the writer.
-        cur.execute(
-            """
-            CREATE TABLE TabularDataWithStrings (
-                ReportName TEXT,
-                ReportForString TEXT,
-                TableName TEXT,
-                RowName TEXT,
-                ColumnName TEXT,
-                Units TEXT,
-                Value TEXT
-            )
-            """
-        )
-
-        # Minimum rows for the two critical KPIs the validator requires
-        # (``eui_kwh_m2_yr`` and ``total_site_energy_kwh``).  The EUI
-        # table is the one referenced by ``_extract_eui`` in
-        # ``extract_kpis.py``.  Values are stored in MJ — the extractor
-        # multiplies by ``_MJ_TO_KWH = 1/3.6`` to convert to kWh.
-        tabular_rows = [
-            (
-                "AnnualBuildingUtilityPerformanceSummary",
-                "Entire Facility",
-                "Site and Source Energy",
-                "Total Site Energy",
-                "Energy Per Total Building Area",
-                "MJ/m2",
-                f"{site_energy_mj_per_m2:.3f}",
-            ),
-            (
-                "AnnualBuildingUtilityPerformanceSummary",
-                "Entire Facility",
-                "Site and Source Energy",
-                "Total Site Energy",
-                "Total Energy",
-                "MJ",
-                f"{site_energy_mj_total:.3f}",
-            ),
-            # Net Site Energy per area — populates ``net_eui_kwh_m2_yr``
-            # when extract_kpis runs the optional branch.
-            (
-                "AnnualBuildingUtilityPerformanceSummary",
-                "Entire Facility",
-                "Site and Source Energy",
-                "Net Site Energy",
-                "Energy Per Total Building Area",
-                "MJ/m2",
-                f"{site_energy_mj_per_m2 * 0.9:.3f}",
-            ),
-        ]
-        cur.executemany(
-            "INSERT INTO TabularDataWithStrings VALUES (?, ?, ?, ?, ?, ?, ?)",
-            tabular_rows,
-        )
-
-        # Per-zone floor area — what ``_fetch_floor_area`` reads first.
-        cur.execute(
-            """
-            CREATE TABLE Zones (
-                ZoneIndex INTEGER,
-                ZoneName TEXT,
-                Floor_Area REAL
-            )
-            """
-        )
-        cur.execute(
-            "INSERT INTO Zones VALUES (?, ?, ?)",
-            (1, "Zone 1", _STUB_FLOOR_AREA_M2),
-        )
-
-        conn.commit()
-    except sqlite3.DatabaseError as exc:
-        # Never let the stub-SQL writer itself fail the campaign —
-        # fall back to an empty database so downstream code sees the
-        # same "no tabular schema" warning path it would have seen
-        # before this fix (the issue #1419 root-cause path is closed
-        # by the helper itself; this except only protects against
-        # disk-full / permission errors on the stub write).
-        log.warning(
-            "_write_stub_eplusout_sql: failed to write %s for sample=%s: %s",
-            sql_path,
-            sample_id,
-            exc,
-        )
-        sql_path.write_text("")
-        raise
-    finally:
-        if conn is not None:
-            conn.close()
-
-    return sql_path
 
 
 def _run_openstudio_sim_impl(
@@ -1555,36 +669,6 @@ def run_openstudio_sim(
         health_check_interval=health_check_interval,
         timeout_s=timeout_s,
     )
-
-
-def _parse_register_values(stdout_path: Path) -> dict[str, object] | None:
-    """Parse runner.registerValue JSON output from CLI stdout.
-
-    The OpenStudio CLI writes a JSON array of registered value objects
-    to stdout when measures call ``runner.registerValue``. Each entry
-    has the shape::
-
-        {"name": "variable_name", "value": 123.45, "type": "Double"}
-
-    Returns a dict mapping names to values, or None if parsing fails
-    or no registered values are found.
-    """
-    if not stdout_path.is_file():
-        return None
-    try:
-        text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
-        if not text:
-            return None
-        data = json.loads(text)
-        if not isinstance(data, list):
-            return None
-        result: dict[str, object] = {}
-        for entry in data:
-            if isinstance(entry, dict) and "name" in entry and "value" in entry:
-                result[str(entry["name"])] = entry["value"]
-        return result if result else None
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _run_real_openstudio(
@@ -2369,16 +1453,3 @@ def preflight_run_model(
             log.info("preflight: stub simulation passed")
 
     log.info("PREFLIGHT_RUN_MODEL: complete — seed model validated")
-
-
-def _extract_severe_error(output: str) -> str:
-    """Extract the first severe error line from EnergyPlus output.
-
-    Searches for lines matching the pattern ``'<N> * Severe'`` which
-    EnergyPlus uses for severe-level diagnostics.  Returns the first
-    match, or an empty string if none found.
-    """
-    for line in output.splitlines():
-        if re.search(r"^\s*(?:\d+\s+)?\*+\s*Severe", line, re.IGNORECASE):
-            return line.strip()
-    return ""
