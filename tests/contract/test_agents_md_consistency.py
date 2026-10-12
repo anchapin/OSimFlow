@@ -179,7 +179,9 @@ def test_agents_md_states_half_open_reset_value() -> None:
     updated — the inversion #1455 fixed cannot reintroduce.
     """
     reset = _parse_half_open_reset_value()
-    text = _AGENTS_MD.read_text(encoding="utf-8")
+    text = _AGENTS_MD.read_text(encoding="utf-8") + (
+        REPO_ROOT / "docs" / "agents-reference.md"
+    ).read_text(encoding="utf-8")
     assert f"reset to {reset} on a failed ``half_open`` → ``open`` transition" in text, (
         f"AGENTS.md does not describe the circuit-breaker half_open reset "
         f"value ({reset}). Update the §5 circuit_breaker.py entry to match "

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """check_agents_contract.py — machine-check the AGENTS.md / code contract.
 
+Issue #1893: matching is section-scoped (docs/agents-reference.md
+"Directory map" / "CLI flags", AGENTS.md §2 for steps) and whole-token.
+
 Issue #15: PRs that add a new public symbol to osimflow/__init__.py, a
 new bin/*.py script, or a new file under osimflow/executors/ MUST update
 AGENTS.md in the same PR. This script enforces that invariant.
@@ -194,45 +197,97 @@ def _cli_flags() -> list[str]:
     return sorted(names)
 
 
-def _check(agents_md: str, terms: list[str], category: str) -> list[str]:
-    return [t for t in terms if t not in agents_md]
+REFERENCE_DOC = "docs/agents-reference.md"
+DIRECTORY_MAP_HEADING = "Directory map"
+CLI_FLAGS_HEADING = "CLI flags"
+STEPS_HEADING = "2. Build & run commands"
+
+
+def _section(text: str, heading_prefix: str) -> str:
+    """Body of the first ``## <heading_prefix>...`` section (issue #1893)."""
+    parts = re.split(r"^## ", text, flags=re.MULTILINE)
+    for part in parts[1:]:
+        if part.startswith(heading_prefix):
+            return part
+    return ""
+
+
+def _mentions(scope: str, term: str) -> bool:
+    """Whole-token match: ``term`` must not be embedded in a longer
+    identifier / path / flag (e.g. ``--aws-batch`` must not match
+    ``--aws-batch-queue``)."""
+    return re.search(rf"(?<![\w-]){re.escape(term)}(?![\w-])", scope) is not None
+
+
+def _check(scope: str, terms: list[str], category: str) -> list[str]:
+    return [t for t in terms if not _mentions(scope, t)]
+
+
+def _load_scopes() -> tuple[str, str, str] | None:
+    """(directory map, flag list, DAG-steps scope) or None if a file is missing."""
+    for rel in ("AGENTS.md", REFERENCE_DOC):
+        if not (REPO_ROOT / rel).is_file():
+            print(f"ERROR: {REPO_ROOT / rel} not found", file=sys.stderr)
+            return None
+    agents_md = (REPO_ROOT / "AGENTS.md").read_text()
+    reference = (REPO_ROOT / REFERENCE_DOC).read_text()
+    return (
+        _section(reference, DIRECTORY_MAP_HEADING),
+        _section(reference, CLI_FLAGS_HEADING),
+        _section(agents_md, STEPS_HEADING),
+    )
 
 
 def main() -> int:
-    agents_md_path = REPO_ROOT / "AGENTS.md"
-    if not agents_md_path.is_file():
-        print(f"ERROR: {agents_md_path} not found", file=sys.stderr)
+    scopes = _load_scopes()
+    if scopes is None:
         return 1
-    agents_md = agents_md_path.read_text()
+    dir_map, flag_list, steps_scope = scopes
 
-    errors: list[str] = []
+    errors: list[str] = [
+        f"section '{name}' missing or empty"
+        for name, body in (
+            (DIRECTORY_MAP_HEADING, dir_map),
+            (CLI_FLAGS_HEADING, flag_list),
+            (STEPS_HEADING, steps_scope),
+        )
+        if not body.strip()
+    ]
 
-    for sym in _check(agents_md, _public_symbols(), "public symbol"):
-        errors.append(f"public symbol `{sym}` (from osimflow/__init__.py) missing from AGENTS.md")
-    for script in _check(agents_md, _bin_scripts(), "bin script"):
-        errors.append(f"bin script `{script}` missing from AGENTS.md")
-    for ef in _check(agents_md, _executor_files(), "executor"):
-        errors.append(f"executor `{ef}` missing from AGENTS.md")
-    for sym in _check(agents_md, _executor_public_symbols(), "executor public symbol"):
+    for sym in _check(dir_map, _public_symbols(), "public symbol"):
+        errors.append(
+            f"public symbol `{sym}` (from osimflow/__init__.py) missing from the Directory map section of docs/agents-reference.md"
+        )
+    for script in _check(dir_map, _bin_scripts(), "bin script"):
+        errors.append(
+            f"bin script `{script}` missing from the Directory map section of docs/agents-reference.md"
+        )
+    for ef in _check(dir_map, _executor_files(), "executor"):
+        errors.append(
+            f"executor `{ef}` missing from the Directory map section of docs/agents-reference.md"
+        )
+    for sym in _check(dir_map, _executor_public_symbols(), "executor public symbol"):
         errors.append(
             f"executor public symbol `{sym}` (top-level class/def/assign in osimflow/executors/) "
-            f"missing from AGENTS.md — private (``_``-prefixed) names are intentionally skipped (issue #1574)"
+            f"missing from the Directory map section of docs/agents-reference.md — private (``_``-prefixed) names are intentionally skipped (issue #1574)"
         )
-    for ecf in _check(agents_md, _executor_config_files(), "executor config module"):
+    for ecf in _check(dir_map, _executor_config_files(), "executor config module"):
         errors.append(
-            f"executor config module `{ecf}` (osimflow/executor_configs/) missing from AGENTS.md"
+            f"executor config module `{ecf}` (osimflow/executor_configs/) missing from the Directory map section of docs/agents-reference.md"
         )
-    for step in _check(agents_md, _step_names_from_campaign(), "step"):
-        errors.append(f"campaign step `{step}` missing from AGENTS.md")
-    for flag in _check(agents_md, [f"--{f}" for f in _cli_flags()], "CLI flag"):
-        errors.append(f"CLI flag `{flag}` missing from AGENTS.md")
+    for step in _check(steps_scope, _step_names_from_campaign(), "step"):
+        errors.append(f"campaign step `{step}` missing from AGENTS.md §2")
+    for flag in _check(flag_list, [f"--{f}" for f in _cli_flags()], "CLI flag"):
+        errors.append(
+            f'CLI flag `{flag}` missing from the "CLI flags" section of docs/agents-reference.md'
+        )
 
     if errors:
         print(f"AGENTS.md contract check FAILED ({len(errors)} drift):", file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         print(
-            "\nFix: update AGENTS.md to mention the missing symbol/file/step/flag.",
+            "\nFix: update the matching section of docs/agents-reference.md (or AGENTS.md §2 for steps).",
             file=sys.stderr,
         )
         return 1

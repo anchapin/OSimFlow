@@ -1,23 +1,8 @@
 # OSimFlow — GitHub Copilot Instructions
 
-Auto-discovered by GitHub Copilot. **AGENTS.md is the canonical source** for
-project conventions, architecture, and task routing.
+**AGENTS.md is the canonical source** for project conventions, architecture,
+commands, and task routing. Read it before proposing or writing code.
+This file is intentionally a thin pointer (issue #1893).
 
-## Project
-
-  simulation campaigns. **NOT a web service** — no HTTP routes, no ORM, no auth layer.
-  
-  Key rules:
-  - Python 3.12+. Type hints on all public functions (mypy --strict).
-  - Use pathlib.Path over os.path. Use logging, not print.
-  - Tests via .venv/bin/pytest or `make test`, never bare `pytest`.
-  - Never commit .osm, .osw, .idf, .epw, or eplusout.* files.
-  - Exceptions: catch, log with exc_info=True, re-raise. Never swallow.
-  
-  Commands:
-    make install    # pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
-    make test       # full pytest suite
-    make lint       # ruff check
-    make typecheck  # mypy --strict osimflow/
-    make contract   # AGENTS.md + docs drift checks
-    make precommit  # pre-push safety net
+OSimFlow is a CLI + library hybrid, NOT a web service. Never run bare
+`pytest`; use `make test` / `.venv/bin/pytest`.
