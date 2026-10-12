@@ -243,10 +243,7 @@ exclude_lines = [
 line-length = 100
 target-version = "py312"
 src = ["osimflow", "bin", "user_scripts", "tests"]
-# Spike/ directory holds one-off scripts from the workflow-framework decision
-# spike. They are not shipped; lint them separately or not at all.
 extend-exclude = [
-    ".agents/spike",
     ".agents/skills",
     "worktrees",
     # ruff >= 0.16 formats Python code blocks embedded in Markdown docs.

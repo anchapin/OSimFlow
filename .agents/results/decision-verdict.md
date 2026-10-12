@@ -2,8 +2,9 @@
 
 **Status:** proposed (awaiting team ratification)
 **Date:** 2026-06-09
-**Applies the approval criteria from** `.agents/results/result-architecture.md`
-**Inputs:** `.agents/spike/` (both spikes), `.agents/results/result-architecture.md`,
+**Applies the approval criteria from** `result-architecture.md` (removed from the tree in issue #1886; see the `archive/agents-reports-1886` git tag)
+**Archive note (issue #1886):** `.agents/spike/` and the other input reports named below were removed from the tree; they remain in the `archive/agents-reports-1886` git tag.
+**Inputs:** `.agents/spike/` (both spikes), `result-architecture.md`,
 `.agents/results/architecture/0001-workflow-framework.md`, `.agents/results/monitoring-decision.md`
 
 ---

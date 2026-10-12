@@ -9,7 +9,7 @@ Cache key shape (PRIMARY KEY):
      container_digest)
 
 Invalidation rules (per gotcha #3 and the analysis in
-`.agents/results/result-architecture.md`):
+`.agents/results/architecture/0001-workflow-framework.md`):
   * Editing a file in `bin/` invalidates the steps that reference it,
     for ALL samples.
   * Changing `--openstudio_version` invalidates `RUN_OPENSTUDIO_SIM`

@@ -7,19 +7,9 @@
 example_results/
 slurm_logs/
 
-# Spike/architecture-decision artifacts: venvs and work dirs only
-.agents/spike/.venv/
-.agents/spike/*/work/
-.agents/spike/*/.venv/
-.agents/spike/work/custom_python_out/
-.agents/spike/work/snakemake_out/
-.agents/spike/work/cache_test_*/
-# Keep .agents/spike/work/fixtures/ (the variable.yml and template
-# fixture the spike scripts depend on) — not ignored above.
-
 # Per-issue agent result write-ups (e.g. result-backend-issue-11.md).
 # These are local agent deliverables, not repo content. The top-level
-# ADRs (decision-verdict.md, monitoring-decision.md, result-architecture.md)
+# ADRs (decision-verdict.md, monitoring-decision.md)
 # and files under .agents/results/architecture/ stay tracked — only
 # the per-issue `result-*.md` write-ups are excluded.
 /.agents/results/result-*.md

@@ -22,12 +22,9 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: end-of-file-fixer
-        # Spike artifacts are out of scope for the project.
-        exclude: ^\.agents/spike/
       - id: trailing-whitespace
         # Markdown line breaks in poetry quotes are meaningful; only strip in code.
         types: [python, yaml, toml]
-        exclude: ^\.agents/spike/
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
@@ -48,7 +45,6 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        exclude: ^\.agents/spike/
 
       - id: pytest-fast
         name: pytest (contract, fast subset)
