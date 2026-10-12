@@ -222,6 +222,17 @@ name in this section.
   `<measure_dir_name>.<attribute>` KPIs only when `--kpis` names them;
   `aggregate_results.extract_failure` uses the message when
   `eplusout.sql` is missing.
+- `osimflow/_work_retry.py`, `osimflow/_work_env.py`,
+  `osimflow/_work_heartbeat.py`, `osimflow/_work_osm_mutations.py`,
+  `osimflow/_work_stub.py`, `osimflow/_work_artifacts.py` — leaf helpers
+  split out of `work.py` (issue #1890): failure classification + retry
+  (`SevereEnergyPlusError`, `TransientError`, `classify_failure`,
+  `run_with_retry`), subprocess env sanitising (`_sanitize_env`), heartbeat
+  / container health, `.osm`/`.osw` mutation helpers, stub `eplusout.sql`
+  writer, and run-artifact helpers. `work.py` re-exports every moved name
+  and keeps the callers of patched seams (`run_subprocess`, `log`,
+  `_is_stub_mode`, …), so `monkeypatch`/`mock.patch` on `osimflow.work.*`
+  still takes effect. They are in the `code_hashes["work"]` import closure.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,

@@ -354,6 +354,13 @@ FLOORS: dict[str, float] = {
     "osimflow/weather.py": 96.50,  # measured 97.50%
     "osimflow/webhook.py": 88.24,  # measured 89.24%
     "osimflow/work.py": 79.26,  # measured 80.26%
+    # Split out of work.py (issue #1890); readings from the CI-flag suite.
+    "osimflow/_work_artifacts.py": 94.08,  # measured 95.08%
+    "osimflow/_work_env.py": 99.00,  # measured 100.00%
+    "osimflow/_work_heartbeat.py": 99.00,  # measured 100.00%
+    "osimflow/_work_osm_mutations.py": 36.01,  # measured 37.01% (real-OpenStudio-bindings paths unexercised without the CLI)
+    "osimflow/_work_retry.py": 95.43,  # measured 96.43%
+    "osimflow/_work_stub.py": 84.71,  # measured 85.71%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors
