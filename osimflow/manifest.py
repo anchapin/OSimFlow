@@ -2,7 +2,7 @@
 
 Each worker pushes its KPIs plus an atomic ``_manifest.json`` completion
 marker directly to object storage via the existing :class:`ResultStorage`
-backends (see ``osimflow/storage.py``).  No result bytes return to the
+backends (see ``osimflow/storage/__init__.py``).  No result bytes return to the
 submitting host.
 
 The atomic-write strategy is intentionally backend-aware (see

@@ -128,7 +128,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/remote_runner.py": 82.23,
     "osimflow/results_db.py": 94.83,
     "osimflow/results_query.py": 59.82,
-    "osimflow/storage.py": 95.27,
+    "osimflow/storage/__init__.py": 95.27,
     "osimflow/task_payload_hmac.py": 100.00,
     "osimflow/taskqueue.py": 92.96,
     "osimflow/tui.py": 94.12,
@@ -235,6 +235,7 @@ def _in_scope_files() -> set[str]:
         "osimflow/_work_scripts/*.py",
         "osimflow/api/*.py",
         "osimflow/notifications/*.py",
+        "osimflow/storage/*.py",
     ):
         out.update(
             str(p.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -254,6 +255,10 @@ def _in_scope_files() -> set[str]:
         "osimflow/_byos_runner_generated.py",
         "osimflow/alerting.py",
         "osimflow/notify.py",
+        "osimflow/_storage_azure.py",
+        "osimflow/_storage_base.py",
+        "osimflow/_storage_endpoint.py",
+        "osimflow/_storage_retry.py",
     ):
         out.discard(path)
     return out

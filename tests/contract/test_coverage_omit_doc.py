@@ -30,7 +30,7 @@ _DEV_DOCS = REPO_ROOT / "docs" / "DEVELOPMENT.md"
 
 _OMIT_HEADING = "### Coverage omissions"
 
-_MEASURED_MODULES = ("osimflow/storage.py", "osimflow/taskqueue.py")
+_MEASURED_MODULES = ("osimflow/storage/__init__.py", "osimflow/taskqueue.py")
 
 
 def _parse_omit_list() -> list[str]:

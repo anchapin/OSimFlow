@@ -174,7 +174,7 @@ see commit body) are::
     osimflow/remote_runner.py                  82.23%  (238 stmts)
     osimflow/results_db.py                     94.83%  (174 stmts)
     osimflow/results_query.py                  59.82%  (219 stmts)
-    osimflow/storage.py                        95.27%  (719 stmts)
+    osimflow/storage/__init__.py               95.27%  (719 stmts)
     osimflow/task_payload_hmac.py             100.00%   (72 stmts; issue #1177)
     osimflow/taskqueue.py                      93.46%  (129 stmts)
     osimflow/tui.py                            94.12%  (170 stmts)
@@ -345,7 +345,7 @@ FLOORS: dict[str, float] = {
     "osimflow/remote_runner.py": 81.23,  # measured 82.23%
     "osimflow/results_db.py": 93.83,  # measured 94.83%
     "osimflow/results_query.py": 58.82,  # measured 59.82%
-    "osimflow/storage.py": 94.27,  # measured 95.27%
+    "osimflow/storage/__init__.py": 94.27,  # measured 95.27%
     "osimflow/task_payload_hmac.py": 99.00,  # measured 100.00% (issue #1177)
     "osimflow/taskqueue.py": 91.96,  # measured 92.96% (#1694; seed lowered 0.5% from 93.46% per task instructions — measurement varies ~1% between sequential and xdist runs)
     "osimflow/tui.py": 93.12,  # measured 94.12%
@@ -366,10 +366,10 @@ FLOORS: dict[str, float] = {
     "osimflow/_config_quota.py": 62.00,  # measured 63.00%
     "osimflow/_config_sections.py": 99.00,  # measured 100.00%
     # Split out of storage.py (issue #1890); readings from the CI-flag suite.
-    "osimflow/_storage_azure.py": 89.00,  # measured 90.00%
-    "osimflow/_storage_base.py": 94.00,  # measured 95.00%
-    "osimflow/_storage_endpoint.py": 99.00,  # measured 100.00%
-    "osimflow/_storage_retry.py": 99.00,  # measured 100.00%
+    "osimflow/storage/azure.py": 89.00,  # measured 90.00%
+    "osimflow/storage/base.py": 94.00,  # measured 95.00%
+    "osimflow/storage/endpoint.py": 99.00,  # measured 100.00%
+    "osimflow/storage/retry.py": 99.00,  # measured 100.00%
     # Split out of health.py (issue #1890); readings from the CI-flag suite.
     "osimflow/_health_executors.py": 58.00,  # measured 59.02% in CI (CI-flag suite)
     "osimflow/_health_redis.py": 92.00,  # measured 93.00%
@@ -410,6 +410,7 @@ GLOBS = (
     "osimflow/_work_scripts/*.py",
     "osimflow/api/*.py",
     "osimflow/notifications/*.py",
+    "osimflow/storage/*.py",
 )
 
 # Documented omission list (issue #1694). Files that match the globs
@@ -432,6 +433,11 @@ OMITTED: frozenset[str] = frozenset(
         # Issue #1891 sys.modules aliases of osimflow/notifications/*.
         "osimflow/alerting.py",
         "osimflow/notify.py",
+        # Issue #1891 sys.modules aliases of osimflow/storage/*.
+        "osimflow/_storage_azure.py",
+        "osimflow/_storage_base.py",
+        "osimflow/_storage_endpoint.py",
+        "osimflow/_storage_retry.py",
     }
 )
 
