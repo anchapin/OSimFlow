@@ -281,7 +281,10 @@ jobs:
         # Flags live in the Makefile (PYTEST_CI_FLAGS / PYTEST_COV_FLAGS,
         # issue #1476) — the single source of truth shared with the local
         # `make test` / `make test-cov` targets. Do not inline them here.
+        # Issue #1909: the default `bash -e` has no pipefail, so `| tee`
+        # swallowed pytest's exit status and failures passed CI.
         run: |
+          set -o pipefail
           start=$(date +%s)
           make test-cov PYTEST_WORKERS=auto 2>&1 | tee pytest-output.log
           echo "$(( $(date +%s) - start ))" > pytest-wall-seconds.txt

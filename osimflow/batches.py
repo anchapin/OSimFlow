@@ -37,7 +37,7 @@ from typing import Any
 
 import yaml
 
-from .errors import OSimFlowValueError
+from .errors import OSimFlowError, OSimFlowValueError
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class BatchManifestError(OSimFlowValueError):
     """Raised for an invalid batch manifest."""
 
 
-class SubmitLockTimeout(TimeoutError):
+class SubmitLockTimeout(OSimFlowError, TimeoutError):
     """Raised when the submit lock could not be acquired in time."""
 
 

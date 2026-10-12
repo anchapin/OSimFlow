@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .errors import OSimFlowRuntimeError
+from .errors import OSimFlowError, OSimFlowRuntimeError
 from .storage import ResultStorage
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class S3CampaignError(OSimFlowRuntimeError):
     """Raised for missing/incomplete S3 campaign state."""
 
 
-class CampaignDetached(Exception):  # noqa: N818
+class CampaignDetached(OSimFlowError):  # noqa: N818
     """Control-flow signal: jobs were submitted and the handoff written; exit cleanly."""
 
 
