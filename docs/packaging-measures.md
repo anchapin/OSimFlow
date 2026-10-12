@@ -16,6 +16,7 @@
 - [7. Testing your package locally](#7-testing-your-package-locally)
 - [8. Common mistakes and troubleshooting](#8-common-mistakes-and-troubleshooting)
 - [9. Advanced patterns](#9-advanced-patterns)
+- [10. Repository size policy for the in-repo `template_sim_package/`](#10-repository-size-policy-for-the-in-repo-template_sim_package)
 
 ---
 
@@ -1030,3 +1031,23 @@ schedules = (resources_dir / "office_schedules.csv").read_text()
 - [OpenStudio image distribution](openstudio-image-distribution.md) — how OSimFlow selects the container
 - [PRD §6 — Potential challenges](OSimFlow.md) — full list of known gotchas
 - [user_scripts/README.md](../user_scripts/README.md) — BYOS script overrides (for parameter application and KPI extraction, not measure packaging)
+
+---
+
+## 10. Repository size policy for the in-repo `template_sim_package/`
+
+The `template_sim_package/` at the repository root (issue #1889) vendors 23
+measures. It once weighed about 78 MB because run outputs and scratch files
+were committed alongside the measures; after those were untracked (#1897) the
+tracked tree is about 6 MB (roughly 226 files).
+
+Decision: **keep the measures vendored in git** — no Git LFS, fetch script, or
+submodule. At ~6 MB the clone/CI cost is negligible, and the tests and
+campaigns that use the package keep working offline without an extra
+download step. Keep it small:
+
+- Never commit run outputs (`run/`, `reports/`, `eplusout.*`, `*.osm`,
+  `*.osw`, weather files) into the package; `.gitignore` excludes them.
+- Add large new payloads (more than ~1 MB each) via a fetch script modelled on
+  `scripts/fetch_example_fixture.py` rather than committing them.
+- Revisit LFS or a BCL download step if the tracked size grows past ~25 MB.
