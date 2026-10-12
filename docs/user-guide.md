@@ -1963,6 +1963,7 @@ exempt — see `tools/check_docs_sync.py::INDEX_EXEMPT_DOCS`).
 | [Contributing Guide](CONTRIBUTING.md) | How to contribute |
 | [Governance](GOVERNANCE.md) | Project governance and decision-making |
 | [Release Process](release-process.md) | Maintainer release runbook (semantic versioning) |
+| [AGENTS.md Reference](agents-reference.md) | CLI flag list and directory map for AI assistants (issue #1893) |
 | [Branch Protection](branch-protection.md) | Settings-as-code for `main` branch rules (issue #975) |
 
 #### BYOS
