@@ -723,7 +723,8 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
-        # `.agents/results/result-architecture.md` issue #2. Passing the
+        # `.agents/results/architecture/0001-workflow-framework.md` (original
+        # analysis: the `archive/agents-reports-1886` git tag). Passing the
         # cfg makes ``_compute_code_hashes`` also include the BYOS
         # user-script content hashes (issue #1011) so editing the
         # user-supplied apply / KPI scripts invalidates the per-sample

@@ -1,7 +1,7 @@
 """Cache invalidation tests.
 
 These tests are the gate for approval criterion #2 in
-`.agents/results/result-architecture.md`:
+`.agents/results/architecture/0001-workflow-framework.md`:
 
   "Validation step 3 confirms cache invalidation behaves correctly for
    `bin/*.py` edits and OpenStudio version changes."
