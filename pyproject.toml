@@ -261,7 +261,7 @@ extend-exclude = [
 [tool.ruff.lint]
 # E/W: pycodestyle; F: pyflakes; I: isort; UP: pyupgrade;
 # B: flake8-bugbear; SIM: simplify; PL: pylint.
-select = ["E", "W", "F", "I", "UP", "B", "SIM", "PL"]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "PL", "BLE", "S110", "T20", "PGH003"]
 # B008: function call in default argument (used by Pydantic-style contracts).
 # PLR0913: too many arguments (Campaign.__init__ legitimately has many).
 # PLR2004: magic value (energy-modeling domain has many "magic" constants).
@@ -274,14 +274,14 @@ fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
 # bin/*.py are CLI scripts (argparse, top-level side effects OK).
-"bin/*" = ["PL", "SIM"]
+"bin/*" = ["PL", "SIM", "BLE", "S110", "T20"]
 # scripts/*.py are CLI utility scripts that use lazy imports to avoid
 # paying import cost when the optional dependency (bson/pymongo) is absent.
-"scripts/*" = ["PL", "SIM", "PLC0415"]
+"scripts/*" = ["PL", "SIM", "PLC0415", "BLE", "S110", "T20"]
 # _work_scripts/ are CLI scripts (same as bin/).
-"osimflow/_work_scripts/*" = ["PL", "SIM"]
+"osimflow/_work_scripts/*" = ["PL", "SIM", "T20"]
 # tests/ use pytest patterns that ruff would otherwise flag.
-"tests/**" = ["PL", "SIM", "B011", "F841"]
+"tests/**" = ["PL", "SIM", "B011", "F841", "BLE", "S110", "T20"]
 # __init__.py: re-exports.
 "**/__init__.py" = ["F401"]
 # Executors use lazy SDK imports inside __init__ to avoid paying import
@@ -291,17 +291,76 @@ fixable = ["ALL"]
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
 # campaign.py: SIM108 if-else block is more readable with explanatory comment.
-"osimflow/campaign.py" = ["SIM108"]
+"osimflow/campaign.py" = ["SIM108", "BLE001", "T201"]
 # document_store.py: the rich MongoDB-style query semantics
 # (``_document_matches`` / ``update_one``) require one branch per
 # operator and many return statements; refactoring to dispatch tables
 # would obscure the per-operator semantics that the SQLite and Redis
 # backends must agree on (issue #1014).
-"osimflow/document_store.py" = ["PLR0911", "PLR0912"]
+"osimflow/document_store.py" = ["PLR0911", "PLR0912", "BLE001", "S110"]
 # campaigns.py uses lazy imports for heavy SDKs to avoid import-time overhead.
 # PLR0912: too many branches in _build_executor_from_request is intentional
 #          to map all executor types to their config dicts.
 "osimflow/api/campaigns.py" = ["PLC0415", "I001", "PLR0912"]
+
+# --- Quality ratchets (issue #1892, AGENTS.md §6) -------------------------
+# BLE001/S110 (blind/swallowed except), T20 (print) and PGH003 (blanket
+# type: ignore) are enforced for osimflow/.  Existing violations are
+# baselined per file below; the baseline may only SHRINK -- never add a
+# file or rule here, fix the code (log with exc_info=True and re-raise,
+# use logging, give ignores an error code).  CLI surfaces legitimately
+# print; non-library trees are out of scope for these rules.
+"osimflow/__main__.py" = ["T20", "BLE001", "S110"]
+"tools/*" = ["BLE", "S110", "T20"]
+"user_scripts/**" = ["BLE", "S110", "T20"]
+"examples/**" = ["BLE", "S110", "T20"]
+"notebooks/**" = ["BLE", "S110", "T20"]
+"docker/**" = ["BLE", "S110", "T20"]
+".agents/**" = ["BLE", "S110", "T20"]
+
+"osimflow/_campaign_artifacts.py" = ["BLE001"]
+"osimflow/_campaign_cost_tracker.py" = ["BLE001"]
+"osimflow/_campaign_optimization.py" = ["BLE001"]
+"osimflow/_work_scripts/aggregate_results.py" = ["BLE001"]
+"osimflow/_work_scripts/excel_to_variables.py" = ["BLE001"]
+"osimflow/_work_scripts/generate_plots.py" = ["BLE001"]
+"osimflow/alerting.py" = ["BLE001"]
+"osimflow/algorithms/calibration.py" = ["BLE001"]
+"osimflow/algorithms/da.py" = ["BLE001"]
+"osimflow/algorithms/de.py" = ["BLE001"]
+"osimflow/algorithms/doe_analysis.py" = ["BLE001"]
+"osimflow/algorithms/nsga2.py" = ["BLE001"]
+"osimflow/algorithms/rgenoud.py" = ["BLE001"]
+"osimflow/algorithms/spea2.py" = ["BLE001"]
+"osimflow/api/app.py" = ["BLE001"]
+"osimflow/api/coordinator.py" = ["BLE001"]
+"osimflow/api/results_viewer.py" = ["BLE001"]
+"osimflow/api/variables.py" = ["BLE001"]
+"osimflow/audit.py" = ["BLE001"]
+"osimflow/batches.py" = ["T201"]
+"osimflow/client.py" = ["BLE001"]
+"osimflow/config.py" = ["BLE001"]
+"osimflow/cross_run_aggregator.py" = ["S110"]
+"osimflow/distributed_cache.py" = ["BLE001"]
+"osimflow/distributed_jobqueue.py" = ["BLE001"]
+"osimflow/executors/aws_batch_executor.py" = ["BLE001"]
+"osimflow/executors/dask_jobqueue_executor.py" = ["BLE001"]
+"osimflow/executors/docker_swarm_executor.py" = ["BLE001"]
+"osimflow/executors/kubernetes_executor.py" = ["BLE001"]
+"osimflow/executors/nomad_executor.py" = ["BLE001"]
+"osimflow/exporters/osa.py" = ["BLE001"]
+"osimflow/exporters/r_dataframe.py" = ["BLE001"]
+"osimflow/health.py" = ["BLE001"]
+"osimflow/logging.py" = ["BLE001"]
+"osimflow/monitoring.py" = ["BLE001"]
+"osimflow/remote_runner.py" = ["T201"]
+"osimflow/results_db.py" = ["BLE001", "S110"]
+"osimflow/results_query.py" = ["T201"]
+"osimflow/storage.py" = ["BLE001"]
+"osimflow/taskqueue.py" = ["BLE001"]
+"osimflow/testing/executor_conformance.py" = ["S110"]
+"osimflow/viz/dashboard.py" = ["T201"]
+"osimflow/webhook.py" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]
@@ -313,6 +372,7 @@ known-first-party = ["osimflow"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+enable_error_code = ["ignore-without-code"]
 warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_untyped_defs = true
