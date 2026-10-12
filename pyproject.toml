@@ -186,7 +186,7 @@ source = ["osimflow"]
 concurrency = ["multiprocessing", "thread"]
 patch = ["subprocess"]
 # Omit list (issues #1557 + #1694):
-#   * `__main__.py` — 139 KB argparse CLI; tested end-to-end but never
+#   * `__main__.py` + `cli/*.py` (issue #1890 split) — argparse CLI; tested end-to-end but never
 #     imported as a library, so it has no per-module floor.
 #   * `algorithms/{fast99,morris,nsga2,pso,ga}.py` — pulled in via
 #     optional `[sensitivity]` (SALib) / `[optimization]` (pymoo) /
@@ -199,6 +199,7 @@ patch = ["subprocess"]
 # the gate's 82% floor (aggregate is 88.59% in the seeded measurement).
 omit = [
     "osimflow/__main__.py",
+    "osimflow/cli/*.py",
     "osimflow/algorithms/fast99.py",
     "osimflow/algorithms/morris.py",
     "osimflow/algorithms/nsga2.py",
@@ -219,6 +220,7 @@ omit = [
 # removed from `[tool.coverage.run] omit` above.
 omit = [
     "osimflow/__main__.py",
+    "osimflow/cli/*.py",
     "osimflow/algorithms/fast99.py",
     "osimflow/algorithms/morris.py",
     "osimflow/algorithms/nsga2.py",
@@ -313,6 +315,7 @@ fixable = ["ALL"]
 # use logging, give ignores an error code).  CLI surfaces legitimately
 # print; non-library trees are out of scope for these rules.
 "osimflow/__main__.py" = ["T20"]
+"osimflow/cli/*.py" = ["T20"]
 "tools/*" = ["BLE", "S110", "T20"]
 "user_scripts/**" = ["BLE", "S110", "T20"]
 "examples/**" = ["BLE", "S110", "T20"]

@@ -100,7 +100,7 @@ def load_manifest(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 def _run_actions() -> dict[str, argparse.Action]:
     """Map every ``osimflow run`` option string to its argparse action."""
-    from .__main__ import _add_run_args  # noqa: PLC0415
+    from .cli.parser import _add_run_args  # noqa: PLC0415
 
     run = argparse.ArgumentParser().add_subparsers().add_parser("run")
     _add_run_args(run)

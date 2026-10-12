@@ -123,10 +123,11 @@ def _executor_config_files() -> list[str]:
 
 def _flag_source_paths() -> list[Path]:
     """Argparse surfaces that declare OSimFlow's own ``--flags``:
-    osimflow/__main__.py plus the per-executor add_arguments hook
+    osimflow/__main__.py, the osimflow/cli/ package, plus the per-executor add_arguments hook
     modules (issue #1575)."""
     return [
         REPO_ROOT / "osimflow" / "__main__.py",
+        *sorted((REPO_ROOT / "osimflow" / "cli").glob("*.py")),
         *sorted((REPO_ROOT / "osimflow" / "executor_configs").glob("*.py")),
     ]
 

@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _USER_GUIDE = REPO_ROOT / "docs" / "user-guide.md"
-_MAIN = REPO_ROOT / "osimflow" / "__main__.py"
+_MAIN = REPO_ROOT / "osimflow" / "cli" / "parser.py"
 _STORAGE = REPO_ROOT / "osimflow" / "storage.py"
 
 _ADD_ARGUMENT_RE = re.compile(r'add_argument\(\s*"(-{2}[a-z0-9-]+)"')

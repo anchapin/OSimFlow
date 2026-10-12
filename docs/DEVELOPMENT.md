@@ -584,6 +584,8 @@ so the gate now measures them. The remaining omissions are:
 - `osimflow/__main__.py` — thin `argparse` entry point; it is exercised
   only through subprocess-level CLI invocations, not by the in-process
   pytest suite.
+- `osimflow/cli/*.py` — the CLI package split out of the entry module
+  (issue #1890); same rationale as `osimflow/__main__.py`.
 - `osimflow/algorithms/fast99.py` — FAST99 sensitivity requires the
   optional `[sensitivity]` extra (SALib), which the default CI
   environment does not install.
@@ -961,10 +963,10 @@ applies; the explicit registration is the contract.
 
 Since issue #1575, executor-specific flags live in a per-executor
 config module under `osimflow/executor_configs/` — **not** in
-`osimflow/__main__.py`. Only the executor *dispatch* stays in
-`osimflow/__main__.py`:
+`osimflow/cli/`. Only the executor *dispatch* stays in
+`osimflow/cli/executor.py`:
 
-1. In `osimflow/__main__.py`, add the executor to `_build_executor`:
+1. In `osimflow/cli/executor.py`, add the executor to `_build_executor`:
 
 ```python
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:
@@ -1021,10 +1023,10 @@ from osimflow.executor_configs import my_new
 register_executor_arguments("my_new", my_new.add_arguments)
 ```
 
-`osimflow.__main__._add_run_args` calls
+`osimflow.cli.parser._add_run_args` calls
 `add_executor_arguments(run)` once — every registered hook's flags
 are added automatically. Never call `run.add_argument(...)` for
-executor flags in `osimflow/__main__.py` directly.
+executor flags in `osimflow/cli/parser.py` directly.
 
 **Contract-checker implication:** the AGENTS.md contract check
 derives the flag list from the real parser (which calls every
@@ -1353,7 +1355,7 @@ First decide which kind of flag it is — the routing differs
   executor): the flag and its config live in that executor's config
   module under `osimflow/executor_configs/`.
 - **Campaign-wide** (`--outdir`, `--n_samples`, ...): the flag lives
-  in `osimflow/__main__.py` and the field on `CampaignConfig`.
+  in `osimflow/cli/parser.py` and the field on `CampaignConfig`.
 
 ### Executor-specific flags (issues #1575)
 
