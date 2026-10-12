@@ -123,7 +123,7 @@ def _invalidate_lhs_cache(request: Request) -> None:
                 "cache INVALIDATE GENERATE_LHS_SAMPLES (%d rows) after variable mutation",
                 cur.rowcount,
             )
-    except Exception as exc:
+    except sqlite3.Error as exc:
         log.warning("failed to invalidate LHS cache: %s", exc)
 
 

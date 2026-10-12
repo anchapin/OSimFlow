@@ -246,8 +246,8 @@ class SQLiteDocumentStore(DocumentStore):
             self._conn.commit()
             self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             self._conn.execute("PRAGMA optimize")
-        except Exception:
-            pass
+        except sqlite3.Error:
+            log.debug("document store checkpoint on close failed", exc_info=True)
         with self._lock:
             with contextlib.suppress(Exception):
                 self._conn.close()

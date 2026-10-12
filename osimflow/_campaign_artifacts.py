@@ -27,10 +27,10 @@ log = logging.getLogger("osimflow.campaign")
 def _osimflow_version() -> str:
     """Return the installed OSimFlow version, or 'unknown'."""
     try:
-        from importlib.metadata import version  # noqa: PLC0415
+        from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
 
         return version("osimflow")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 

@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
@@ -185,10 +186,10 @@ from .work import (
 def _osimflow_version() -> str:
     """Return the installed OSimFlow version, or 'unknown'."""
     try:
-        from importlib.metadata import version  # noqa: PLC0415
+        from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
 
         return version("osimflow")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 
@@ -2124,24 +2125,23 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         sample_elapsed = t1 - t0
         est_total_s = sample_elapsed * original_n
 
-        print("\n" + "=" * 60)
-        print("DRY RUN COMPLETE")
-        print("=" * 60)
-        print(f"  1/{original_n} samples processed in {sample_elapsed:.1f}s")
-        print(f"  Status: {n_ok} succeeded, {n_failed} failed")
-        print(f"  Output: {self.cfg.work_dir}")
+        summary = ["\n" + "=" * 60, "DRY RUN COMPLETE", "=" * 60]
+        summary.append(f"  1/{original_n} samples processed in {sample_elapsed:.1f}s")
+        summary.append(f"  Status: {n_ok} succeeded, {n_failed} failed")
+        summary.append(f"  Output: {self.cfg.work_dir}")
         if kpi_files:
-            print(f"  KPI file: {kpi_files[0]}")
-        print()
-        print("Full campaign estimate:")
-        print(
-            f"  {original_n} samples x {sample_elapsed:.1f}s = ~{est_total_s:.0f}s (~{est_total_s / 60:.1f} min)"
-        )
-        print()
-        print("Next steps:")
-        print(f"  1. Review output in {self.cfg.work_dir}")
-        print("  2. If correct, re-run without --dry-run for full campaign")
-        print("=" * 60)
+            summary.append(f"  KPI file: {kpi_files[0]}")
+        summary += [
+            "",
+            "Full campaign estimate:",
+            f"  {original_n} samples x {sample_elapsed:.1f}s = ~{est_total_s:.0f}s (~{est_total_s / 60:.1f} min)",
+            "",
+            "Next steps:",
+            f"  1. Review output in {self.cfg.work_dir}",
+            "  2. If correct, re-run without --dry-run for full campaign",
+            "=" * 60,
+        ]
+        sys.stdout.write("\n".join(summary) + "\n")
 
         return {
             "samples": samples,

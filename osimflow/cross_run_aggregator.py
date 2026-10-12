@@ -183,8 +183,8 @@ class CrossRunAggregator:
                 cid = data.get("campaign_id")
                 if cid:
                     return str(cid)
-            except Exception:  # noqa: BLE001
-                pass
+            except (OSError, ValueError, AttributeError):
+                log.debug("could not read campaign_id from %s", run_json, exc_info=True)
         return outdir.stem
 
     def _load_csv(self, outdir: Path) -> pd.DataFrame | None:

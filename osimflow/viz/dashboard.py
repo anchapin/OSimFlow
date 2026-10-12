@@ -147,9 +147,8 @@ def create_dashboard_app(
         import streamlit.web.bootstrap as st_bootstrap  # noqa: PLC0415
         from streamlit.web.cli import main as st_main  # noqa: PLC0415, F401
     except ImportError as exc:
-        print(
-            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]",
-            file=sys.stderr,
+        sys.stderr.write(
+            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]\n"
         )
         raise SystemExit(1) from exc
 

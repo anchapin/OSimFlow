@@ -39,6 +39,7 @@ __all__ = [
 import io
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -258,9 +259,9 @@ def _export_server_csv(
     content = combined.to_csv(index=False)
     if output_path:
         Path(output_path).write_text(content)
-        print(f"Exported {len(combined)} rows to {output_path}")
+        sys.stdout.write(f"Exported {len(combined)} rows to {output_path}\n")
     else:
-        print(content)
+        sys.stdout.write(content + "\n")
     return 0
 
 
@@ -348,8 +349,8 @@ def export_results_cli(  # noqa: PLR0912
 
     if output_path:
         Path(output_path).write_text(content)
-        print(f"Exported {len(combined)} rows to {output_path}")
+        sys.stdout.write(f"Exported {len(combined)} rows to {output_path}\n")
     else:
-        print(content)
+        sys.stdout.write(content + "\n")
 
     return 0

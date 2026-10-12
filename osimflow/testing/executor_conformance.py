@@ -31,6 +31,7 @@ Design choices
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -41,6 +42,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import pytest
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
@@ -484,7 +487,7 @@ def _check_submit_throttles_when_low_rps(executor: BaseExecutor, report: Conform
             if hasattr(handle, "result"):
                 handle.result(timeout=_DEFAULT_TIMEOUT_S)
         except Exception:  # noqa: BLE001
-            pass
+            log.debug("handle.result() failed during drain", exc_info=True)
         elapsed = time.monotonic() - t0
         # 50 ms expected; slack 40 ms absorbs scheduling jitter on slow CI.
         ok = elapsed >= 0.04
@@ -836,7 +839,7 @@ class ExecutorConformanceSuite:
                 if hasattr(handle, "result"):
                     handle.result(timeout=_DEFAULT_TIMEOUT_S)
             except Exception:  # noqa: BLE001 — substrate may not support .result()
-                pass
+                log.debug("handle.result() failed during throttle drain", exc_info=True)
             elapsed = time.monotonic() - t0
         finally:
             conformance_executor._rate_limiter = original  # type: ignore[assignment]  # noqa: SLF001
