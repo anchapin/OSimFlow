@@ -693,7 +693,7 @@ class TestMyExecutor:
 
 | File | Env var | When | Tracking issue |
 |---|---|---|---|
-| `osimflow/campaign.py` | `OSIMFLOW_DOCKER_SWARM_DRY_RUN` | `--dry-run` | #976 |
+| `osimflow/_campaign_helpers.py` | `OSIMFLOW_DOCKER_SWARM_DRY_RUN` | `--dry-run` | #976 |
 
 If you add new `os.environ[...] = ...` assignments in production code,
 document them in this table and ensure dependent tests use

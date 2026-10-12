@@ -141,7 +141,7 @@ see commit body) are::
     osimflow/byos.py                           88.30%  (367 stmts)
     osimflow/byos_contract.py                 100.00%   (52 stmts; pure declarations)
     osimflow/cache.py                          97.32%  (411 stmts)
-    osimflow/campaign.py                       86.50%  (1581 stmts; main orchestrator)
+    osimflow/campaign.py                       85.47%  (main orchestrator; re-seeded by issue #1890 split)
     osimflow/chaos.py                          93.94%  (229 stmts)
     osimflow/circuit_breaker.py               100.00%   (98 stmts; issue #1111)
     osimflow/client.py                         83.77%  (451 stmts)
@@ -306,7 +306,7 @@ FLOORS: dict[str, float] = {
     "osimflow/byos.py": 87.30,  # measured 88.30%
     "osimflow/byos_contract.py": 99.00,  # measured 100.00% (declarations)
     "osimflow/cache.py": 96.32,  # measured 97.32%
-    "osimflow/campaign.py": 85.50,  # measured 86.50% (main orchestrator)
+    "osimflow/campaign.py": 84.47,  # measured 85.47% (CI; dropped from 86.50% only because #1890 moved 100%-covered code out)
     "osimflow/chaos.py": 92.94,  # measured 93.94%
     "osimflow/circuit_breaker.py": 99.00,  # measured 100.00% (issue #1111)
     "osimflow/client.py": 82.77,  # measured 83.77%
@@ -374,6 +374,9 @@ FLOORS: dict[str, float] = {
     "osimflow/_health_executors.py": 58.00,  # measured 59.02% in CI (CI-flag suite)
     "osimflow/_health_redis.py": 92.00,  # measured 93.00%
     "osimflow/_health_types.py": 99.00,  # measured 100.00%
+    # Split out of campaign.py (issue #1890); readings from the CI-flag suite.
+    "osimflow/_campaign_dag.py": 99.00,  # measured 100.00%
+    "osimflow/_campaign_helpers.py": 99.00,  # measured 100.00%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors

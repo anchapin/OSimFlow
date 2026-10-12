@@ -94,7 +94,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/byos.py": 88.30,
     "osimflow/byos_contract.py": 100.00,
     "osimflow/cache.py": 97.32,
-    "osimflow/campaign.py": 86.50,
+    "osimflow/campaign.py": 85.47,
     "osimflow/chaos.py": 93.94,
     "osimflow/circuit_breaker.py": 100.00,
     "osimflow/client.py": 83.77,
