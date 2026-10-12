@@ -184,7 +184,7 @@ OSimFlow/
 │   ├── document_store.py        # Redis document store + build_document_store (re-exports SQLite/base)
 │   ├── _document_store_base.py  # DocumentStore ABC, errors, update/match helpers
 │   ├── _document_store_sqlite.py # SQLiteDocumentStore + SQL where-clause builder
-│   ├── storage.py               # ResultStorage backends (local/S3/GCS/Azure)
+│   ├── storage/                 # ResultStorage backends (local/S3/GCS/Azure)
 │   ├── taskqueue.py             # Producer/ConsumerQueue ABCs + Dask/NoOp queues
 │   ├── jobqueue.py              # Filesystem JobQueue (crash recovery)
 │   ├── distributed_jobqueue.py  # Redis pub/sub job-state queue
@@ -576,7 +576,7 @@ must carry a documented rationale here — enforced by
 `tests/contract/test_coverage_omit_doc.py`, which fails when an omitted
 path has no bullet below or when a bullet below no longer appears in the
 config. Issue #1452 removed the blanket omissions of
-`osimflow/storage.py` and `osimflow/taskqueue.py`: both contain
+`osimflow/storage/` and `osimflow/taskqueue.py`: both contain
 in-process logic exercised by the unit suite (including the
 security-critical https-only storage-endpoint validation from #1386),
 so the gate now measures them. The remaining omissions are:

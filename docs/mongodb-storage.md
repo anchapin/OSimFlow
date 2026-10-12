@@ -12,7 +12,7 @@ OSimFlow manages three kinds of state, each with its own storage module:
 | Campaign cache | `osimflow/cache.py` | `SQLiteCache` | Explicit, hash-keyed resume layer for per-step, per-sample outputs |
 | Document store | `osimflow/document_store.py` | `SQLiteDocumentStore` | MongoDB-equivalent JSON document persistence for KPIs, run metadata |
 | Results database | `osimflow/results_db.py` | SQLite (direct) | Per-(sample, KPI) relational table for historical analysis |
-| Result artifacts | `osimflow/storage.py` | `LocalStorage` | File-level upload/download for simulation outputs |
+| Result artifacts | `osimflow/storage/` | `LocalStorage` | File-level upload/download for simulation outputs |
 
 The first three are SQLite-based; the fourth already supports S3, GCS, and Azure Blob via the `ResultStorage` abstraction.
 
@@ -145,7 +145,7 @@ def store_kpis(conn, campaign_id: str, kpis: list[dict]) -> None:
 
 ### Parquet files on S3
 
-`osimflow/storage.py` already provides the `ResultStorage` ABC with S3, GCS, and Azure Blob implementations. Rather than storing KPI rows in a database, write them as Parquet files:
+`osimflow/storage/` already provides the `ResultStorage` ABC with S3, GCS, and Azure Blob implementations. Rather than storing KPI rows in a database, write them as Parquet files:
 
 ```
 results/
@@ -157,7 +157,7 @@ results/
     failed_simulations.csv
 ```
 
-This approach uses the existing `osimflow/storage.py` infrastructure with no new database. Query with AWS Athena, Google BigQuery, or Spark. The tradeoff is that ad-hoc SQL queries require those services; there is no interactive query console.
+This approach uses the existing `osimflow/storage/` infrastructure with no new database. Query with AWS Athena, Google BigQuery, or Spark. The tradeoff is that ad-hoc SQL queries require those services; there is no interactive query console.
 
 ## Cache Alternatives
 

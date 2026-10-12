@@ -958,16 +958,13 @@ def test_import_closure_excludes_third_party_and_stdlib() -> None:
         "_config_coerce",
         "_config_quota",
         "_config_sections",
-        "_storage_azure",
-        "_storage_base",
-        "_storage_endpoint",
-        "_storage_retry",
         "_health_executors",
         "_health_redis",
         "_health_types",
     ):
         assert (package_root / f"{name}.py") in closure, name
-    assert (package_root / "storage.py") in closure
+    for name in ("__init__", "azure", "base", "endpoint", "retry"):
+        assert (package_root / "storage" / f"{name}.py") in closure, name
     assert (package_root / "__init__.py") not in closure
 
 

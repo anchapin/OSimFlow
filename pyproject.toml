@@ -352,7 +352,7 @@ fixable = ["ALL"]
 "osimflow/health.py" = ["BLE001"]
 "osimflow/logging.py" = ["BLE001"]
 "osimflow/monitoring.py" = ["BLE001"]
-"osimflow/storage.py" = ["BLE001"]
+"osimflow/storage/__init__.py" = ["BLE001"]
 "osimflow/taskqueue.py" = ["BLE001"]
 "osimflow/webhook.py" = ["BLE001"]
 

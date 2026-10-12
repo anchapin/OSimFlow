@@ -37,13 +37,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from osimflow._storage_azure import AzureBlobStorage  # noqa: F401 — re-exported
-from osimflow._storage_base import LocalStorage, ResultStorage  # noqa: F401 — re-exported
-from osimflow._storage_endpoint import (  # noqa: F401 — re-exported
+from osimflow.storage.azure import AzureBlobStorage  # noqa: F401 — re-exported
+from osimflow.storage.base import LocalStorage, ResultStorage  # noqa: F401 — re-exported
+from osimflow.storage.endpoint import (  # noqa: F401 — re-exported
     _LOOPBACK_HOSTS,
     _validate_storage_endpoint,
 )
-from osimflow._storage_retry import (  # noqa: F401 — re-exported
+from osimflow.storage.retry import (  # noqa: F401 — re-exported
     _TRANSIENT_ERROR_MARKERS,
     _TRANSIENT_RETRY_ATTEMPTS,
     _TRANSIENT_RETRY_BASE_S,

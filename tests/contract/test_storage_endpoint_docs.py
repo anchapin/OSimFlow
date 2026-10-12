@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _USER_GUIDE = REPO_ROOT / "docs" / "user-guide.md"
 _MAIN = REPO_ROOT / "osimflow" / "cli" / "parser.py"
-_STORAGE = REPO_ROOT / "osimflow" / "_storage_endpoint.py"
+_STORAGE = REPO_ROOT / "osimflow" / "storage" / "endpoint.py"
 
 _ADD_ARGUMENT_RE = re.compile(r'add_argument\(\s*"(-{2}[a-z0-9-]+)"')
 _LOOPBACK_HOSTS_RE = re.compile(r"_LOOPBACK_HOSTS\s*=\s*frozenset\(\{([^}]*)\}\)")
@@ -61,11 +61,11 @@ def _parse_endpoint_flags() -> set[str]:
 
 
 def _validator_body() -> str:
-    """The source of _validate_storage_endpoint (osimflow/_storage_endpoint.py)."""
+    """The source of _validate_storage_endpoint (osimflow/storage/endpoint.py)."""
     match = _VALIDATOR_RE.search(_STORAGE.read_text(encoding="utf-8"))
     assert match, (
         "_validate_storage_endpoint moved or was renamed in "
-        "osimflow/_storage_endpoint.py; update _VALIDATOR_RE here."
+        "osimflow/storage/endpoint.py; update _VALIDATOR_RE here."
     )
     return match.group(0)
 
@@ -101,11 +101,11 @@ def test_documented_endpoint_flags_match_source() -> None:
     validator = _validator_body()
     assert "--allow-insecure-storage-endpoint" in validator, (
         "_validate_storage_endpoint no longer names the opt-out flag in "
-        "osimflow/storage.py; update the validator and the docs together."
+        "osimflow/storage/__init__.py; update the validator and the docs together."
     )
     assert "--allow-insecure-storage-endpoint" in declared, (
         "osimflow/__main__.py no longer declares "
-        "--allow-insecure-storage-endpoint but osimflow/storage.py still "
+        "--allow-insecure-storage-endpoint but osimflow/storage/__init__.py still "
         "enforces it — the opt-out has no CLI surface."
     )
 
@@ -119,7 +119,7 @@ def test_documented_loopback_hosts_match_source() -> None:
     """
     hosts_match = _LOOPBACK_HOSTS_RE.search(_STORAGE.read_text(encoding="utf-8"))
     assert hosts_match, (
-        "_LOOPBACK_HOSTS moved or changed shape in osimflow/storage.py; "
+        "_LOOPBACK_HOSTS moved or changed shape in osimflow/storage/__init__.py; "
         "update _LOOPBACK_HOSTS_RE here."
     )
     hosts = set(re.findall(r'"([^"]+)"', hosts_match.group(1)))
@@ -127,7 +127,7 @@ def test_documented_loopback_hosts_match_source() -> None:
     missing = {host for host in hosts if f"`{host}`" not in section}
     assert not missing, (
         f"docs/user-guide.md omits loopback hosts {sorted(missing)}; the "
-        "exemption list drifted from osimflow/storage.py _LOOPBACK_HOSTS."
+        "exemption list drifted from osimflow/storage/__init__.py _LOOPBACK_HOSTS."
     )
     paragraph_match = _PARAGRAPH_RE.search(section)
     assert paragraph_match, (
@@ -141,7 +141,7 @@ def test_documented_loopback_hosts_match_source() -> None:
     }
     assert doc_hosts == hosts, (
         f"docs/user-guide.md lists loopback hosts {sorted(doc_hosts)} but "
-        f"osimflow/storage.py exempts {sorted(hosts)}; align the two."
+        f"osimflow/storage/__init__.py exempts {sorted(hosts)}; align the two."
     )
 
 
