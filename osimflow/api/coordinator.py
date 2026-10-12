@@ -60,7 +60,7 @@ from osimflow.api.schemas import (
     CoordinatorSamplesResponse,
 )
 from osimflow.handoff_record import IDEMPOTENCY_KEY_HEADER
-from osimflow.notify import (
+from osimflow.notifications.notify import (
     EmailNotifyBackend,
     NotifyBackend,
     NullNotifyBackend,

@@ -135,7 +135,7 @@ see commit body) are::
     osimflow/_sqlite_store.py                   67.69%  (130 stmts)
     osimflow/_subprocess_utils.py               85.45%  (110 stmts)
     osimflow/aggregation.py                     93.40%  (197 stmts)
-    osimflow/alerting.py                       78.16%  (358 stmts)
+    osimflow/notifications/alerting.py         78.16%  (358 stmts)
     osimflow/apply_params.py                   86.40%  (599 stmts)
     osimflow/audit.py                          92.11%  (203 stmts)
     osimflow/byos.py                           88.30%  (367 stmts)
@@ -166,7 +166,7 @@ see commit body) are::
     osimflow/measures.py                       53.09%  (258 stmts)
     osimflow/mlflow_hook.py                   100.00%   (67 stmts)
     osimflow/monitoring.py                     87.39%  (364 stmts)
-    osimflow/notify.py                        100.00%  (143 stmts)
+    osimflow/notifications/notify.py          100.00%  (143 stmts)
     osimflow/observability.py                  97.17%  (246 stmts)
     osimflow/offline_bundle.py                 94.20%   (69 stmts; issue #1640)
     osimflow/pareto.py                         97.09%  (172 stmts)
@@ -300,7 +300,7 @@ FLOORS: dict[str, float] = {
     "osimflow/_sqlite_store.py": 66.69,  # measured 67.69%
     "osimflow/_subprocess_utils.py": 84.45,  # measured 85.45%
     "osimflow/aggregation.py": 92.40,  # measured 93.40%
-    "osimflow/alerting.py": 77.16,  # measured 78.16%
+    "osimflow/notifications/alerting.py": 77.16,  # measured 78.16%
     "osimflow/apply_params.py": 85.40,  # measured 86.40%
     "osimflow/audit.py": 91.11,  # measured 92.11%
     "osimflow/byos.py": 87.30,  # measured 88.30%
@@ -331,7 +331,8 @@ FLOORS: dict[str, float] = {
     "osimflow/measures.py": 52.09,  # measured 53.09%
     "osimflow/mlflow_hook.py": 99.00,  # measured 100.00%
     "osimflow/monitoring.py": 86.39,  # measured 87.39%
-    "osimflow/notify.py": 99.00,  # measured 100.00%
+    "osimflow/notifications/notify.py": 99.00,
+    "osimflow/notifications/__init__.py": 99.00,  # package docstring only  # measured 100.00%
     "osimflow/observability.py": 96.17,  # measured 97.17%
     "osimflow/server_csv.py": 79.0,  # measured 80% (issue #1872)
     "osimflow/osw_results.py": 88.0,  # measured 89% (issue #1871)
@@ -385,6 +386,7 @@ GLOBS = (
     "osimflow/executors/*.py",
     "osimflow/_work_scripts/*.py",
     "osimflow/api/*.py",
+    "osimflow/notifications/*.py",
 )
 
 # Documented omission list (issue #1694). Files that match the globs
@@ -404,6 +406,9 @@ OMITTED: frozenset[str] = frozenset(
         # ``osimflow.byos_contract._BYOS_CONTRACT``; covered indirectly
         # by the contract tests, not a per-module regression target.
         "osimflow/_byos_runner_generated.py",
+        # Issue #1891 sys.modules aliases of osimflow/notifications/*.
+        "osimflow/alerting.py",
+        "osimflow/notify.py",
     }
 )
 

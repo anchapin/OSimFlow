@@ -9,7 +9,6 @@ API; everything else is an implementation detail.
 from typing import TYPE_CHECKING
 
 from ._campaign_observability import ObservabilityManager
-from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
 from .campaign import Campaign, CampaignAbortError, CampaignError, QuotaExceededError
@@ -95,7 +94,8 @@ from .measures import (
     UnmappedVariableError,
 )
 from .monitoring import RunTrace, StepTrace
-from .notify import (
+from .notifications.alerting import AlertManager, build_alert_manager
+from .notifications.notify import (
     EmailNotifyBackend,
     NotifyBackend,
     NullNotifyBackend,
