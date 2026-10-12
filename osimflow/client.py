@@ -48,7 +48,7 @@ from pydantic import BaseModel, Field
 # leaf module that itself only depends on pydantic; importing it via the
 # ``osimflow.api`` package transitively loads the FastAPI-bound ``app``
 # module, but the client already lives in the ``[api]`` extra and the
-# existing tests require it (see ``tests/unit/test_client.py``'s
+# existing tests require it (see ``tests/unit/api/test_client.py``'s
 # ``pytest.importorskip("fastapi", ...)``), so the new dependency edge is
 # consistent with the existing ``[api]``-extra contract.
 from osimflow.api.schemas import (

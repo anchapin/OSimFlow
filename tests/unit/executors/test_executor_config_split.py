@@ -28,7 +28,7 @@ import yaml
 
 from osimflow.config import load_config
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT_PATH = REPO_ROOT / "tests" / "unit" / "fixtures" / "run_cli_flags_pre1575.json"
 
 #: The ten built-in executors that must own a registered argument hook.

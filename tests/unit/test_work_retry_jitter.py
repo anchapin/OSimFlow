@@ -97,7 +97,7 @@ class TestAwsBatchSpotRetryJitter:
     def _build_executor(self) -> Any:
         """Build a stand-in executor that always reports a Spot interruption.
 
-        Mirrors the pattern in ``tests/unit/test_executor_resource_contract.py``
+        Mirrors the pattern in ``tests/unit/executors/test_executor_resource_contract.py``
         so we exercise the real ``_is_spot_interruption`` matcher against
         a real ``AWSBatchExecutor`` instance.
         """

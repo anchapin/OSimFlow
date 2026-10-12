@@ -89,7 +89,7 @@ _EXEMPT_MAX_CALLS: dict[str, int] = {
     # cancel sweep has something live to kill; each ``time.sleep`` keeps
     # the stub parked (and is interrupted by the kill), not asserting on
     # elapsed wall-clock.
-    "tests/unit/test_executor_cancel.py": 3,
+    "tests/unit/executors/test_executor_cancel.py": 3,
     # 6 deadline-bounded condition-poll loops from issues #1756 + #1799:
     # the alerting dispatcher tests park the worker inside a destination
     # gate, then poll ``dest.received`` (the externally observable list

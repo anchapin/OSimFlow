@@ -149,7 +149,7 @@ class TestDashboardHtmlEndpoint:
         resp = dashboard_client.get("/dashboard")
         assert resp.status_code == 200
         expected = (
-            Path(__file__).resolve().parents[2] / "osimflow" / "api" / "static" / "dashboard.html"
+            Path(__file__).resolve().parents[3] / "osimflow" / "api" / "static" / "dashboard.html"
         ).read_text()
         assert resp.text == expected
 

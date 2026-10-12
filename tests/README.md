@@ -12,7 +12,10 @@ tests/
 ├── unit/                     # unit tests — isolated components
 │   ├── fixtures/             # minimal .osm + .osw + variables for unit tests
 │   ├── conftest.py
-│   └── test_*.py             # one file per module/class being tested
+│   ├── api/                  # mirrors osimflow/api/ (+ client SDK tests)
+│   ├── executors/            # mirrors osimflow/executors/
+│   └── test_*.py             # remaining tests, being migrated into
+│                             # package-mirroring subdirectories (issue #1894)
 ├── integration/              # integration & E2E tests — full campaign runs
 │   ├── conftest.py
 │   └── test_*.py             # executor, coordinator, API, algorithm tests
@@ -54,3 +57,9 @@ integration and benchmark tests.
 | Executor or multi-step workflow | `tests/integration/test_<name>.py` |
 | CLI flag or public API contract | `tests/contract/test_<name>.py` |
 | Performance regression | `tests/benchmarks/test_<name>.py` |
+
+## Forbidden artifact files
+
+`tools/check_forbidden_files.py` (pre-commit hook `forbidden-artifact-files`)
+fails on tracked `eplusout.*`, `*.osm`, `*.osw`, `*.sqlite`, `*.job` and
+`data_point.zip` files outside its `ALLOWLIST` (the `example_package/` model).

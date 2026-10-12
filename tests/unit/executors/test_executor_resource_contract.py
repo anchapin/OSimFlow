@@ -43,7 +43,7 @@ import pytest
 # Executor classes are importable without their SDKs (lazy imports inside
 # __init__ / _get_client), so we can construct them via __new__ and inject
 # MagicMock SDK handles — the same pattern used by
-# tests/unit/test_executor_backoff_cap.py.
+# tests/unit/executors/test_executor_backoff_cap.py.
 from osimflow.executors import (
     AWSBatchExecutor,
     ExecutorRegistry,
@@ -62,7 +62,7 @@ from osimflow.testing.patch_targets import _AWSBatchHandle
 # The kubernetes SDK provides real ``V1ResourceRequirements`` objects, which
 # makes the resource-translation assertion strongest. Detect it up front so
 # the kubernetes case still collects (and skips) cleanly when the SDK is
-# absent — mirroring tests/unit/test_kubernetes_executor.py (issue #623).
+# absent — mirroring tests/unit/executors/test_kubernetes_executor.py (issue #623).
 try:
     from kubernetes import client as _k8s_client  # noqa: F401
 
@@ -314,7 +314,7 @@ def _build_kubernetes() -> tuple[Any, Any]:
     ex.max_poll_interval_s = 60.0
     # Native Job controls (issue #997) — defaults preserve the
     # pre-#997 manifest byte-for-byte. Other tests in
-    # tests/unit/test_kubernetes_executor.py exercise the field setter
+    # tests/unit/executors/test_kubernetes_executor.py exercise the field setter
     # path; this contract test only verifies resource mapping.
     ex.backoff_limit = 0
     ex.ttl_seconds_after_finished = None
