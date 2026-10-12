@@ -1,0 +1,114 @@
+# =============================================================================
+# .github/workflows/substrate-e2e-reusable.yml — shared real-substrate E2E job
+# =============================================================================
+# Reusable (``workflow_call``) skeleton for the per-substrate E2E workflows
+# (issue #1896): checkout -> setup-python -> install -> optional
+# toolchain/setup script -> real-substrate pytest -> optional always-run
+# cleanup. Each caller (``slurm-e2e.yml``, ``pbs-e2e.yml``, ``dask-e2e.yml``,
+# ``docker-swarm-e2e.yml``, ``kubernetes-e2e.yml``) keeps its own triggers
+# (``schedule`` / ``workflow_dispatch``), permissions, job name, and
+# substrate-specific inputs; this file owns only the shared steps.
+#
+# The real-substrate test files stay ``pytest.mark.skipif``-gated by the env
+# var passed through ``test-env`` (see ``docs/substrate-coverage.md``).
+# Substrates needing a cloud OIDC login (Azure, Google), the uv-based Nomad
+# matrix, or the ``scripts/e2e_gate.py`` preflight/JUnit gate (AWS Batch,
+# OpenStudio CLI) keep bespoke workflows.
+# =============================================================================
+
+name: Substrate E2E (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'JSON runner label(s), e.g. "ubuntu-latest" or ["self-hosted","slurm"]'
+        type: string
+        default: '"ubuntu-latest"'
+      timeout-minutes:
+        type: number
+        default: 360
+      install-command:
+        description: "Shell command that installs OSimFlow and substrate extras"
+        type: string
+        required: true
+      setup-script:
+        description: "Optional shell script run after install (toolchain check, cluster init)"
+        type: string
+        default: ""
+      test-path:
+        description: "Real-substrate pytest file"
+        type: string
+        required: true
+      test-timeout:
+        description: "pytest --timeout value in seconds"
+        type: string
+        default: "1800"
+      test-env:
+        description: "Newline-separated KEY=VALUE pairs exported to the test step"
+        type: string
+        default: ""
+      cleanup-script:
+        description: "Optional shell script run after the test (always())"
+        type: string
+        default: ""
+    secrets:
+      KUBECONFIG:
+        description: "Optional kubeconfig contents written to ~/.kube/config"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      HAS_KUBECONFIG: ${{ secrets.KUBECONFIG != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: bash -euo pipefail -c "$INSTALL_COMMAND"
+
+      - name: Write kubeconfig from secret
+        if: ${{ env.HAS_KUBECONFIG == 'true' }}
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBECONFIG_CONTENT" > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
+
+      - name: Substrate setup
+        if: ${{ inputs.setup-script != '' }}
+        env:
+          SETUP_SCRIPT: ${{ inputs.setup-script }}
+        run: bash -euo pipefail -c "$SETUP_SCRIPT"
+
+      - name: Run real-substrate E2E
+        env:
+          TEST_ENV: ${{ inputs.test-env }}
+          TEST_PATH: ${{ inputs.test-path }}
+          TEST_TIMEOUT: ${{ inputs.test-timeout }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            [ -n "$line" ] && export "$line"
+          done <<< "$TEST_ENV"
+          .venv/bin/pytest "$TEST_PATH" -v --timeout="$TEST_TIMEOUT"
+
+      - name: Cleanup
+        if: ${{ always() && inputs.cleanup-script != '' }}
+        env:
+          CLEANUP_SCRIPT: ${{ inputs.cleanup-script }}
+        run: bash -c "$CLEANUP_SCRIPT"
