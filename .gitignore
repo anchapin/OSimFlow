@@ -98,3 +98,9 @@ docs/openapi.json
 
 # wave-orchestrator local state (issue #1630 class of junk)
 worktrees/
+
+# Stray run outputs inside the template package / repo root (issue #1885)
+/outdir/
+template_sim_package/run/
+template_sim_package/reports/
+*.job
