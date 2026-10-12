@@ -361,6 +361,10 @@ FLOORS: dict[str, float] = {
     "osimflow/_work_osm_mutations.py": 36.01,  # measured 37.01% (real-OpenStudio-bindings paths unexercised without the CLI)
     "osimflow/_work_retry.py": 95.43,  # measured 96.43%
     "osimflow/_work_stub.py": 84.71,  # measured 85.71%
+    # Split out of config.py (issue #1890); readings from the CI-flag suite.
+    "osimflow/_config_coerce.py": 86.00,  # measured 87.00%
+    "osimflow/_config_quota.py": 62.00,  # measured 63.00%
+    "osimflow/_config_sections.py": 99.00,  # measured 100.00%
     # --- osimflow/api/*.py (issue #1694) ---
     # The api/ tree was previously omitted from coverage entirely
     # (see ``[tool.coverage.*] omit`` history); per-module floors

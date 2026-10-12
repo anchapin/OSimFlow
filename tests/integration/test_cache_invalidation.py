@@ -955,6 +955,9 @@ def test_import_closure_excludes_third_party_and_stdlib() -> None:
         "_work_osm_mutations",
         "_work_retry",
         "_work_stub",
+        "_config_coerce",
+        "_config_quota",
+        "_config_sections",
     ):
         assert (package_root / f"{name}.py") in closure, name
     assert (package_root / "storage.py") in closure
