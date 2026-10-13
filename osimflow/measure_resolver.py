@@ -17,6 +17,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    import resource
+except ImportError:  # Windows
+    resource = None  # type: ignore[assignment]
+
 from ._work_env import _sanitize_env
 from .errors import OSimFlowError
 
@@ -236,16 +241,45 @@ def _is_safe_dep_name(name: str) -> bool:
     return bool(_SAFE_DEP_NAME_RE.fullmatch(name)) and not name.startswith("-")
 
 
+_PROBE_TIMEOUT_S = 30
+_PROBE_CPU_LIMIT_S = 20
+_PROBE_MEMORY_LIMIT_BYTES = 2 * 1024**3
+_PROBE_FILE_SIZE_LIMIT_BYTES = 10 * 1024**2
+
+
+def _apply_probe_rlimits() -> None:
+    """Cap CPU time, address space and file size in the probe child (POSIX only)."""
+    limits = [
+        (resource.RLIMIT_CPU, _PROBE_CPU_LIMIT_S),
+        (resource.RLIMIT_FSIZE, _PROBE_FILE_SIZE_LIMIT_BYTES),
+    ]
+    # RLIMIT_AS is not reliably enforced (and may be rejected) on macOS.
+    if sys.platform != "darwin":
+        limits.append((resource.RLIMIT_AS, _PROBE_MEMORY_LIMIT_BYTES))
+    for res, wanted in limits:
+        try:
+            _, hard = resource.getrlimit(res)
+            cap = wanted if hard == resource.RLIM_INFINITY else min(wanted, hard)
+            resource.setrlimit(res, (cap, cap))
+        except (ValueError, OSError):
+            continue
+
+
 def _run_probe(cmd: list[str]) -> bool:
-    """Run a dependency probe in a subprocess with a sanitized environment."""
+    """Run a dependency probe in a subprocess with a sanitized environment.
+
+    The child runs with a wall-clock timeout and (on POSIX) CPU, memory and
+    file-size rlimits so an untrusted-name probe cannot exhaust the host.
+    """
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             check=False,
-            timeout=30,
+            timeout=_PROBE_TIMEOUT_S,
             env=_sanitize_env(),
+            preexec_fn=_apply_probe_rlimits if resource is not None else None,
         )
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
