@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -1576,7 +1577,15 @@ class TestResultStorageUploaderBoundedClose:
         first_sleep_started = threading.Event()
         release_sleep = threading.Event()
 
+        real_sleep = time.sleep
+
         def _parked_sleep(seconds: float) -> None:
+            # ``osimflow.storage.time`` is the global ``time`` module, so the
+            # patch is process-wide: only the uploader worker may park, or
+            # unrelated threads (xdist/execnet, stray daemons) would stall.
+            if not re.fullmatch(r"osimflow-upload-\d+", threading.current_thread().name):
+                real_sleep(seconds)
+                return
             first_sleep_started.set()
             assert release_sleep.wait(timeout=30.0), "parked sleep never released"
 
