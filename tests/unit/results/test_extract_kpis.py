@@ -478,6 +478,17 @@ class TestExtractKpisFromSql:
         result = ek.extract_kpis_from_sql(sql_path)
         assert "error" in result
 
+    @pytest.mark.parametrize("kpis", [None, ["eui_kwh_m2"]])
+    def test_corrupt_database_fails_sample(self, tmp_path: Path, kpis: list[str] | None) -> None:
+        sim = tmp_path / "sim"
+        sim.mkdir()
+        (sim / "eplusout.sql").write_text("this is not a sqlite database")
+        out = tmp_path / "kpis.json"
+
+        with pytest.raises(RuntimeError, match="corrupt_database"):
+            ek.run_extract_kpis(sim, "0001", out, kpis=kpis)
+        assert not out.exists()
+
     def test_no_floor_area(self, tmp_path: Path) -> None:
         sql_path = _make_eplusout_sql(
             tmp_path / "eplusout.sql",

@@ -650,6 +650,9 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
 # ---------------------------------------------------------------------------
 
 
+_FATAL_EXTRACTION_ERRORS = frozenset({"corrupt_database", "extraction_failed"})
+
+
 def run_extract_kpis(
     simulation_dir: Path,
     sample_id: str,
@@ -684,7 +687,8 @@ def run_extract_kpis(
     Raises:
         FileNotFoundError: when *custom_kpi_extractor* is set but does
             not exist.
-        RuntimeError: when the custom extractor fails to load, does not
+        RuntimeError: when ``eplusout.sql`` is corrupt or extraction fails
+            (issue #1964), or when the custom extractor fails to load, does not
             define ``extract_kpis(ctx)``, or returns a non-dict.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -729,6 +733,15 @@ def run_extract_kpis(
             raise RuntimeError(msg)
     else:
         extracted_kpis = extract_kpis_from_sql(sql_path)
+        # Issue #1964: a corrupt/failed extraction must fail the sample rather
+        # than be dropped by the --kpis filter and cached as a success.
+        if extracted_kpis.get("error") in _FATAL_EXTRACTION_ERRORS:
+            msg = (
+                f"KPI extraction failed for sample {sample_id}: "
+                f"{extracted_kpis['error']}: {extracted_kpis.get('raw_error', '')}"
+            )
+            log.error(msg)
+            raise RuntimeError(msg)
         extracted_kpis.update(_extract_simulation_summary(simulation_dir))
 
     # Issue #1082: filter to user-requested KPIs when --kpis is set.
