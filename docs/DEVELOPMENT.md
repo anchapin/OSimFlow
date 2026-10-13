@@ -1800,7 +1800,10 @@ make contract
 ### Using `act` (local CI mirror)
 
 [nektos/act](https://github.com/nektos/act) runs GitHub Actions
-workflows locally in a Docker container:
+workflows locally in a Docker container.
+
+> **Note:** `make act` requires the external `act` binary (and a running
+> Docker daemon). It is not installed by `make install` or any pip extra.
 
 ```bash
 # Install act
