@@ -39,6 +39,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from ..config import CampaignConfig
+from ..errors import OSimFlowRuntimeError
 from ..executors import Handle, get_step_resources
 from ..observability.monitoring import RunTrace, WorkerRecoveryManager
 from .lifecycle import CampaignPauseRequested
@@ -141,7 +142,7 @@ FAILURE_CLASS_SIMULATION = "simulation_error"
 FAILURE_CLASS_BOOKKEEPING = "bookkeeping_error"
 
 
-class PostResultBookkeepingError(Exception):
+class PostResultBookkeepingError(OSimFlowRuntimeError):
     """Post-result bookkeeping failed after the work function succeeded (issue #1997).
 
     Wraps the original error (kept as ``__cause__``) so
