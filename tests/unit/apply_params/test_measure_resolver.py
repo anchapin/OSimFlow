@@ -1,5 +1,6 @@
 """Unit tests for osimflow.measure_resolver."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -254,3 +255,49 @@ class TestDependencyProbesAreSandboxed:
         ruby_cmd = run.call_args_list[0].args[0]
         assert "require" not in ruby_cmd[2]
         assert ruby_cmd[3] == "json"
+
+
+class TestProbeResourceLimits:
+    """Issue #1996: probe subprocesses run with a timeout and rlimits."""
+
+    def test_probe_passes_timeout_and_preexec(self) -> None:
+        import os
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with mock.patch.object(mr.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            assert mr._run_probe(["true"]) is True
+        assert run.call_args.kwargs["timeout"] == mr._PROBE_TIMEOUT_S
+        if os.name == "posix":
+            assert run.call_args.kwargs["preexec_fn"] is mr._apply_probe_rlimits
+
+    def test_timeout_returns_false(self) -> None:
+        import subprocess
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        err = subprocess.TimeoutExpired(cmd="x", timeout=1)
+        with mock.patch.object(mr.subprocess, "run", side_effect=err):
+            assert mr._run_probe(["x"]) is False
+
+    @pytest.mark.skipif(os.name != "posix", reason="rlimits are POSIX-only")
+    def test_rlimits_applied_in_child(self) -> None:
+        import subprocess
+        import sys
+
+        from osimflow import measure_resolver as mr
+
+        code = "import resource; print(resource.getrlimit(resource.RLIMIT_CPU)[0], resource.getrlimit(resource.RLIMIT_FSIZE)[0])"
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+            preexec_fn=mr._apply_probe_rlimits,
+        )
+        cpu, fsize = map(int, out.stdout.split())
+        assert cpu <= mr._PROBE_CPU_LIMIT_S
+        assert fsize <= mr._PROBE_FILE_SIZE_LIMIT_BYTES
