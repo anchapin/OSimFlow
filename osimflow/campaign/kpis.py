@@ -32,6 +32,7 @@ data-driven dispatcher
 Issue #1542 rule: no import or type-reference of ``Campaign``.
 """
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable
@@ -57,6 +58,25 @@ log = logging.getLogger("osimflow.campaign")
 # kept as an alias here so this module's annotations read the same
 # as the campaign-level definition, no behavioural dependency).
 SampleDict = dict[str, Path]
+
+
+_SIM_OUTPUT_FILES = ("eplusout.sql", "out.osw")
+
+
+def _sim_outputs_digest(sim_dir: Path) -> dict[str, str | None]:
+    """SHA-256 of each KPI-source file in *sim_dir* (``None`` when absent)."""
+    digests: dict[str, str | None] = {}
+    for name in _SIM_OUTPUT_FILES:
+        path = sim_dir / name
+        if not path.is_file():
+            digests[name] = None
+            continue
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        digests[name] = h.hexdigest()
+    return digests
 
 
 class CampaignKpisMixin:
@@ -174,6 +194,9 @@ class CampaignKpisMixin:
                     "sim_dir": str(sim_dir),
                     "sid": sid,
                     "os_version": os_version,
+                    # Issue #1963: a re-simulated sample at the same path must
+                    # not keep a stale KPI JSON.
+                    "sim_outputs": _sim_outputs_digest(Path(sim_dir)),
                     # Issue #1082: include the KPI filter in the cache key so
                     # that changing --kpis invalidates stale KPI JSON.
                     "kpis": list(self.cfg.kpis) if self.cfg.kpis else [],

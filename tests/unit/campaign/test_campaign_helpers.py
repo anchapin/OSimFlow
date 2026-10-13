@@ -128,3 +128,46 @@ def test_kpi_content_digests_change_on_in_place_rewrite(tmp_path):
     assert kpi_content_digests([kpi]) == before
     kpi.write_text('{"eui": 2}')
     assert kpi_content_digests([kpi]) != before
+
+
+def test_sim_outputs_digest_tracks_sql_and_osw_content(tmp_path: Path) -> None:
+    from osimflow.campaign.kpis import _sim_outputs_digest
+
+    assert _sim_outputs_digest(tmp_path) == {"eplusout.sql": None, "out.osw": None}
+    sql = tmp_path / "eplusout.sql"
+    sql.write_bytes(b"v1")
+    first = _sim_outputs_digest(tmp_path)
+    sql.write_bytes(b"v2")
+    second = _sim_outputs_digest(tmp_path)
+    assert first["eplusout.sql"] != second["eplusout.sql"]
+    (tmp_path / "out.osw").write_text("{}")
+    assert _sim_outputs_digest(tmp_path)["out.osw"] is not None
+
+
+def test_extract_kpis_cache_invalidated_by_in_place_sql_change(
+    campaign: Campaign, tmp_path: Path
+) -> None:
+    sim_dir = tmp_path / "sim" / "s0"
+    sim_dir.mkdir(parents=True)
+    sql = sim_dir / "eplusout.sql"
+    sql.write_bytes(b"v1")
+    seen: list[str] = []
+    real_lookup = campaign.cache.lookup
+
+    def _spy(key: Any) -> Any:
+        seen.append(key.inputs_sha256)
+        return real_lookup(key)
+
+    campaign.cache.lookup = _spy  # type: ignore[method-assign]
+    for _ in range(2):
+        try:
+            campaign.step_extract_kpis({"s0": sim_dir})
+        except Exception:  # noqa: BLE001 — only the lookup key matters here
+            pass
+    sql.write_bytes(b"v2")
+    try:
+        campaign.step_extract_kpis({"s0": sim_dir})
+    except Exception:  # noqa: BLE001
+        pass
+    assert seen[0] == seen[1]
+    assert seen[2] != seen[0]
