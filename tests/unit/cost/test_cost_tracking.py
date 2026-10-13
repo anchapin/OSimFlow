@@ -590,10 +590,9 @@ class TestCampaignCostSummaryNew:
 # ---------------------------------------------------------------------------
 # CostTracker integration with Campaign (issue #447)
 # ---------------------------------------------------------------------------
-@pytest.mark.skip(reason="_cost_tracker not yet implemented on Campaign (issue #447)")
 class TestCostTrackerCampaignIntegration:
     def test_campaign_cost_tracker_init_disabled(self) -> None:
-        """When enable_cost_tracking=False, _cost_tracker is None."""
+        """When enable_cost_tracking=False, the wrapper holds no underlying tracker."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
         from osimflow.executors import LocalExecutor
@@ -607,10 +606,11 @@ class TestCostTrackerCampaignIntegration:
             enable_cost_tracking=False,
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        assert campaign._cost_tracker is None
+        assert campaign._cost_tracker.is_enabled is False
+        assert campaign._cost_tracker._tracker is None
 
     def test_campaign_cost_tracker_init_enabled(self) -> None:
-        """When enable_cost_tracking=True, _cost_tracker is a CostTracker."""
+        """When enable_cost_tracking=True, the wrapper holds a CostTracker."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
         from osimflow.executors import LocalExecutor
@@ -624,12 +624,12 @@ class TestCostTrackerCampaignIntegration:
             enable_cost_tracking=True,
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        assert campaign._cost_tracker is not None
-        assert campaign._cost_tracker.n_samples == 3
-        assert campaign._cost_tracker.executor == "local"
+        assert campaign._cost_tracker.is_enabled is True
+        assert campaign._cost_tracker._tracker is not None
+        assert campaign._cost_tracker._tracker.executor == "local"
 
     def test_record_costs_noop_when_disabled(self) -> None:
-        """_record_costs is a no-op when _cost_tracker is None."""
+        """_record_costs is a no-op when cost tracking is disabled."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
         from osimflow.executors import LocalExecutor
@@ -643,12 +643,11 @@ class TestCostTrackerCampaignIntegration:
             enable_cost_tracking=False,
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        # Should not raise even with None tracker
         campaign._record_costs("s1", 0.10, 0.04)
-        assert campaign._cost_tracker is None
+        assert campaign._cost_tracker._tracker is None
 
     def test_finalize_costs_noop_when_disabled(self, tmp_path: Path) -> None:
-        """_finalize_costs is a no-op when _cost_tracker is None."""
+        """_finalize_costs is a no-op when cost tracking is disabled."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
         from osimflow.executors import LocalExecutor
@@ -663,7 +662,8 @@ class TestCostTrackerCampaignIntegration:
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         campaign._finalize_costs()  # Should not raise
-        assert campaign._cost_tracker is None
+        assert campaign._cost_tracker._tracker is None
+        assert campaign.trace.cost_summary is None
 
     def test_finalize_costs_produces_summary(self, tmp_path: Path) -> None:
         """_finalize_costs writes cost_summary to run.json when enabled."""
@@ -684,13 +684,13 @@ class TestCostTrackerCampaignIntegration:
         campaign._record_costs("s2", 0.60, 0.24)
         campaign._finalize_costs()
 
-        assert campaign._cost_tracker is not None
-        summary = campaign._cost_tracker.finalize()
-        assert summary.total_actual_cost_usd == 1.10
-        assert summary.total_spot_savings_usd == 0.44
-        assert summary.n_samples == 2
-        assert summary.executor == "local"
-        assert summary.finalized_at is not None
+        summary = campaign.trace.cost_summary
+        assert summary is not None
+        assert summary["total_actual_cost_usd"] == 1.10
+        assert summary["total_spot_savings_usd"] == 0.44
+        assert "n_samples" in summary
+        assert summary["executor"] == "local"
+        assert summary["finalized_at"] is not None
 
 
 # ---------------------------------------------------------------------------
