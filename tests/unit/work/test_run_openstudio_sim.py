@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 import pytest
 
-from osimflow.work import run_openstudio_sim
+from osimflow.work import _is_transient_error, run_openstudio_sim
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +229,7 @@ def test_real_cli_invoked_when_available(
         patch.dict(os.environ, env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
         patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+        patch("osimflow.work._raise_missing_sql"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
@@ -270,6 +271,7 @@ def test_real_cli_does_not_write_placeholder_sql(
         patch.dict(os.environ, env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
         patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+        patch("osimflow.work._raise_missing_sql"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
@@ -337,6 +339,7 @@ def test_real_cli_propagates_subprocess_error(
     with (
         patch.dict(os.environ, env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._raise_missing_sql"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
         mock_run.side_effect = subprocess.CalledProcessError(
@@ -549,3 +552,32 @@ class TestRealOpenStudioE2E:
         assert stdout_path.is_file(), "stdout.log should be populated"
         # Verify the result directory was created
         assert result.is_dir(), "simulation output directory should exist"
+
+
+def test_real_cli_exit_zero_without_sql_raises(
+    sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
+) -> None:
+    """Issue #1966: CLI exit 0 with no eplusout.sql must fail, not succeed."""
+    stdout_path, stderr_path = log_paths
+    env = {k: v for k, v in os.environ.items() if k != "OSIMFLOW_STUB_SIM"}
+
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+        patch("osimflow.work.run_subprocess") as mock_run,
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with pytest.raises(RuntimeError, match="no eplusout.sql") as ei:
+            run_openstudio_sim(
+                modified_sim_package=sim_package,
+                sample_id="0001",
+                openstudio_version="3.11.0",
+                out=out_dir,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+    assert not _is_transient_error(ei.value)

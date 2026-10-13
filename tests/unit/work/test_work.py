@@ -411,6 +411,7 @@ class TestRunOpenstudioSimStub:
         stdout_path, stderr_path = log_paths
         with (
             patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.side_effect = subprocess.SubprocessError("stub failed")
@@ -438,6 +439,7 @@ class TestRunOpenstudioSimRealCli:
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
             patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -467,6 +469,7 @@ class TestRunOpenstudioSimRealCli:
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
             patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -493,6 +496,7 @@ class TestRunOpenstudioSimRealCli:
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
             patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -520,6 +524,7 @@ class TestRunOpenstudioSimRealCli:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             result = run_openstudio_sim(
@@ -542,6 +547,7 @@ class TestRunOpenstudioSimRealCli:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -572,6 +578,7 @@ class TestRunOpenstudioSimRealCli:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             result = run_openstudio_sim(
@@ -617,6 +624,7 @@ class TestRunOpenstudioSimRealCli:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -643,7 +651,10 @@ class TestRunRealOpenstudioDirect:
         sim_out.mkdir(parents=True)
         stdout_path = tmp_path / "stdout.log"
         stderr_path = tmp_path / "stderr.log"
-        with patch("osimflow.work.run_subprocess") as mock_run:
+        with (
+            patch("osimflow.work._raise_missing_sql"),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -678,7 +689,10 @@ class TestRunRealOpenstudioDirect:
     def test_subprocess_error_propagates(self, sim_package: Path, tmp_path: Path) -> None:
         sim_out = tmp_path / "sim_out"
         sim_out.mkdir()
-        with patch("osimflow.work.run_subprocess") as mock_run:
+        with (
+            patch("osimflow.work._raise_missing_sql"),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
             mock_run.side_effect = subprocess.CalledProcessError(
                 returncode=2, cmd=["openstudio.cli"], stderr="crash"
             )

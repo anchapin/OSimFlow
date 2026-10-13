@@ -158,6 +158,7 @@ def test_real_cli_captures_register_values(
     with (
         patch.dict(os.environ, clean_env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._raise_missing_sql"),
         patch("osimflow.work.run_subprocess", side_effect=mock_run),
     ):
         result = _run_real_openstudio(
@@ -188,6 +189,7 @@ def test_real_cli_no_register_values_file_when_no_json(
     with (
         patch.dict(os.environ, clean_env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._raise_missing_sql"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
