@@ -440,23 +440,28 @@ class TestRunChaosScenario:
         assert result == "Hi, World"
 
     def test_recovery_called_after_function(self) -> None:
-        scenario = ChaosScenario(
-            name="test",
-            injectors=[NetworkDelayInjector(delay_s=0.1)],
-        )
-        engine_used: list[ChaosEngine | None] = []
-
-        def _capture(*, engine: ChaosEngine | None = None) -> None:
-            engine_used.append(engine)
-
-        # We can't easily capture the engine, but we verify recover is called
-        # by checking the delay injector is cleaned up
         inj = NetworkDelayInjector(delay_s=60.0)
         scenario = ChaosScenario(name="test", injectors=[inj])
-        run_chaos_scenario(scenario, lambda: None)
-        # The timer should be cancelled after function returns
-        # (This is implicit - if it wasn't, the test would hang or use memory)
-        assert True  # No assertion error means success
+        seen_active: list[int] = []
+
+        def _fn() -> None:
+            seen_active.append(len(inj._active))
+
+        _, results = run_chaos_scenario(scenario, _fn)
+        assert results and results[0].injected
+        assert seen_active == [1]
+        assert inj._active == {}
+
+    def test_recovery_called_when_function_raises(self) -> None:
+        inj = NetworkDelayInjector(delay_s=60.0)
+        scenario = ChaosScenario(name="test", injectors=[inj])
+
+        def _boom() -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            run_chaos_scenario(scenario, _boom)
+        assert inj._active == {}
 
 
 # ---------------------------------------------------------------------------
