@@ -49,7 +49,6 @@ from .distributed_cache import (
     campaign_state_namespace,
     validate_redis_url,
 )
-from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
     DocumentNotFoundError,
     DocumentStore,
@@ -82,7 +81,6 @@ from .handoff_record import (
     read_handoff_record,
     write_handoff_record,
 )
-from .jobqueue import JobQueue
 from .logging import get_logger, setup_logging
 from .measures import (
     AmbiguousVariableError,
@@ -109,9 +107,8 @@ from .observability import (
 )
 from .observability.monitoring import RunTrace, StepTrace
 from .pareto import ParetoFront, ParetoSolution
-from .registry import CampaignRecord, CampaignRegistry
-from .registry.cross_run_aggregator import CrossRunAggregator
-from .taskqueue import (
+from .queues.control_plane import DistributedJobQueue, build_job_queue
+from .queues.dispatch import (
     ConsumerQueue,
     DaskTaskQueue,
     NoOpTaskQueue,
@@ -120,6 +117,9 @@ from .taskqueue import (
     TaskQueueStatus,
     build_task_queue,
 )
+from .queues.journal import JobQueue
+from .registry import CampaignRecord, CampaignRegistry
+from .registry.cross_run_aggregator import CrossRunAggregator
 from .validation import ValidationError
 from .weather import (
     EPWDownloadError,

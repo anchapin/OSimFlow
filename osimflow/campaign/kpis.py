@@ -43,8 +43,8 @@ from ..config import CampaignConfig
 from ..executors import BaseExecutor, Handle
 from ..executors.transport import ResultTransportConfig
 from ..observability.monitoring import RunTrace
+from ..queues.dispatch import ConsumerQueue
 from ..storage import ResultStorageUploader
-from ..taskqueue import ConsumerQueue
 from ..work import publish_kpi_results
 from .fanout import dispatch_step_work
 from .lifecycle import CampaignPauseRequested

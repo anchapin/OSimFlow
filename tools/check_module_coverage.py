@@ -151,13 +151,13 @@ see commit body) are::
     osimflow/registry/cross_run_aggregator.py           94.98%  (179 stmts)
     osimflow/data_point_manager.py             77.81%  (236 stmts)
     osimflow/distributed_cache.py              87.50%  (392 stmts)
-    osimflow/distributed_jobqueue.py           73.38%  (313 stmts)
+    osimflow/queues/control_plane.py           73.38%  (313 stmts)
     osimflow/document_store.py                 74.00%  (387 stmts; issue #1890 — was 81.19%/868 before split)
     osimflow/errors.py                        100.00%   (34 stmts; exception hierarchy)
     osimflow/event_log.py                     100.00%  (123 stmts)
     osimflow/handoff_record.py                100.00%   (54 stmts; issue #1176)
     osimflow/health.py                         76.77%  (693 stmts)
-    osimflow/jobqueue.py                       85.54%  (166 stmts)
+    osimflow/queues/journal.py                       85.54%  (166 stmts)
     osimflow/json_utils.py                     57.58%   (33 stmts)
     osimflow/logging.py                        93.18%  (132 stmts)
     osimflow/manifest.py                       89.47%  (133 stmts)
@@ -176,7 +176,7 @@ see commit body) are::
     osimflow/registry/results_query.py                  59.82%  (219 stmts)
     osimflow/storage/__init__.py               95.27%  (719 stmts)
     osimflow/task_payload_hmac.py             100.00%   (72 stmts; issue #1177)
-    osimflow/taskqueue.py                      93.46%  (129 stmts)
+    osimflow/queues/dispatch.py                      93.46%  (129 stmts)
     osimflow/tui.py                            94.12%  (170 stmts)
     osimflow/validation.py                     95.94%  (320 stmts)
     osimflow/version_detection.py              91.72%  (145 stmts)
@@ -316,13 +316,13 @@ FLOORS: dict[str, float] = {
     "osimflow/registry/cross_run_aggregator.py": 93.98,  # measured 94.98%
     "osimflow/data_point_manager.py": 76.81,  # measured 77.81%
     "osimflow/distributed_cache.py": 86.50,  # measured 87.50%
-    "osimflow/distributed_jobqueue.py": 72.38,  # measured 73.38%
+    "osimflow/queues/control_plane.py": 72.38,  # measured 73.38%
     "osimflow/document_store.py": 73.00,  # measured 74.00% unit-subset after issue #1890 split (Redis backend + factory remain; SQLite parts moved to _document_store_*.py)
     "osimflow/errors.py": 99.00,  # measured 100.00% (exception hierarchy)
     "osimflow/event_log.py": 99.00,  # measured 100.00%
     "osimflow/handoff_record.py": 99.00,  # measured 100.00% (issue #1176)
     "osimflow/health.py": 75.77,  # measured 76.77%
-    "osimflow/jobqueue.py": 84.54,  # measured 85.54%
+    "osimflow/queues/journal.py": 84.54,  # measured 85.54%
     "osimflow/json_utils.py": 56.58,  # measured 57.58%
     "osimflow/logging.py": 92.18,  # measured 93.18%
     "osimflow/manifest.py": 88.47,  # measured 89.47%
@@ -333,6 +333,7 @@ FLOORS: dict[str, float] = {
     "osimflow/observability/monitoring.py": 86.39,  # measured 87.39%
     "osimflow/notifications/notify.py": 99.00,
     "osimflow/notifications/__init__.py": 99.00,  # package docstring only  # measured 100.00%
+    "osimflow/queues/__init__.py": 99.00,  # package docstring only  # measured 100.00%
     "osimflow/observability/__init__.py": 96.17,  # measured 97.17%
     "osimflow/server_csv.py": 79.0,  # measured 80% (issue #1872)
     "osimflow/osw_results.py": 88.0,  # measured 89% (issue #1871)
@@ -347,7 +348,7 @@ FLOORS: dict[str, float] = {
     "osimflow/registry/results_query.py": 58.82,  # measured 59.82%
     "osimflow/storage/__init__.py": 94.27,  # measured 95.27%
     "osimflow/task_payload_hmac.py": 99.00,  # measured 100.00% (issue #1177)
-    "osimflow/taskqueue.py": 91.96,  # measured 92.96% (#1694; seed lowered 0.5% from 93.46% per task instructions — measurement varies ~1% between sequential and xdist runs)
+    "osimflow/queues/dispatch.py": 91.96,  # measured 92.96% (#1694; seed lowered 0.5% from 93.46% per task instructions — measurement varies ~1% between sequential and xdist runs)
     "osimflow/tui.py": 93.12,  # measured 94.12%
     "osimflow/validation.py": 94.94,  # measured 95.94%
     "osimflow/version_detection.py": 90.72,  # measured 91.72%
@@ -411,6 +412,7 @@ GLOBS = (
     "osimflow/api/*.py",
     "osimflow/notifications/*.py",
     "osimflow/storage/*.py",
+    "osimflow/queues/*.py",
     "osimflow/observability/*.py",
     "osimflow/registry/*.py",
 )
@@ -440,6 +442,10 @@ OMITTED: frozenset[str] = frozenset(
         "osimflow/_storage_base.py",
         "osimflow/_storage_endpoint.py",
         "osimflow/_storage_retry.py",
+        # Issue #1891 sys.modules aliases of osimflow/queues/*.
+        "osimflow/taskqueue.py",
+        "osimflow/jobqueue.py",
+        "osimflow/distributed_jobqueue.py",
         # Issue #1891 sys.modules aliases of osimflow/campaign/*.
         "osimflow/_campaign_analysis.py",
         "osimflow/_campaign_artifacts.py",
