@@ -417,14 +417,15 @@ class TestDistributedJobQueueCircuitBreaker:
         ``_publish`` is fire-and-forget (issue #1326), so the test must wait
         for the executor's in-flight work to finish before asserting on the
         breaker's recorded outcome.  ``shutdown(wait=True)`` blocks until
-        every queued task has run; ``cancel_futures=True`` ensures we drain
-        only what was submitted (no new work accepted after this point).
+        every queued task has run; cancelling pending futures here would drop
+        publishes that never started and leave the breaker below its
+        failure threshold (flaky under xdist load, issue #1925).
         """
         with dq._pub_lock:  # type: ignore[attr-defined]
             executor = dq._publish_executor
             if executor is None:
                 return
-            executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=True)
             dq._publish_executor = None
 
     def test_breaker_constructed_with_campaign_id(self, queue_dir: Path) -> None:
