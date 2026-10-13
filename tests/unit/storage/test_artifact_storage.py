@@ -329,7 +329,11 @@ class TestS3ArtifactStorage:
     ) -> None:
         """Test artifact_exists returns False when artifact does not exist."""
         fake_boto3, fake_session, fake_client = mock_boto3
-        fake_client.head_object.side_effect = Exception("Not found")
+        from botocore.exceptions import ClientError
+
+        fake_client.head_object.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": "Not found"}}, "HeadObject"
+        )
 
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):

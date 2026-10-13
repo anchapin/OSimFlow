@@ -101,7 +101,7 @@ from ._document_store_base import (
 from ._document_store_sqlite import SQLiteDocumentStore, _build_where_clause
 from ._sqlite_store import encode_value as _encode_value
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
-from .distributed_cache import validate_redis_url
+from .distributed_cache import _redis_errors, validate_redis_url
 
 log = logging.getLogger("osimflow.document_store")
 
@@ -461,7 +461,7 @@ class RedisDocumentStore(DocumentStore):
         idx_key = self._index_key(collection, field)
         try:
             existing = self._get_client().hget(idx_key, str(value))
-        except Exception as exc:  # noqa: BLE001 - redis-py raises varied errors; logged and the unique-index pre-check is skipped (HSETNX claim still enforces uniqueness)
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             log.warning(
                 "RedisDocumentStore: unique-index check failed collection=%s field=%s: %s",
                 collection,
@@ -495,7 +495,7 @@ class RedisDocumentStore(DocumentStore):
         idx_key = self._index_key(collection, field)
         try:
             claimed = self._get_client().hsetnx(idx_key, str(value), doc_id)
-        except Exception as exc:  # noqa: BLE001 - redis-py raises varied errors on HSETNX; logged and falls back to a non-atomic check
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             log.warning(
                 "RedisDocumentStore: atomic index claim failed collection=%s field=%s: %s",
                 collection,
@@ -527,7 +527,7 @@ class RedisDocumentStore(DocumentStore):
             existing = client.hget(idx_key, str(value))
             if existing == doc_id:
                 client.hdel(idx_key, str(value))
-        except Exception as exc:  # noqa: BLE001 - releasing an index slot is cleanup; redis error is logged and the stale slot is tolerated
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             log.warning(
                 "RedisDocumentStore: index slot release failed collection=%s field=%s: %s",
                 collection,
@@ -825,7 +825,7 @@ class RedisDocumentStore(DocumentStore):
                 continue
             try:
                 index_entries = client.hgetall(key)
-            except Exception as exc:  # noqa: BLE001 - index scan during delete is cleanup; redis error logged and that index skipped
+            except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                 log.warning(
                     "RedisDocumentStore: failed to load index entries for collection=%s field=%s: %s",
                     collection,
@@ -837,7 +837,7 @@ class RedisDocumentStore(DocumentStore):
                 if d == target_id:
                     try:
                         client.hdel(key, value)
-                    except Exception as exc:  # noqa: BLE001 - index entry removal is cleanup; redis error logged and remaining entries still processed
+                    except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                         log.warning(
                             "RedisDocumentStore: failed to delete index entry collection=%s field=%s value=%s: %s",
                             collection,
@@ -918,7 +918,7 @@ class RedisDocumentStore(DocumentStore):
         if self._redis_client is not None:
             try:
                 self._redis_client.close()
-            except Exception as exc:  # noqa: BLE001 - closing a possibly-broken redis client; failure logged during shutdown
+            except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                 log.warning(
                     "RedisDocumentStore: error closing client namespace=%s: %s",
                     self.namespace,
@@ -928,7 +928,7 @@ class RedisDocumentStore(DocumentStore):
         if self._pool is not None:
             try:
                 self._pool.disconnect()
-            except Exception as exc:  # noqa: BLE001 - disconnecting a possibly-broken redis pool; failure logged during shutdown
+            except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                 log.warning(
                     "RedisDocumentStore: error closing pool namespace=%s: %s",
                     self.namespace,
