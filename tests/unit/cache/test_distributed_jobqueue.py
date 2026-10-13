@@ -374,12 +374,19 @@ class TestDistributedJobQueuePublishThreadBoundedness:
             redis_url="redis://localhost:6379/0",
             campaign_id="test-thread-bounded",
         )
-        # Trigger several publishes in a context where there is no running loop.
-        for i in range(20):
-            dq.enqueue(f"job_{i}", {"step": "SIM"})
-        # The executor should exist and have max_workers=8.
-        assert dq._publish_executor is not None
-        assert dq._publish_executor._max_workers == 8  # type: ignore[attr-defined]
+        # Hermetic: never touch a real Redis; a worker thread racing close()
+        # against a lazily-created client made this order-dependent.
+        fake_client = MagicMock()
+        fake_client.publish = AsyncMock(return_value=1)
+        with patch.object(dq, "_get_redis", return_value=fake_client):
+            # Trigger several publishes in a context where there is no running loop.
+            for i in range(20):
+                dq.enqueue(f"job_{i}", {"step": "SIM"})
+            # The executor should exist and have max_workers=8.
+            executor = dq._publish_executor
+            assert executor is not None
+            assert executor._max_workers == 8  # type: ignore[attr-defined]
+            executor.shutdown(wait=True)  # drain in-flight publishes before close()
         dq.close()
 
     def test_close_shuts_down_publish_executor(self, queue_dir: Path) -> None:

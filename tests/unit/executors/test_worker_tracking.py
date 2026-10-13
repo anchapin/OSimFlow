@@ -14,6 +14,7 @@ import socket
 from unittest.mock import MagicMock, patch
 
 import boto3
+import pytest
 from moto import mock_aws
 
 from osimflow.executors import (
@@ -23,6 +24,18 @@ from osimflow.executors import (
     NomadExecutor,
 )
 from osimflow.monitoring import SampleTrace
+
+
+@pytest.fixture(autouse=True)
+def _no_moto_batch_containers() -> object:
+    """Stop moto's Batch job threads from launching real Docker containers.
+
+    Those threads race with mock teardown (and with other xdist workers),
+    making these tests environment- and load-dependent; the tests only
+    inspect the submit-time handle, never job completion.
+    """
+    with patch("moto.batch.models.Job.run", lambda self: None):
+        yield
 
 
 # ---------------------------------------------------------------------------

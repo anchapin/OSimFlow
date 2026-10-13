@@ -43,6 +43,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -213,8 +214,8 @@ def test_subprocess_aggregate_results_measured(tmp_path: Path) -> None:
     # Use .venv/bin/python explicitly so the child interpreter matches
     # the parent venv (the system python may not have coverage / osimflow
     # importable).
-    venv_python = REPO_ROOT / ".venv" / "bin" / "python"
-    assert venv_python.exists(), f"missing venv python at {venv_python}"
+    # (sys.executable is the venv python; git worktrees have no local .venv.)
+    venv_python = Path(sys.executable)
 
     child = subprocess.run(  # noqa: S603 — argv fully controlled
         [

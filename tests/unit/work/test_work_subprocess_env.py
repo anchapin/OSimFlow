@@ -423,6 +423,13 @@ class TestSubprocessSitesPassSanitizedEnv:
         # var back into the child env.
         sanitized = work_mod._sanitize_env()
         for key, value in sanitized.items():
+            if key == "PYTHONPATH":
+                # generate_plots prepends the project root to any inherited
+                # PYTHONPATH, so the parent's value must survive as a suffix.
+                assert env[key].endswith(value), (
+                    f"inherited PYTHONPATH {value!r} lost: {env[key]!r}"
+                )
+                continue
             assert env.get(key) == value, (
                 f"env[{key!r}] drifted from _sanitize_env(): "
                 f"expected {value!r}, got {env.get(key)!r}"
