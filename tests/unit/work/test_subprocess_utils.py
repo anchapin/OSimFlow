@@ -548,3 +548,131 @@ class TestProcessGroupKill:
         while self._alive(gc_pid) and time.monotonic() < deadline:
             pause.wait(0.05)
         assert not self._alive(gc_pid)
+
+    def test_keyboard_interrupt_kills_child_and_grandchild(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2000: Ctrl-C is not forwarded to the child's own session.
+
+        ``run_subprocess`` must kill the whole group itself when the parent
+        sees ``KeyboardInterrupt`` while waiting.
+        """
+        import time
+
+        pause = threading.Event()
+        pid_file = tmp_path / "gc.pid"
+        captured: list[subprocess.Popen[str]] = []
+        real_communicate = subprocess.Popen.communicate
+
+        def interrupting_communicate(self: subprocess.Popen[str], *a: object, **k: object):  # type: ignore[no-untyped-def]
+            captured.append(self)
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                pause.wait(0.02)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess.Popen, "communicate", interrupting_communicate)
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess(
+                ["sh", "-c", f"sleep 60 & echo $! > {pid_file}; wait"],
+                stdout_path=tmp_path / "o.log",
+                stderr_path=tmp_path / "e.log",
+            )
+        monkeypatch.setattr(subprocess.Popen, "communicate", real_communicate)
+        gc_pid = int(pid_file.read_text().strip())
+        assert captured[0].poll() is not None
+        deadline = time.monotonic() + 5
+        while self._alive(gc_pid) and time.monotonic() < deadline:
+            pause.wait(0.05)
+        assert not self._alive(gc_pid)
+        assert not _ACTIVE_SUBPROCESSES
+
+    def test_terminate_active_subprocesses_kills_grandchild(self, tmp_path: Path) -> None:
+        """Issue #2000: the cancel path (``terminate_active_subprocesses``)
+        reaches grandchildren via the process group."""
+        import time
+
+        pause = threading.Event()
+        pid_file = tmp_path / "gc.pid"
+        result: dict[str, int] = {}
+
+        def worker() -> None:
+            cp = run_subprocess(
+                ["sh", "-c", f"sleep 60 & echo $! > {pid_file}; wait"],
+                stdout_path=tmp_path / "o.log",
+                stderr_path=tmp_path / "e.log",
+            )
+            result["rc"] = cp.returncode
+
+        t = threading.Thread(target=worker)
+        t.start()
+        deadline = time.monotonic() + 5
+        while not pid_file.exists() and time.monotonic() < deadline:
+            pause.wait(0.02)
+        assert pid_file.exists()
+        assert terminate_active_subprocesses(grace_period=2.0) == 1
+        t.join(10)
+        assert not t.is_alive()
+        gc_pid = int(pid_file.read_text().strip())
+        deadline = time.monotonic() + 5
+        while self._alive(gc_pid) and time.monotonic() < deadline:
+            pause.wait(0.05)
+        assert not self._alive(gc_pid)
+
+
+class TestNonPosixFallback:
+    """Issue #2000: the non-POSIX (Windows) path signals only the direct child."""
+
+    def test_signal_process_tree_uses_popen_methods_when_not_posix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest import mock
+
+        from osimflow import _subprocess_utils as su
+
+        monkeypatch.setattr(su, "_POSIX", False)
+        proc = mock.Mock()
+        with mock.patch.object(su.os, "killpg", create=True) as killpg:
+            su._signal_process_tree(proc, kill=False)
+            su._signal_process_tree(proc, kill=True)
+        killpg.assert_not_called()
+        proc.terminate.assert_called_once_with()
+        proc.kill.assert_called_once_with()
+
+    def test_signal_process_tree_falls_back_when_killpg_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest import mock
+
+        from osimflow import _subprocess_utils as su
+
+        monkeypatch.setattr(su, "_POSIX", True)
+        proc = mock.Mock(pid=12345)
+        with mock.patch.object(su.os, "killpg", side_effect=ProcessLookupError, create=True):
+            su._signal_process_tree(proc, kill=False)
+            su._signal_process_tree(proc, kill=True)
+        proc.terminate.assert_called_once_with()
+        proc.kill.assert_called_once_with()
+
+    def test_run_subprocess_omits_new_session_when_not_posix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow import _subprocess_utils as su
+
+        monkeypatch.setattr(su, "_POSIX", False)
+        seen: dict[str, object] = {}
+        real_popen = subprocess.Popen
+
+        def spy(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+            seen.update(kwargs)
+            kwargs.pop("start_new_session", None)
+            return real_popen(*args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+        monkeypatch.setattr(su.subprocess, "Popen", spy)
+        cp = run_subprocess(
+            [sys.executable, "-c", "pass"],
+            stdout_path=tmp_path / "o.log",
+            stderr_path=tmp_path / "e.log",
+        )
+        assert cp.returncode == 0
+        assert seen["start_new_session"] is False

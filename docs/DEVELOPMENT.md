@@ -1323,6 +1323,27 @@ function calls the work script via `subprocess.run`. Editing either
 the shim or the real script invalidates the affected step's cache
 via `code_hashes["bin"]`.
 
+### Subprocess process-group semantics (issues #1965, #1987, #2000)
+
+`run_subprocess` (`osimflow/_subprocess_utils.py`) spawns each child with
+`start_new_session=True` on POSIX, so the child leads its own process group.
+Consequences:
+
+- **Ctrl-C / SIGINT is not forwarded to children.** The terminal signals only
+  the foreground group (the parent). The parent's `KeyboardInterrupt` unwinds
+  through `run_subprocess`, whose `except BaseException` branch kills the
+  child's whole group (`os.killpg`) before re-raising.
+- **Timeout and cancel** (`terminate_active_subprocesses`: SIGTERM, grace,
+  SIGKILL) also signal the whole group, so grandchildren such as EnergyPlus
+  die with `openstudio.cli`.
+- **Non-POSIX (Windows) fallback:** no new session is created and
+  `_signal_process_tree` calls `Popen.terminate()` / `Popen.kill()` on the
+  direct child only (also used if `killpg` raises `OSError`); grandchildren
+  are not guaranteed to be reaped there.
+
+Covered by `tests/unit/work/test_subprocess_utils.py`
+(`TestProcessGroupKill`, `TestNonPosixFallback`).
+
 ### Step 4: Emit trace hooks
 
 For fan-out steps (per-sample), also call:
