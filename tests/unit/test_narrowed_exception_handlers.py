@@ -63,3 +63,66 @@ def test_email_destination_returns_false_on_smtp_failure(monkeypatch) -> None:  
         timestamp=0.0,
     )
     assert dest.send(alert) is False
+
+
+def test_aws_error_code_probe_handles_odd_shapes() -> None:
+    from osimflow.executors.aws_batch_executor import _aws_error_code
+
+    class Good(Exception):
+        response = {"Error": {"Code": "Throttling"}}
+
+    class BadMapping(Exception):
+        response = "not-a-mapping"
+
+    class NoneErr(Exception):
+        response = {"Error": None}
+
+    assert _aws_error_code(Good()) == "Throttling"
+    assert _aws_error_code(ValueError("x")) == ""
+    assert _aws_error_code(BadMapping()) == ""
+    assert _aws_error_code(NoneErr()) == ""
+
+
+def test_check_sqlite_reports_failure_on_sqlite_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import sqlite3
+
+    from osimflow import health
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(health.sqlite3, "connect", boom)
+    assert health._check_sqlite().status == health.CheckStatus.FAIL
+
+
+def test_check_network_reports_failure_on_network_errors(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import http.client
+    import urllib.error
+
+    from osimflow import health
+
+    for exc in (
+        urllib.error.URLError("down"),
+        TimeoutError("t"),
+        http.client.RemoteDisconnected("rd"),
+        ValueError("bad url"),
+    ):
+
+        def boom(*_a: object, _exc: Exception = exc, **_k: object) -> None:
+            raise _exc
+
+        monkeypatch.setattr(health.urllib.request, "urlopen", boom)
+        assert health._check_network().status != health.CheckStatus.PASS
+
+
+def test_run_cli_probe_captures_oserror(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import subprocess
+
+    from osimflow import _health_executors as he
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    rc, _out, err = he._run_subprocess_quiet(["x"], 1.0)
+    assert rc is None and "PermissionError" in err
