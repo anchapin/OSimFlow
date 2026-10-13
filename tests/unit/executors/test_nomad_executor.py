@@ -562,3 +562,28 @@ class TestNomadDispatchSpecHardening:
         assert {"/tmp", "/work"} <= targets, (
             f"mount targets must include /tmp and /work, got {targets!r}"
         )
+
+
+class TestNomadHandleDonePollingErrors:
+    """done() captures named transport errors but lets programming bugs surface (#1955)."""
+
+    @staticmethod
+    def _handle(exc: Exception) -> object:
+        from osimflow.executors.nomad_executor import _NomadHandle
+
+        executor = MagicMock()
+        executor._client.get_allocation.side_effect = exc
+        executor.datacentre = "dc1"
+        handle = _NomadHandle("job", "eval", executor)
+        handle._allocation_id = "alloc"
+        return handle
+
+    def test_transport_error_returns_false(self) -> None:
+        handle = self._handle(ConnectionError("refused"))
+        assert handle.done() is False
+        assert isinstance(handle.error, ConnectionError)
+
+    def test_unexpected_error_propagates(self) -> None:
+        handle = self._handle(KeyError("bug"))
+        with pytest.raises(KeyError):
+            handle.done()

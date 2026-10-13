@@ -239,12 +239,14 @@ class _AWSBatchHandle(PollingHandle):
         # network blip) is treated as not-done. Ghost jobs (deleted or
         # never-created) return an empty list — after N consecutive
         # empty responses we raise to break the indefinite-wait loop.
+        from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
         for attempt in range(self._GHOST_RETRIES):
             try:
                 response = self._executor._get_client().describe_jobs(  # noqa: SLF001
                     jobs=[self.job_id]
                 )
-            except Exception as exc:  # noqa: BLE001 — never raise from done()
+            except (BotoCoreError, ClientError, OSError) as exc:
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False

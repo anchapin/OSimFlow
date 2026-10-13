@@ -201,6 +201,8 @@ def _check_aws_batch() -> CheckResult:
             "boto3 installed; AWS region not configured",
             detail="Set AWS_REGION or AWS_DEFAULT_REGION to reach AWS Batch.",
         )
+    from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
     try:
         client = boto3.client("batch", region_name=region)  # noqa: PLC0415
         response = client.describe_compute_environments(maxResults=1)
@@ -211,7 +213,7 @@ def _check_aws_batch() -> CheckResult:
             f"boto3 reachable; region={region}; {n_ce} compute env(s) found",
             detail="describe_compute_environments succeeded.",
         )
-    except Exception as exc:  # noqa: BLE001 — surface all SDK errors as WARN
+    except (BotoCoreError, ClientError, OSError) as exc:  # surface SDK/network errors as WARN
         return _executor_check(
             "aws_batch",
             CheckStatus.WARN,
@@ -477,7 +479,7 @@ def _check_task_payload_signing(configured_executor: str | None) -> CheckResult:
         from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
 
         cls = ExecutorRegistry.get(configured_executor)
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, ImportError) as exc:
         return CheckResult(
             name=name,
             status=CheckStatus.SKIP,
