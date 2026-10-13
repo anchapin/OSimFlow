@@ -381,5 +381,5 @@ class WebhookClient:
             from importlib.metadata import version  # noqa: PLC0415
 
             return version("osimflow")
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - importlib.metadata lookup failure falls back to version 'unknown'
             return "unknown"

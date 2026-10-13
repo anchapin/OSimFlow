@@ -292,7 +292,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
                 recombination=self._recombination,
                 init="sobol",
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - third-party scipy differential_evolution step may raise arbitrary errors; logged, caller keeps best-so-far
             log.warning("DE scipy step failed: %s; using best-so-far", exc)
             return None
 

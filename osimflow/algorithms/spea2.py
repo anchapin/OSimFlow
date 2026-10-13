@@ -383,7 +383,7 @@ class SPEA2Algorithm(BaseAlgorithm):
         try:
             hv_indicator = HV(ref_point=ref_point)
             hv = float(hv_indicator(F))
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - pymoo HV indicator raises heterogeneous errors on degenerate fronts; hypervolume recorded as 0.0
             hv = 0.0
         self._hv_history.append(hv)
 

@@ -472,7 +472,7 @@ def main() -> int:
             algorithm=args.algorithm,
             column_map=col_map,
         )
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: any converter/openpyxl/pandas failure is logged and mapped to exit code 1
         log.error("Conversion failed: %s", exc)
         return 1
     return 0

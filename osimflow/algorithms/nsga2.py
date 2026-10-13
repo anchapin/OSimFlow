@@ -278,7 +278,7 @@ def _generate_ref_dirs(
         )
         return np.array(ref_dirs, dtype=np.float64)
 
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception as exc:  # noqa: BLE001 - pymoo ref-dir generators raise heterogeneous errors for bad specs; logged, caller falls back to defaults
         log.warning("Failed to generate ref_dirs '%s': %s", ref_dirs_spec, exc)
         return None
 
@@ -327,7 +327,7 @@ def _adaptive_ref_points(
             # Update reference point: blend toward closest solution
             updated_refs[i] = 0.5 * ref + 0.5 * population_F[closest_idx]
         return updated_refs
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception:  # noqa: BLE001 - pymoo/numpy failure while adapting reference points; previous points are kept
         return ref_points
 
 
@@ -766,7 +766,7 @@ class NSGA2Algorithm(BaseAlgorithm):
         try:
             hv_indicator = HV(ref_point=ref_point)
             hv = float(hv_indicator(F))
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - pymoo HV indicator raises heterogeneous errors on degenerate fronts; hypervolume recorded as 0.0
             hv = 0.0
         self._hv_history.append(hv)
 

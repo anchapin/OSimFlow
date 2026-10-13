@@ -561,7 +561,7 @@ class S3ArtifactStorage:
         try:
             self.client.head_object(Bucket=self.bucket, Key=remote)
             return True
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - boto3 head_object raises ClientError/BotoCoreError variants; any failure means object not confirmed present
             return False
 
     def list_artifacts(self, prefix: str = "") -> list[str]:
@@ -736,7 +736,7 @@ class ResultStorageUploader:
                         self._upload_once(local_path, remote_path)
                         last_error = None
                         break
-                    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+                    except Exception as exc:  # noqa: BLE001 - boto3 upload raises varied errors; retried with backoff and the last error re-raised
                         last_error = exc
                         if attempt < self._max_retries:
                             sleep_s = min(60.0, self._retry_backoff_s * (2**attempt))
