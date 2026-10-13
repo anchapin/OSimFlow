@@ -1288,3 +1288,35 @@ def test_algorithm_code_digest_fallback_is_stable_and_warns(
     assert len(digest_1) == 64
     assert digest_1 == digest_2, "the fallback digest must be stable"
     assert "cannot hash algorithm implementation source" in caplog.text
+
+
+@pytest.mark.parametrize("module", ["steps.py", "runner.py"])
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
+def test_campaign_step_module_edit_invalidates_bin_hash(module: str) -> None:
+    """Regression test for issue #1934.
+
+    ``Campaign.run`` / ``step_*`` bodies live in ``osimflow/campaign/
+    runner.py`` and ``steps.py`` (issue #1930). Editing them changes
+    step behaviour, so it must change ``code_hashes["bin"]`` (AGGREGATE_
+    RESULTS keys off ``work``, which must stay unchanged).
+    """
+    import osimflow
+    from osimflow.campaign import Campaign
+
+    package_root = Path(osimflow.__file__).resolve().parent
+    target = package_root / "campaign" / module
+    assert target.is_file(), f"{target} must exist"
+
+    class _Stub:
+        pass
+
+    baseline = Campaign._compute_code_hashes(_Stub())
+    original_content = target.read_text()
+    try:
+        with target.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1934 regression test\n")
+        after = Campaign._compute_code_hashes(_Stub())
+        assert baseline["bin"] != after["bin"]
+        assert baseline["work"] == after["work"]
+    finally:
+        target.write_text(original_content)
