@@ -292,8 +292,10 @@ fixable = ["ALL"]
 # base.py defines shared primitives; import order here is intentional to
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
-# campaign/__init__.py: SIM108 if-else block is more readable with explanatory comment.
-"osimflow/campaign/__init__.py" = ["SIM108", "BLE001"]
+# campaign/steps.py: SIM108 if-else blocks are more readable with explanatory comments.
+"osimflow/campaign/__init__.py" = ["BLE001"]
+"osimflow/campaign/runner.py" = ["BLE001"]
+"osimflow/campaign/steps.py" = ["SIM108"]
 # document_store.py: the rich MongoDB-style query semantics
 # (``_document_matches`` / ``update_one``) require one branch per
 # operator and many return statements; refactoring to dispatch tables

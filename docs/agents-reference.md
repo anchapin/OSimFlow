@@ -479,6 +479,21 @@ name in this section.
   (`campaign._run_one_generation(...)` &
   `campaign._persist_pareto_front(...)` &
   `campaign._extract_best_objective(...)`) is unchanged.
+- `osimflow/campaign/runner.py` — `CampaignRunMixin` (issue #1890):
+  `Campaign.run` and its run-path helpers (`_abort_run_path_cancel`,
+  `_run_dry_run`, `_run_single_sample`, `_run_full_campaign`,
+  `_finalize_full_campaign`, `_maybe_inject_chaos`,
+  `_maybe_archive_inputs`, `_maybe_fire_webhook`) moved verbatim out
+  of `Campaign`; module-level names resolve through the
+  `osimflow.campaign` namespace at call time so `mock.patch` seams
+  keep working.
+- `osimflow/campaign/steps.py` — `CampaignStepsMixin` (issue #1890):
+  the `step_*` DAG step bodies (`step_generate_samples`,
+  `step_preflight_run_model`, `step_apply_parameters`,
+  `step_run_openstudio_sim`, `step_aggregate_results`,
+  `step_generate_plots`), the detached-submit helpers and
+  `warm_cache`, moved verbatim out of `Campaign` with the same
+  call-time `osimflow.campaign` namespace lookup.
 - `osimflow/campaign/kpis.py` — `CampaignKpisMixin` (issue
   #1679): the `EXTRACT_KPIS` per-sample fan-out step
   (`step_extract_kpis` — issue #1082 cache key, the #286/#1533/
