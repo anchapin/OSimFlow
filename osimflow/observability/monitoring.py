@@ -586,7 +586,7 @@ class WorkerHeartbeat:
         while not self._stop_event.wait(HEARTBEAT_INTERVAL_SEC):
             try:
                 self._write()
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - heartbeat file write (IO/serialization) must never kill the heartbeat thread; logged
                 log.warning("heartbeat write failed for %s: %s", self.sample_id, exc)
 
     def stop(self) -> None:
@@ -597,7 +597,7 @@ class WorkerHeartbeat:
         self.job_handle_state = "stopped"
         try:
             self._write()
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - final heartbeat write is best-effort during shutdown; logged
             log.warning("final heartbeat write failed for %s: %s", self.sample_id, exc)
 
     def update_state(self, state: str) -> None:
@@ -605,7 +605,7 @@ class WorkerHeartbeat:
         self.job_handle_state = state
         try:
             self._write()
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - heartbeat state update is best-effort; write errors logged
             log.warning("heartbeat state update failed for %s: %s", self.sample_id, exc)
 
 

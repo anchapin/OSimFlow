@@ -245,7 +245,7 @@ class DOEAnalysis:
                 f_statistic=f_statistic,
                 p_value=p_value,
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - statsmodels ANOVA may raise arbitrary numerical errors; logged and the interaction is skipped
             log.warning("2-way ANOVA failed for %s x %s: %s", factor_a, factor_b, exc)
             return None
 

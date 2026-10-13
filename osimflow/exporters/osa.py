@@ -285,7 +285,7 @@ class OSAExporter:
         try:
             with variables_path.open(encoding="utf-8") as f:
                 yml_data = yaml.safe_load(f)
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - variables.yml parse/IO errors are logged and export proceeds with empty variables
             log.warning("Could not parse %s: %s; exporting empty variables", variables_path, exc)
             return []
 

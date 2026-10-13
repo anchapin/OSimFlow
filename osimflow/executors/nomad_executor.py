@@ -54,7 +54,7 @@ def _nomad_error_code(exc: Exception) -> int:
     """Extract HTTP status code from a Nomad/Consulate exception, or 0 if not applicable."""
     try:
         return getattr(exc, "status_code", 0) or 0
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception:  # noqa: BLE001 - status-code probe on arbitrary exception shapes; returns 0 when unavailable
         return 0
 
 
@@ -557,7 +557,7 @@ class _NomadHandle(PollingHandle):
         if self._allocation_id is None:
             try:
                 self._ensure_allocation_id()
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - allocation lookup raises varied nomad/HTTP errors; stored on handle and reported as not done
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
@@ -609,7 +609,7 @@ class _NomadHandle(PollingHandle):
         try:
             self._local_future.result()
             done = True
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - done() must never raise; any local future failure means not done
             done = False
         return done
 

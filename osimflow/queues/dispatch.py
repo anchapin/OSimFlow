@@ -289,7 +289,7 @@ class NoOpTaskQueue(ProducerQueue, ConsumerQueue):
             result = fn(*args, **kwargs)
             fut: Future[Any] = Future()
             fut.set_result(result)
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - task function is user code; any failure is captured into the returned Future
             fut = Future()
             fut.set_exception(exc)
         return TaskHandle(
