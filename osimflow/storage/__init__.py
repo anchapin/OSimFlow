@@ -739,7 +739,11 @@ class ResultStorageUploader:
                         self._upload_once(local_path, remote_path)
                         last_error = None
                         break
-                    except Exception as exc:  # noqa: BLE001 - pluggable ResultStorage backends (S3/Azure/GCS/third-party) raise unrelated SDK errors; retried with backoff and the last error is recorded
+                    # Intentionally broad: ResultStorage is a pluggable ABC with no
+                    # shared backend-error base (boto/azure/gcs/third-party SDKs raise
+                    # unrelated types). Every failure is retried with backoff and the
+                    # last one is recorded in self._errors, never swallowed.
+                    except Exception as exc:  # noqa: BLE001
                         last_error = exc
                         if attempt < self._max_retries:
                             sleep_s = min(60.0, self._retry_backoff_s * (2**attempt))

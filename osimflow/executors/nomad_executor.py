@@ -21,7 +21,7 @@ import threading
 import time
 import warnings
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from typing import Any, ClassVar, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
@@ -609,13 +609,12 @@ class _NomadHandle(PollingHandle):
         # and receive the error.
         if self._local_future is None:
             return cast(bool, status == "complete")
-        done: bool
+        # Future.exception() returns the work function's error instead of
+        # raising it, so only cancellation needs catching here.
         try:
-            self._local_future.result()
-            done = True
-        except Exception:  # noqa: BLE001 - done() must never raise; any local future failure means not done
-            done = False
-        return done
+            return self._local_future.exception() is None
+        except CancelledError:
+            return False
 
     @staticmethod
     def _extract_failure_description(task_states: dict[str, Any]) -> str:
