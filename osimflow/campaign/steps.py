@@ -37,6 +37,31 @@ def kpi_content_digests(kpi_files: list[Path]) -> list[str]:
     )
 
 
+# Files aggregate_results reads from each sim dir (SQL series, severe errors, failure summary).
+_AGGREGATE_SIM_FILES = ("eplusout.sql", "eplusout.err", "out.osw", "run.log")
+
+
+def sim_dir_content_digests(sim_dirs: list[Path]) -> list[str]:
+    """Per-sim-dir ``<name>/<file>:<sha256|absent>`` entries (issue #1998).
+
+    Content-addressed so an in-place re-simulation that reuses the same
+    directory path still invalidates the AGGREGATE_RESULTS key.
+    """
+    entries: list[str] = []
+    for d in sim_dirs:
+        for fname in _AGGREGATE_SIM_FILES:
+            f = Path(d) / fname
+            if f.is_file():
+                h = hashlib.sha256()
+                with f.open("rb") as fh:
+                    for block in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(block)
+                entries.append(f"{Path(d).name}/{fname}:{h.hexdigest()}")
+            else:
+                entries.append(f"{Path(d).name}/{fname}:absent")
+    return sorted(entries)
+
+
 log = logging.getLogger("osimflow.campaign")
 
 # Package namespace, resolved at call time so patches on osimflow.campaign.<name> apply.
@@ -1193,6 +1218,7 @@ class CampaignStepsMixin:
             {
                 "kpis": kpi_content_digests(kpi_files),
                 "sims": [str(p) for p in sim_dirs],
+                "sim_contents": sim_dir_content_digests(sim_dirs),
                 "baseline_sample_id": baseline_sample_id or "None",
             }
         )
