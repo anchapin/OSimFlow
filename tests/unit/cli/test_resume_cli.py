@@ -13,7 +13,7 @@ stranded with ``run.json`` status ``"paused"`` forever.  The fix:
 
 Run via::
 
-    .venv/bin/pytest tests/unit/campaign/test_resume_cli.py -v
+    .venv/bin/pytest tests/unit/cli/test_resume_cli.py -v
 """
 
 import json
