@@ -450,12 +450,27 @@ def submit_and_await_all(
         trace_id = deps.trace_id_for(sid)
         try:
             result = handle.result(timeout=await_deadline)
-            on_success(result)
-            # Mark completed in the job queue (issue #263).
-            deps.job_queue.mark_completed(f"{sid}_{step_name}")
-            # Reset recovery attempts on successful completion (issue #443).
-            if recovery_manager is not None:
-                recovery_manager.reset(sid)
+            try:
+                on_success(result)
+                # Mark completed in the job queue (issue #263).
+                deps.job_queue.mark_completed(f"{sid}_{step_name}")
+                # Reset recovery attempts on successful completion (issue #443).
+                if recovery_manager is not None:
+                    recovery_manager.reset(sid)
+            except Exception as bookkeeping_error:
+                # Post-result bookkeeping failure (issue #1967): the
+                # simulation itself succeeded, so skip worker auto-recovery
+                # (a resubmit cannot fix a local cache/IO error) and log it
+                # distinctly from a simulation failure.
+                log.error(
+                    "%s %s post-result bookkeeping failed (simulation succeeded): %s",
+                    step_name,
+                    sid,
+                    bookkeeping_error,
+                    exc_info=True,
+                )
+                deps.mark_sample_failed(sid, step_name, bookkeeping_error, trace_id)
+                return sid
         except Exception as e:
             log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
 
