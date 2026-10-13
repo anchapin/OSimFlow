@@ -75,6 +75,8 @@ class SampleTrace:
     extract_exit_code: int = 0
     eplusout_sql: str | None = None  # path if produced
     error_summary: str | None = None
+    # "simulation_error" | "bookkeeping_error" for failed samples (issue #1997).
+    failure_class: str | None = None
     stdout_log: str | None = None
     stderr_log: str | None = None
     quality_valid: bool | None = None

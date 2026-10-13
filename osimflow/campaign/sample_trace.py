@@ -229,6 +229,8 @@ class CampaignSampleTraceRecorder:
         eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
         error_summary_obj = state.get("error_summary")
         error_summary = None if error_summary_obj is None else str(error_summary_obj)
+        failure_class_obj = state.get("failure_class")
+        failure_class = None if failure_class_obj is None else str(failure_class_obj)
         # Per-sample log paths (issue #6). Optional because the
         # fields are only populated by RUN_OPENSTUDIO_SIM; samples
         # that errored out in APPLY_PARAMETERS never reach that
@@ -266,6 +268,7 @@ class CampaignSampleTraceRecorder:
             extract_exit_code=int(str(state.get("extract_exit_code", 0))),
             eplusout_sql=eplusout_sql,
             error_summary=error_summary,
+            failure_class=failure_class,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             worker_id=worker_id,

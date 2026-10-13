@@ -862,6 +862,11 @@ wall-clock timing, per-step cache status, and per-sample outcomes.
 | `summary.n_failed` | Number of samples with at least one failed step. |
 | `baseline_comparison` | Baseline metrics (if `baseline:` was set in variables.yml). |
 
+Failed `per_sample[]` rows carry a `failure_class`: `simulation_error`
+(the work function failed) or `bookkeeping_error` (the simulation
+succeeded but post-result cache/IO bookkeeping failed; no auto-recovery
+resubmit is attempted — issue #1997).
+
 **Healthy campaign:**
 
 ```json

@@ -136,6 +136,20 @@ class FanoutDeps:
         self.cancel_active_jobs = cancel_active_jobs
 
 
+#: ``failure_class`` values recorded in ``run.json`` (issue #1997).
+FAILURE_CLASS_SIMULATION = "simulation_error"
+FAILURE_CLASS_BOOKKEEPING = "bookkeeping_error"
+
+
+class PostResultBookkeepingError(Exception):
+    """Post-result bookkeeping failed after the work function succeeded (issue #1997).
+
+    Wraps the original error (kept as ``__cause__``) so
+    :func:`mark_sample_failed` can record ``failure_class="bookkeeping_error"``
+    and users can tell it apart from a genuine simulation failure.
+    """
+
+
 def mark_sample_failed(
     deps: FanoutDeps,
     sid: str,
@@ -180,6 +194,11 @@ def mark_sample_failed(
     state[f"{step_name.lower()}_exit_code"] = 1
     state[f"{step_name.lower()}_status"] = "failed"
     state["error_summary"] = str(error)[:500]
+    state["failure_class"] = (
+        FAILURE_CLASS_BOOKKEEPING
+        if isinstance(error, PostResultBookkeepingError)
+        else FAILURE_CLASS_SIMULATION
+    )
     deps.checkpoint_sample(sid)
     # Record sample status to observability backend immediately
     # so crashed samples are not missed (issue #847).
@@ -192,6 +211,7 @@ def mark_sample_failed(
             "sample_id": sid,
             "step": step_name,
             "status": "failed",
+            "failure_class": state["failure_class"],
             "error": str(error)[:500],
         },
     )
@@ -469,7 +489,9 @@ def submit_and_await_all(
                     bookkeeping_error,
                     exc_info=True,
                 )
-                deps.mark_sample_failed(sid, step_name, bookkeeping_error, trace_id)
+                wrapped = PostResultBookkeepingError(str(bookkeeping_error))
+                wrapped.__cause__ = bookkeeping_error
+                deps.mark_sample_failed(sid, step_name, wrapped, trace_id)
                 return sid
         except Exception as e:
             log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
@@ -506,6 +528,7 @@ def submit_and_await_all(
                     state.pop(f"{step_name.lower()}_exit_code", None)
                     state.pop(f"{step_name.lower()}_status", None)
                     state.pop("error_summary", None)
+                    state.pop("failure_class", None)
                     # Resubmit and await the new handle.
                     new_handle = resubmit_callback(sid)
                     if new_handle is None:

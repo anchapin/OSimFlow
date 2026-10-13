@@ -181,6 +181,7 @@ class TestMarkSampleFailed:
                 "sample_id": "sample_0",
                 "step": "RUN_OPENSTUDIO_SIM",
                 "status": "failed",
+                "failure_class": "simulation_error",
                 "error": "boom",
             },
         )
@@ -398,6 +399,19 @@ class TestSubmitAndAwaitAll:
         assert "post-result bookkeeping failed" in caplog.text
         assert "RUN_OPENSTUDIO_SIM sample_0 failed:" not in caplog.text
         spies["job_queue"].mark_failed.assert_called_once()
+        assert deps.sample_state["sample_0"]["failure_class"] == "bookkeeping_error"
+
+    def test_simulation_failure_class(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, _ = _deps(cfg, outdir)
+        submit_and_await_all(
+            deps,
+            {"sample_0": (_make_failing_handle(RuntimeError("sim died")), MagicMock())},
+            "RUN_OPENSTUDIO_SIM",
+        )
+        assert deps.sample_state["sample_0"]["failure_class"] == "simulation_error"
 
     def test_empty_submissions_noop(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
