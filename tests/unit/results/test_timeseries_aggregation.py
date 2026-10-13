@@ -201,6 +201,40 @@ class TestTimeSeriesAggregator:
         df = agg.aggregate_sql(sql_path, sample_id="x")
         assert df.empty
 
+    def test_connection_closed_on_query_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sql_path = tmp_path / "eplusout.sql"
+        conn = sqlite3.connect(str(sql_path))
+        for t in ("ReportData", "ReportDataDictionary", "Time"):
+            conn.execute(f"CREATE TABLE {t} (x TEXT)")
+        conn.commit()
+        conn.close()
+
+        closed: list[bool] = []
+        real_connect = sqlite3.connect
+
+        class _Conn:
+            def __init__(self) -> None:
+                self._c = real_connect(str(sql_path))
+
+            def execute(self, *a: object) -> sqlite3.Cursor:
+                return self._c.execute(*a)  # type: ignore[arg-type]
+
+            def close(self) -> None:
+                closed.append(True)
+                self._c.close()
+
+        monkeypatch.setattr(sqlite3, "connect", lambda *_a, **_k: _Conn())
+
+        def _boom(*_a: object, **_k: object) -> pd.DataFrame:
+            raise sqlite3.DatabaseError("boom")
+
+        monkeypatch.setattr(pd, "read_sql_query", _boom)
+        df = TimeSeriesAggregator(resolution="monthly").aggregate_sql(sql_path, "x")
+        assert df.empty
+        assert closed == [True]
+
 
 class TestAggregateCampaign:
     def test_multi_sample_campaign(self, tmp_path: Path) -> None:
