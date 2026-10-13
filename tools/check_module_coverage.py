@@ -308,7 +308,7 @@ FLOORS: dict[str, float] = {
     "osimflow/byos.py": 87.30,  # measured 88.30%
     "osimflow/byos_contract.py": 99.00,  # measured 100.00% (declarations)
     "osimflow/cache.py": 96.32,  # measured 97.32%
-    "osimflow/campaign/__init__.py": 84.47,  # measured 85.47% (CI; dropped from 86.50% only because #1890 moved 100%-covered code out)
+    "osimflow/campaign/__init__.py": 92.00,  # measured 98% locally (89% before tests/unit/campaign/test_campaign_helpers.py, issue #1926); floor kept ~6pt under local to absorb the CI-vs-local delta (CI was 85.47%)
     "osimflow/chaos.py": 92.94,  # measured 93.94%
     "osimflow/circuit_breaker.py": 99.00,  # measured 100.00% (issue #1111)
     "osimflow/client.py": 82.77,  # measured 83.77%
@@ -361,7 +361,7 @@ FLOORS: dict[str, float] = {
     "osimflow/_work_artifacts.py": 94.08,  # measured 95.08%
     "osimflow/_work_env.py": 99.00,  # measured 100.00%
     "osimflow/_work_heartbeat.py": 99.00,  # measured 100.00%
-    "osimflow/_work_osm_mutations.py": 36.01,  # measured 37.01% (real-OpenStudio-bindings paths unexercised without the CLI)
+    "osimflow/_work_osm_mutations.py": 95.00,  # measured 100.00% (issue #1926; fake-openstudio tests in tests/unit/work/test_work_osm_mutations.py)
     "osimflow/_work_retry.py": 95.43,  # measured 96.43%
     "osimflow/_work_stub.py": 84.71,  # measured 85.71%
     # Split out of config.py (issue #1890); readings from the CI-flag suite.
