@@ -372,6 +372,33 @@ class TestSubmitAndAwaitAll:
         assert resubmits == ["sample_0"]
         spies["job_queue"].mark_completed.assert_called_with("sample_0_RUN_OPENSTUDIO_SIM")
 
+    def test_bookkeeping_error_not_treated_as_simulation_failure(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+        recovery_manager = WorkerRecoveryManager(outdir)
+        recovery_manager.check_and_recover = MagicMock(return_value=(True, 1))  # type: ignore[method-assign]
+        resubmit_callback = MagicMock()
+        on_success = MagicMock(side_effect=OSError("unlink failed"))
+        with caplog.at_level(logging.ERROR):
+            submit_and_await_all(
+                deps,
+                {"sample_0": (_make_ok_handle(Path("/tmp/r")), on_success)},
+                "RUN_OPENSTUDIO_SIM",
+                recovery_manager=recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+        resubmit_callback.assert_not_called()
+        recovery_manager.check_and_recover.assert_not_called()
+        assert "post-result bookkeeping failed" in caplog.text
+        assert "RUN_OPENSTUDIO_SIM sample_0 failed:" not in caplog.text
+        spies["job_queue"].mark_failed.assert_called_once()
+
     def test_empty_submissions_noop(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:
