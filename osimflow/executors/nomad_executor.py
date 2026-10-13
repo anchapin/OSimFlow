@@ -557,7 +557,11 @@ class _NomadHandle(PollingHandle):
         if self._allocation_id is None:
             try:
                 self._ensure_allocation_id()
-            except Exception as exc:  # noqa: BLE001 - allocation lookup raises varied nomad/HTTP errors; stored on handle and reported as not done
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+            ) as exc:  # Nomad HTTP/transport/JSON errors; stored on handle and reported as not done
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
@@ -570,7 +574,7 @@ class _NomadHandle(PollingHandle):
         for attempt in range(self._GHOST_RETRIES):
             try:
                 alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
-            except Exception as exc:  # noqa: BLE001 — never raise from done()
+            except (RuntimeError, OSError, ValueError) as exc:  # Nomad HTTP/transport/JSON errors
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False

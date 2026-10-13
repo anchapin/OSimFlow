@@ -139,13 +139,25 @@ class TestAwsBatch:
 
     def test_unreachable(self, monkeypatch):
         def boom(*a, **k):
-            raise RuntimeError("no creds")
+            from botocore.exceptions import NoCredentialsError
+
+            raise NoCredentialsError()
 
         self._fake_boto3(monkeypatch, boom)
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
         res = he._check_aws_batch()
-        assert res.status == CheckStatus.WARN and "no creds" in res.detail
+        assert res.status == CheckStatus.WARN and "credentials" in res.detail
+
+    def test_unexpected_error_propagates(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("programming bug")
+
+        self._fake_boto3(monkeypatch, boom)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+        with pytest.raises(RuntimeError, match="programming bug"):
+            he._check_aws_batch()
 
 
 class TestAzureBatch:

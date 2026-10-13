@@ -643,8 +643,22 @@ class TestAWSBatchHandle:
 
     def test_done_api_error_returns_false(self) -> None:
         handle, mock_client = self._make_handle("RUNNING")
-        mock_client.describe_jobs.side_effect = Exception("network")
+        mock_client.describe_jobs.side_effect = ConnectionError("network")
         assert handle.done() is False
+
+    def test_done_botocore_error_returns_false(self) -> None:
+        from botocore.exceptions import EndpointConnectionError
+
+        handle, mock_client = self._make_handle("RUNNING")
+        mock_client.describe_jobs.side_effect = EndpointConnectionError(endpoint_url="http://x")
+        assert handle.done() is False
+        assert isinstance(handle.error, EndpointConnectionError)
+
+    def test_done_unexpected_error_propagates(self) -> None:
+        handle, mock_client = self._make_handle("RUNNING")
+        mock_client.describe_jobs.side_effect = KeyError("bug")
+        with pytest.raises(KeyError):
+            handle.done()
 
     def test_done_empty_jobs_returns_false(self) -> None:
         handle, mock_client = self._make_handle("RUNNING")
