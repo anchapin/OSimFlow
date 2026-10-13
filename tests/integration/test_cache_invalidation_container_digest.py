@@ -55,7 +55,7 @@ Test scheduling
 Marked ``@pytest.mark.slow`` so it runs in the dedicated ``slow`` CI
 job rather than the fast PR-CI lane (the test executes four stub
 campaigns, ~25 seconds end-to-end). Also pinned to the
-``xdist_group(name="cache_resume_solo")`` group from
+``xdist_group(name="code_hash_repo_tree")`` group from
 :mod:`tests.integration.test_cache_resume` so it does not run
 concurrently with that test (they share the campaign registry DB
 path and the SQLite cache).
@@ -196,7 +196,7 @@ def _run_campaign(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group(name="cache_resume_solo")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_container_digest_change_invalidates_and_redo_invalidates_cache(
     workdir: Path,
     template_pkg: Path,
@@ -322,7 +322,7 @@ def test_container_digest_change_invalidates_and_redo_invalidates_cache(
     )
 
 
-@pytest.mark.xdist_group(name="cache_resume_solo")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_container_digest_pin_landed_in_cache_key_row(tmp_path: Path) -> None:
     """Unit-style proof: building a ``CacheKey`` under two distinct
     ``--container-digest`` values with every other column equal MUST

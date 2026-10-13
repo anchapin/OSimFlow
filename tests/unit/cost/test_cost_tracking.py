@@ -591,7 +591,7 @@ class TestCampaignCostSummaryNew:
 # CostTracker integration with Campaign (issue #447)
 # ---------------------------------------------------------------------------
 class TestCostTrackerCampaignIntegration:
-    def test_campaign_cost_tracker_init_disabled(self) -> None:
+    def test_campaign_cost_tracker_init_disabled(self, tmp_path: Path) -> None:
         """When enable_cost_tracking=False, the wrapper holds no underlying tracker."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
@@ -601,7 +601,7 @@ class TestCostTrackerCampaignIntegration:
             input_variables=Path("variables.yml"),
             template_sim_package=Path("template"),
             n_samples=3,
-            outdir=Path("outdir"),
+            outdir=tmp_path,
             openstudio_version="3.11.0",
             enable_cost_tracking=False,
         )
@@ -609,7 +609,7 @@ class TestCostTrackerCampaignIntegration:
         assert campaign._cost_tracker.is_enabled is False
         assert campaign._cost_tracker._tracker is None
 
-    def test_campaign_cost_tracker_init_enabled(self) -> None:
+    def test_campaign_cost_tracker_init_enabled(self, tmp_path: Path) -> None:
         """When enable_cost_tracking=True, the wrapper holds a CostTracker."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
@@ -619,7 +619,7 @@ class TestCostTrackerCampaignIntegration:
             input_variables=Path("variables.yml"),
             template_sim_package=Path("template"),
             n_samples=3,
-            outdir=Path("outdir"),
+            outdir=tmp_path,
             openstudio_version="3.11.0",
             enable_cost_tracking=True,
         )
@@ -628,7 +628,7 @@ class TestCostTrackerCampaignIntegration:
         assert campaign._cost_tracker._tracker is not None
         assert campaign._cost_tracker._tracker.executor == "local"
 
-    def test_record_costs_noop_when_disabled(self) -> None:
+    def test_record_costs_noop_when_disabled(self, tmp_path: Path) -> None:
         """_record_costs is a no-op when cost tracking is disabled."""
         from osimflow.campaign import Campaign
         from osimflow.config import CampaignConfig
@@ -638,7 +638,7 @@ class TestCostTrackerCampaignIntegration:
             input_variables=Path("variables.yml"),
             template_sim_package=Path("template"),
             n_samples=3,
-            outdir=Path("outdir"),
+            outdir=tmp_path,
             openstudio_version="3.11.0",
             enable_cost_tracking=False,
         )

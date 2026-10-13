@@ -96,7 +96,7 @@ def cfg_factory(workdir: Path, template_pkg: Path) -> object:
 # ---------------------------------------------------------------------------
 # Test: the warm run is fully cache-served (no work re-executed)
 # ---------------------------------------------------------------------------
-@pytest.mark.xdist_group(name="cache_resume_solo")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_warm_cache_resume_is_fully_cache_served(cfg_factory: object, outdir: Path) -> None:
     """Run a 3-sample campaign twice against the same outdir. The
     second run must be fully cache-served — every per-step lookup
@@ -176,7 +176,7 @@ def test_warm_cache_resume_is_fully_cache_served(cfg_factory: object, outdir: Pa
     assert {row["status"] for row in warm_trace["per_sample"]} == {"ok"}
 
 
-@pytest.mark.xdist_group(name="cache_resume_solo_with_repo_tree")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_warm_cache_resume_survives_input_relocation(tmp_path: Path) -> None:
     """Issue #1558: after a successful cold run, copy the
     ``variables.yml`` and ``template_sim_package`` to a brand-new

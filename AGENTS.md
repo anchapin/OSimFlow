@@ -647,7 +647,7 @@ context-mode / codebase-memory-mcp are exposed):
   — zero-to-running AWS Batch deployment (issue #130).
 - [Branch protection
   (docs/branch-protection.md)](docs/branch-protection.md) —
-  settings-as-code for `main` branch rules (5 required status
+  settings-as-code for `main` branch rules (6 required status
   checks, linear history, no reviews/no force-pushes).
   Applied post-merge via
   `scripts/apply_branch_protection.sh`; see issue #975.

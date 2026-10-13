@@ -47,6 +47,7 @@ EXPECTED_CHECKS: tuple[str, ...] = (
     "test (pytest, 82% coverage gate)",
     "agents & docs contract",
     "security (pip-audit)",
+    "test (python 3.13)",
 )
 
 PROTECTION_PATH = "/repos/anchapin/OSimFlow/branches/main/protection"
@@ -177,7 +178,7 @@ def test_dry_run_payload_lists_every_ci_job_name() -> None:
 
     This catches drift: if someone renames a CI job without updating the
     script's REQUIRED_CHECKS list, this test fails. We only assert against
-    the 5 EXPECTED_CHECKS — other jobs in ci.yml (``mlflow-real``, ``slow``,
+    the EXPECTED_CHECKS — other jobs in ci.yml (``mlflow-real``, ``slow``,
     ``aws-batch-mock``, ``nomad-single-node``, ``terraform``) are explicitly
     non-required and not asserted here.
     """

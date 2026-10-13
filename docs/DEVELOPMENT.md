@@ -2056,7 +2056,7 @@ are failing. This can silently land broken code on `main`.
 - Settings → Branches → Branch protection rules → `main`
 - Require status checks: `lint (ruff)`, `typecheck (mypy --strict)`,
   `test (pytest, 82% coverage gate)`, `agents & docs contract`,
-  `security (pip-audit)`
+  `security (pip-audit)`, `test (python 3.13)`
 
 Until that is configured, always verify `non_success` is empty before
 merging:
