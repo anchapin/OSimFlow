@@ -514,3 +514,36 @@ class TestArgumentValidation:
     def test_negative_poll_interval_rejected(self) -> None:
         with pytest.raises(ValueError, match="poll_interval"):
             terminate_active_subprocesses(grace_period=0.1, poll_interval=-0.1)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+class TestProcessGroupKill:
+    """Issue #1965: timeout kills grandchildren, not only the direct child."""
+
+    @staticmethod
+    def _alive(pid: int) -> bool:
+        import os
+
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def test_timeout_kills_grandchild(self, tmp_path: Path) -> None:
+        import time
+
+        pid_file = tmp_path / "gc.pid"
+        script = f"sleep 60 & echo $! > {pid_file}; wait"
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_subprocess(
+                ["sh", "-c", script],
+                stdout_path=tmp_path / "o.log",
+                stderr_path=tmp_path / "e.log",
+                timeout=1.0,
+            )
+        gc_pid = int(pid_file.read_text().strip())
+        deadline = time.monotonic() + 5
+        while self._alive(gc_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not self._alive(gc_pid)
