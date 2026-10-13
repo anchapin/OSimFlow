@@ -186,7 +186,7 @@ def _check_package(name: str) -> tuple[bool, str | None]:
 
         dist_name = name.replace("_", "-") if name != "yaml" else "PyYAML"
         version = _version(dist_name)
-    except (PackageNotFoundError, Exception):  # noqa: BLE001 - importlib.metadata may raise varied errors for odd distributions; version reported as unknown
+    except (PackageNotFoundError, ValueError):  # ValueError: invalid dist name
         # importlib.metadata may fail for namespace packages; ignore.
         version = None
     return (True, version)

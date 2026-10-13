@@ -283,7 +283,7 @@ class EmailDestination(AlertDestination):
                 self.recipients,
             )
             return True
-        except Exception as exc:  # noqa: BLE001 - smtplib/socket/ssl raise varied errors; delivery failure logged and reported as False
+        except (smtplib.SMTPException, OSError) as exc:  # ssl.SSLError is an OSError
             log.warning("alert email delivery failed via %s: %s", self.smtp_host, exc)
             return False
 
@@ -863,7 +863,7 @@ def load_alert_rules_from_yaml(path: Path) -> list[AlertRule]:
     """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - alert-rules YAML IO/parse/schema errors are logged and no rules are loaded
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         log.error("failed to load alert rules from %s: %s", path, exc)
         return []
 
@@ -936,7 +936,7 @@ def load_alert_destinations_from_yaml(path: Path) -> list[AlertDestination]:
     """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - alert-destinations YAML IO/parse/schema errors are logged and no destinations are loaded
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         log.error("failed to load alert destinations from %s: %s", path, exc)
         return []
 

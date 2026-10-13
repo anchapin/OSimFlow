@@ -557,11 +557,14 @@ class S3ArtifactStorage:
         bool
             True if the artifact exists, False otherwise.
         """
+        from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
         remote = self._remote(remote_path)
         try:
             self.client.head_object(Bucket=self.bucket, Key=remote)
             return True
-        except Exception:  # noqa: BLE001 - boto3 head_object raises ClientError/BotoCoreError variants; any failure means object not confirmed present
+        except (ClientError, BotoCoreError):
+            # any boto failure means the object is not confirmed present
             return False
 
     def list_artifacts(self, prefix: str = "") -> list[str]:

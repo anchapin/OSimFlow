@@ -84,7 +84,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..circuit_breaker import CircuitBreaker, CircuitOpenError
-from ..distributed_cache import validate_redis_url
+from ..distributed_cache import _redis_errors, validate_redis_url
 from .journal import JobQueue
 
 if TYPE_CHECKING:
@@ -475,7 +475,7 @@ class DistributedJobQueue:
                     exc,
                     self._breaker.consecutive_failures,
                 )
-            except Exception as exc:  # noqa: BLE001 - redis publish may raise unexpected non-connection errors; breaker records failure and publish is dropped
+            except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                 log.warning(
                     "DistributedJobQueue: unexpected error publishing action for campaign=%s channel=%s: %s",
                     self._campaign_id,
