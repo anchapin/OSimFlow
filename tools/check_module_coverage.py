@@ -141,7 +141,7 @@ see commit body) are::
     osimflow/byos.py                           88.30%  (367 stmts)
     osimflow/byos_contract.py                 100.00%   (52 stmts; pure declarations)
     osimflow/cache.py                          97.32%  (411 stmts)
-    osimflow/campaign/__init__.py                    85.47%  (main orchestrator; re-seeded by issue #1890 split)
+    osimflow/campaign/__init__.py                    98.15%  (main orchestrator; CI-measured, issue #1950)
     osimflow/chaos.py                          93.94%  (229 stmts)
     osimflow/circuit_breaker.py               100.00%   (98 stmts; issue #1111)
     osimflow/client.py                         83.77%  (451 stmts)
@@ -308,7 +308,7 @@ FLOORS: dict[str, float] = {
     "osimflow/byos.py": 87.30,  # measured 88.30%
     "osimflow/byos_contract.py": 99.00,  # measured 100.00% (declarations)
     "osimflow/cache.py": 96.32,  # measured 97.32%
-    "osimflow/campaign/__init__.py": 92.00,  # measured 98% locally (89% before tests/unit/campaign/test_campaign_helpers.py, issue #1926); floor kept ~6pt under local to absorb the CI-vs-local delta (CI was 85.47%)
+    "osimflow/campaign/__init__.py": 97.15,  # CI-measured 98.15% (issue #1950; identical across 3 main CI runs, `make test-cov` log) minus 1.0 epsilon; was 92.00 when CI measured 85.47%
     "osimflow/chaos.py": 92.94,  # measured 93.94%
     "osimflow/circuit_breaker.py": 99.00,  # measured 100.00% (issue #1111)
     "osimflow/client.py": 82.77,  # measured 83.77%
