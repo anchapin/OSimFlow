@@ -253,6 +253,8 @@ FLOORS: dict[str, float] = {
     "osimflow/campaign/epw.py": 88.52,  # measured 89.52%
     "osimflow/campaign/fanout.py": 82.94,  # measured 83.94% (#1542; fanout-oracle subset — full gate measures higher)
     "osimflow/campaign/hooks.py": 71.17,  # measured 72.17%
+    "osimflow/campaign/runner.py": 87.90,  # measured 88.95% (issue #1890; Campaign.run + run-path helpers extracted from Campaign)
+    "osimflow/campaign/steps.py": 81.40,  # measured 82.47% (issue #1890; step_* bodies + detached-submit helpers extracted from Campaign)
     "osimflow/campaign/kpis.py": 76.00,  # measured 77.00% (issue #1679; EXTRACT_KPIS step + worker direct-to-storage publish extracted from Campaign)
     "osimflow/campaign/optimization.py": 76.00,  # measured 77.00% (issue #1679; generational loop + Pareto persistence extracted from Campaign)
     "osimflow/campaign/lifecycle.py": 77.81,  # measured 78.81%
