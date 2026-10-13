@@ -513,10 +513,10 @@ class TestRunOpenstudioSimRealCli:
             )
         assert mock_run.call_args[1]["timeout"] is None
 
-    def test_skips_when_eplusout_sql_exists(
+    def test_stale_eplusout_sql_in_sim_out_is_not_reused(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:
-        """When eplusout.sql already exists (simulation ran in apply_parameters), skip re-run."""
+        """Stale sim_out/eplusout.sql from a prior run must not skip simulation (issue #1961)."""
         stdout_path, stderr_path = log_paths
         sim_out = out_dir / "0001"
         sim_out.mkdir(parents=True, exist_ok=True)
@@ -527,6 +527,9 @@ class TestRunOpenstudioSimRealCli:
             patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
             result = run_openstudio_sim(
                 modified_sim_package=sim_package,
                 sample_id="0001",
@@ -536,9 +539,9 @@ class TestRunOpenstudioSimRealCli:
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
             )
-        mock_run.assert_not_called()
+        mock_run.assert_called_once()
         assert result == sim_out
-        assert (sim_out / "eplusout.sql").read_text() == "-- already simulated"
+        assert not (sim_out / "eplusout.sql").exists()
 
     def test_no_placeholder_sql_on_real_cli(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
