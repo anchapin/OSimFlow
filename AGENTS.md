@@ -347,6 +347,8 @@ Adding a public file, executor, executor config module, `bin/*.py` script, or
   (union, sorted + deduped — issue #1021). Editing
   `osimflow/work.py` (and modules it imports) is hashed
   separately as `code_hashes["work"]` for `AGGREGATE_RESULTS`.
+  The `code_hashes["bin"]` import closure also roots at
+  `osimflow/campaign/steps.py` and `runner.py` (issue #1934).
   The resolved algorithm's own implementation code is
   additionally digest-hashed into the `GENERATE_*_SAMPLES`
   key (`_algorithm_code_digest` in

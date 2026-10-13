@@ -155,8 +155,10 @@ def _iter_import_targets(
 def _transitive_import_closure(package_root: Path) -> frozenset[Path]:
     """Transitive ``osimflow``-internal import closure of the work layer.
 
-    Roots: ``osimflow.work``, ``osimflow.apply_params``, and every
-    ``osimflow._work_scripts`` module. Walks ``import`` / ``from ...
+    Roots: ``osimflow.work``, ``osimflow.apply_params``, every
+    ``osimflow._work_scripts`` module, and the step/orchestration
+    bodies ``osimflow.campaign.steps`` / ``osimflow.campaign.runner``
+    (issues #1930, #1934). Walks ``import`` / ``from ...
     import`` statements (AST-based — deterministic, fast, no import side
     effects) and keeps only files under ``package_root``; stdlib and
     third-party imports are excluded (issue #1446).
@@ -169,7 +171,12 @@ def _transitive_import_closure(package_root: Path) -> frozenset[Path]:
     cached = _IMPORT_CLOSURE_CACHE.get(package_root)
     if cached is not None:
         return cached
-    roots = ["osimflow.work", "osimflow.apply_params"]
+    roots = [
+        "osimflow.work",
+        "osimflow.apply_params",
+        "osimflow.campaign.steps",
+        "osimflow.campaign.runner",
+    ]
     scripts_dir = package_root / "_work_scripts"
     if scripts_dir.is_dir():
         roots.append("osimflow._work_scripts")
