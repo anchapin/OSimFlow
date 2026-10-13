@@ -38,6 +38,27 @@ def _no_moto_batch_containers() -> object:
         yield
 
 
+@pytest.fixture(autouse=True)
+def _isolated_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> object:
+    """Pin fake credentials and drop boto3's cached default session.
+
+    ``boto3.client()`` reuses the process-wide default session, whose
+    credential resolver may already have been primed by an earlier test on
+    the same xdist worker with the developer's real profile (e.g. an
+    expired SSO token), making these moto-backed tests order-dependent
+    (issue #1945).
+    """
+    for var in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+    yield
+    boto3.DEFAULT_SESSION = None
+
+
 # ---------------------------------------------------------------------------
 # SampleTrace serialization / deserialization
 # ---------------------------------------------------------------------------
