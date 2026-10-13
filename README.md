@@ -75,7 +75,8 @@ have the venv activated and want to run a longer campaign by hand,
 
 ### 3. Verify your installation
 
-After the command completes, check that these outputs exist under `./results_smoke`:
+After `make smoke` completes, check that these outputs exist under `./results_smoke`
+(if you ran the manual command above instead, look under `./results`):
 
 | Artifact | Description |
 |---|---|
