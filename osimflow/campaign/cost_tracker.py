@@ -163,6 +163,7 @@ class CampaignCostTracker:
                 result_storage_bucket=cfg.result_storage_bucket,
                 result_storage_prefix=str(cfg.outdir.name),
                 result_storage_endpoint=cfg.result_storage_endpoint,
+                n_samples=cfg.n_samples,
                 track_costs=cfg.enable_cost_tracking,
                 aws_on_demand_per_vcpu_hour=cfg.cost_on_demand_price,
                 aws_spot_per_vcpu_hour=cfg.cost_spot_price,

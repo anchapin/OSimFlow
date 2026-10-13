@@ -270,3 +270,24 @@ class TestInstanceAndNameParity:
         cls = ExecutorRegistry.get(executor_name)
         instance = cls.__new__(cls)
         assert _supports_spot_from_name(executor_name) == instance.supports_spot_market
+
+
+class TestNSamplesWiring:
+    """Issue #1999: the real sample count reaches the tracker and summary."""
+
+    def test_tracker_and_summary_carry_n_samples(self, campaign_cfg: object) -> None:
+        from osimflow.campaign.cost_tracker import CampaignCostTracker
+
+        ct = CampaignCostTracker("c1", campaign_cfg, "local")  # type: ignore[arg-type]
+        assert ct._tracker is not None
+        assert ct._tracker.n_samples == 3
+        summary = ct.finalize()
+        assert summary is not None
+        assert summary["n_samples"] == 3
+
+    def test_build_cost_tracker_accepts_n_samples(self) -> None:
+        from osimflow.cost_tracking import build_cost_tracker
+
+        tracker = build_cost_tracker("c", "local", track_costs=True, n_samples=2)
+        assert tracker is not None
+        assert tracker.n_samples == 2

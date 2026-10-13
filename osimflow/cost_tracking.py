@@ -286,6 +286,7 @@ def build_cost_tracker(
     result_storage_prefix: str = "",
     result_storage_endpoint: str | None = None,
     *,
+    n_samples: int = 0,
     track_costs: bool = False,
     aws_on_demand_per_vcpu_hour: float = DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
     aws_spot_per_vcpu_hour: float = DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
@@ -307,6 +308,8 @@ def build_cost_tracker(
         Prefix for remote paths.
     result_storage_endpoint
         S3-compatible endpoint URL (for MinIO, R2, etc.).
+    n_samples
+        Number of samples in the campaign (reported in the cost summary).
     track_costs
         If False, returns None (cost tracking disabled).
     aws_on_demand_per_vcpu_hour
@@ -325,7 +328,7 @@ def build_cost_tracker(
         return None
 
     return CostTracker(
-        n_samples=0,  # n_samples set separately via n_samples property
+        n_samples=n_samples,
         executor=executor_type,
         on_demand_price=aws_on_demand_per_vcpu_hour,
         spot_price=aws_spot_per_vcpu_hour,
