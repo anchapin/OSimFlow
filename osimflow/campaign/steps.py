@@ -8,6 +8,7 @@ submit helpers and ``warm_cache``, moved verbatim out of
 ``mock.patch("osimflow.campaign.<name>")`` seams keep working.
 """
 
+import hashlib
 import logging
 import sys
 from collections.abc import Callable
@@ -22,6 +23,19 @@ from ..observability.monitoring import RunTrace, WorkerRecoveryManager
 from ..s3_campaign import S3CampaignStore, SubmitClaim
 from .dag import SampleDict, SimResult
 from .types import SampleSpec
+
+
+def kpi_content_digests(kpi_files: list[Path]) -> list[str]:
+    """Per-KPI-file ``<parent>/<name>:<sha256>`` entries (issue #1962).
+
+    Content-addressed so in-place KPI rewrites (e.g. ``mark-for-reanalysis``)
+    invalidate the AGGREGATE_RESULTS key; the parent dir name keeps sample
+    identity without embedding absolute paths.
+    """
+    return sorted(
+        f"{p.parent.name}/{p.name}:{hashlib.sha256(p.read_bytes()).hexdigest()}" for p in kpi_files
+    )
+
 
 log = logging.getLogger("osimflow.campaign")
 
@@ -1177,7 +1191,7 @@ class CampaignStepsMixin:
                 sim_dirs.append(fd)
         inputs_hash = _c.sha256_of_dict(
             {
-                "kpis": [str(p) for p in kpi_files],
+                "kpis": kpi_content_digests(kpi_files),
                 "sims": [str(p) for p in sim_dirs],
                 "baseline_sample_id": baseline_sample_id or "None",
             }
