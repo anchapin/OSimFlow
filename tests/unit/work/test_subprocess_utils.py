@@ -533,6 +533,7 @@ class TestProcessGroupKill:
     def test_timeout_kills_grandchild(self, tmp_path: Path) -> None:
         import time
 
+        pause = threading.Event()
         pid_file = tmp_path / "gc.pid"
         script = f"sleep 60 & echo $! > {pid_file}; wait"
         with pytest.raises(subprocess.TimeoutExpired):
@@ -545,5 +546,5 @@ class TestProcessGroupKill:
         gc_pid = int(pid_file.read_text().strip())
         deadline = time.monotonic() + 5
         while self._alive(gc_pid) and time.monotonic() < deadline:
-            time.sleep(0.05)
+            pause.wait(0.05)
         assert not self._alive(gc_pid)
