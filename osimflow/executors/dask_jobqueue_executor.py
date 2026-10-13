@@ -245,7 +245,7 @@ class DaskJobQueueExecutor(BaseExecutor):
                 if pending > 0:
                     target = min(pending, self.max_workers)
                     self._scale_to(target)
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - autoscale thread must survive any dask/scheduler error; logged and retried next interval
                 log.warning("dask_jobqueue: auto-scale error: %s", exc)
             time.sleep(self.scale_interval_s)
 

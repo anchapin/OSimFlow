@@ -222,7 +222,7 @@ class LogAggregator:
                         logStreamName=stream,
                         logEvents=batch,
                     )
-                except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+                except Exception as exc:  # noqa: BLE001 - boto3 CloudWatch Logs raises varied errors; logging must never raise, failure is warned
                     log.warning("failed to publish logs to stream %s: %s", stream, exc)
 
         log.debug("published %d log events to CloudWatch Logs", len(self._pending))

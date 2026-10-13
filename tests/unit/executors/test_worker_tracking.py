@@ -14,6 +14,7 @@ import socket
 from unittest.mock import MagicMock, patch
 
 import boto3
+import pytest
 from moto import mock_aws
 
 from osimflow.executors import (
@@ -23,6 +24,39 @@ from osimflow.executors import (
     NomadExecutor,
 )
 from osimflow.monitoring import SampleTrace
+
+
+@pytest.fixture(autouse=True)
+def _no_moto_batch_containers() -> object:
+    """Stop moto's Batch job threads from launching real Docker containers.
+
+    Those threads race with mock teardown (and with other xdist workers),
+    making these tests environment- and load-dependent; the tests only
+    inspect the submit-time handle, never job completion.
+    """
+    with patch("moto.batch.models.Job.run", lambda self: None):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> object:
+    """Pin fake credentials and drop boto3's cached default session.
+
+    ``boto3.client()`` reuses the process-wide default session, whose
+    credential resolver may already have been primed by an earlier test on
+    the same xdist worker with the developer's real profile (e.g. an
+    expired SSO token), making these moto-backed tests order-dependent
+    (issue #1945).
+    """
+    for var in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+    yield
+    boto3.DEFAULT_SESSION = None
 
 
 # ---------------------------------------------------------------------------

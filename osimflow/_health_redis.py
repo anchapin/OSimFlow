@@ -121,6 +121,7 @@ def _check_redis_deployment_mode(redis_url: str | None) -> CheckResult:
 
     try:
         import redis as redis_sync  # noqa: PLC0415 — lazy; the [api] extra
+        from redis.exceptions import RedisError  # noqa: PLC0415
     except ImportError:
         return CheckResult(
             name=name,
@@ -153,7 +154,7 @@ def _check_redis_deployment_mode(redis_url: str | None) -> CheckResult:
             # ``Awaitable[Any] | Any``. Narrow with ``cast`` so downstream
             # ``isinstance(info, dict)`` checks stay type-correct.
             info = cast(dict[str, object], client.info())
-        except Exception as exc:  # noqa: BLE001, PERF203 — INFO is best-effort
+        except (RedisError, OSError) as exc:  # INFO is best-effort
             log.debug("redis INFO failed for %s: %s", redacted, exc)
 
         role_section = info.get("replication") if isinstance(info, dict) else None
@@ -167,7 +168,7 @@ def _check_redis_deployment_mode(redis_url: str | None) -> CheckResult:
         with contextlib.suppress(Exception):  # closing is best-effort
             client.close()
 
-    except Exception as exc:  # noqa: BLE001
+    except (RedisError, OSError, ValueError) as exc:  # ValueError: malformed URL
         return CheckResult(
             name=name,
             status=CheckStatus.FAIL,

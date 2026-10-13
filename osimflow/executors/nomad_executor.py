@@ -21,7 +21,7 @@ import threading
 import time
 import warnings
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from typing import Any, ClassVar, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
@@ -54,7 +54,7 @@ def _nomad_error_code(exc: Exception) -> int:
     """Extract HTTP status code from a Nomad/Consulate exception, or 0 if not applicable."""
     try:
         return getattr(exc, "status_code", 0) or 0
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception:  # noqa: BLE001 - status-code probe on arbitrary exception shapes; returns 0 when unavailable
         return 0
 
 
@@ -557,7 +557,11 @@ class _NomadHandle(PollingHandle):
         if self._allocation_id is None:
             try:
                 self._ensure_allocation_id()
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+            ) as exc:  # Nomad HTTP/transport/JSON errors; stored on handle and reported as not done
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
@@ -570,7 +574,7 @@ class _NomadHandle(PollingHandle):
         for attempt in range(self._GHOST_RETRIES):
             try:
                 alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
-            except Exception as exc:  # noqa: BLE001 — never raise from done()
+            except (RuntimeError, OSError, ValueError) as exc:  # Nomad HTTP/transport/JSON errors
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
@@ -605,13 +609,12 @@ class _NomadHandle(PollingHandle):
         # and receive the error.
         if self._local_future is None:
             return cast(bool, status == "complete")
-        done: bool
+        # Future.exception() returns the work function's error instead of
+        # raising it, so only cancellation needs catching here.
         try:
-            self._local_future.result()
-            done = True
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
-            done = False
-        return done
+            return self._local_future.exception() is None
+        except CancelledError:
+            return False
 
     @staticmethod
     def _extract_failure_description(task_states: dict[str, Any]) -> str:

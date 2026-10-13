@@ -43,6 +43,7 @@ __all__ = [
 ]
 
 import contextlib
+import http.client
 import importlib.util
 import json
 import logging
@@ -186,7 +187,7 @@ def _check_package(name: str) -> tuple[bool, str | None]:
 
         dist_name = name.replace("_", "-") if name != "yaml" else "PyYAML"
         version = _version(dist_name)
-    except (PackageNotFoundError, Exception):  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (PackageNotFoundError, ValueError):  # ValueError: invalid dist name
         # importlib.metadata may fail for namespace packages; ignore.
         version = None
     return (True, version)
@@ -295,7 +296,7 @@ def _check_sqlite() -> CheckResult:
             )
         finally:
             tmp_path.unlink(missing_ok=True)
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (sqlite3.Error, OSError) as exc:
         return CheckResult(
             name="SQLite",
             status=CheckStatus.FAIL,
@@ -451,7 +452,7 @@ def _check_network() -> CheckResult:
             message=f"Unexpected HTTP {status_code}",
             detail=f"URL: {NETWORK_CHECK_URL}",
         )
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (OSError, ValueError, http.client.HTTPException) as exc:  # URLError is an OSError
         return CheckResult(
             name="Network Connectivity",
             status=CheckStatus.WARN,
@@ -487,7 +488,7 @@ def _register_executor_health_checks() -> None:
     """
     try:
         from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except ImportError:  # executor registry is optional in health reporting
         return
     for name, fn in _BUILTIN_EXECUTOR_HEALTH_CHECKS.items():
         # Executor not registered yet — happens if a third-party build
@@ -567,7 +568,7 @@ def run_health_checks(
         from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
 
         registry_available = True
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except ImportError:  # executor registry is optional in health reporting
         registry_available = False
 
     if registry_available:

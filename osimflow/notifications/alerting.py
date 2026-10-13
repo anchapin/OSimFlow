@@ -283,7 +283,7 @@ class EmailDestination(AlertDestination):
                 self.recipients,
             )
             return True
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except (smtplib.SMTPException, OSError) as exc:  # ssl.SSLError is an OSError
             log.warning("alert email delivery failed via %s: %s", self.smtp_host, exc)
             return False
 
@@ -378,7 +378,7 @@ class AlertManager:
             try:
                 if not rule.condition(context):
                     continue
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - user-supplied rule condition may raise anything; rule skipped and logged
                 log.warning(
                     "alert rule %s condition raised — skipping: %s",
                     rule.name,
@@ -416,7 +416,7 @@ class AlertManager:
         if self._on_alert is not None:
             try:
                 self._on_alert(alert)
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - user-supplied on_alert callback may raise anything; logged and dispatch continues
                 log.warning("on_alert callback raised — continuing: %s", exc)
 
     def _dispatch_to_destinations(self, alert: Alert, rule: AlertRule) -> str:
@@ -430,7 +430,7 @@ class AlertManager:
             error = ""
             try:
                 delivered = bool(dest.send(alert))
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - user-supplied destination.send may raise anything; recorded as delivery error
                 delivered = False
                 error = str(exc)
                 log.warning(
@@ -502,7 +502,7 @@ class AlertManager:
             delivered = False
             try:
                 delivered = bool(entry.destination.send(entry.alert))
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - user-supplied destination.send may raise anything during retry; recorded as delivery error
                 error = str(exc)
             if delivered:
                 log.info(
@@ -638,7 +638,7 @@ class AlertManager:
         while True:
             try:
                 item = q.get()
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - queue.get failure must not kill the dispatcher thread; logged and loop continues
                 log.warning("alert dispatcher queue.get failed: %s", exc)
                 continue
             if item is None:
@@ -701,7 +701,7 @@ class AlertManager:
             # on return; the pool size never grows past the ceiling
             # because we only ever call ``submit()``, not ``Thread(...)``.
             future.cancel()
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - dispatcher submit failure (programming errors) must never propagate into the campaign; logged
             # ``_do_dispatch`` swallows its own exceptions, so this
             # branch only fires for programming errors in the dispatch
             # layer itself — keep the dispatcher worker alive and log.
@@ -863,7 +863,7 @@ def load_alert_rules_from_yaml(path: Path) -> list[AlertRule]:
     """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         log.error("failed to load alert rules from %s: %s", path, exc)
         return []
 
@@ -936,7 +936,7 @@ def load_alert_destinations_from_yaml(path: Path) -> list[AlertDestination]:
     """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         log.error("failed to load alert destinations from %s: %s", path, exc)
         return []
 

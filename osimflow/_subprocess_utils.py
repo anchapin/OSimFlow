@@ -21,7 +21,10 @@ kept its file descriptor alive and parked ``run_subprocess.communicate()``
 forever.
 """
 
+import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Sequence
@@ -35,6 +38,28 @@ from pathlib import Path
 # removes the entry, including on timeout-kill and cancel-kill paths.
 _ACTIVE_SUBPROCESSES: dict[int, subprocess.Popen[str]] = {}
 _ACTIVE_SUBPROCESSES_LOCK = threading.Lock()
+
+
+_POSIX = sys.platform != "win32"
+
+
+def _signal_process_tree(proc: subprocess.Popen[str], *, kill: bool) -> None:
+    """Signal the child's whole process group (issue #1965).
+
+    Children are spawned with ``start_new_session=True`` so ``proc.pid`` is
+    the group id; signalling the group also reaches grandchildren such as
+    EnergyPlus launched by ``openstudio.cli``. Falls back to the direct
+    child on non-POSIX platforms or when the group signal fails.
+    """
+    if _POSIX:
+        sig = signal.SIGKILL if kill else signal.SIGTERM
+        with suppress(OSError):
+            os.killpg(proc.pid, sig)
+            return
+    if kill:
+        proc.kill()
+    else:
+        proc.terminate()
 
 
 def _register_active_subprocess(proc: subprocess.Popen[str]) -> None:
@@ -120,7 +145,7 @@ def terminate_active_subprocesses(
             # Already exited; the owning thread will unregister it.
             continue
         try:
-            proc.terminate()
+            _signal_process_tree(proc, kill=False)
             sigterm_count += 1
         except Exception:  # noqa: BLE001 — best-effort kill sweep
             # Popen.terminate() can raise on a child that exited between
@@ -141,7 +166,7 @@ def terminate_active_subprocesses(
             # between the poll and the kill, EPERM, etc.) we fall
             # through to the wait which will reap the corpse.
             with suppress(Exception):  # noqa: BLE001 — best-effort kill sweep
-                proc.kill()
+                _signal_process_tree(proc, kill=True)
         # Wait for the child to be reaped so the file descriptor is
         # released. A TimeoutExpired here means the child is in a
         # state where SIGKILL cannot take effect (typically D-state on
@@ -207,6 +232,7 @@ def run_subprocess(
             env=env,
             text=True,
             shell=False,
+            start_new_session=_POSIX,
         )
         _register_active_subprocess(proc)
         try:
@@ -215,7 +241,7 @@ def run_subprocess(
                 # with file redirection the returned pair is (None, None).
                 proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_process_tree(proc, kill=True)
                 # Mirror subprocess.run's non-captured timeout path:
                 # wait() for the (killed) direct child only. communicate()
                 # here would block on stdout EOF, which an orphaned
@@ -227,7 +253,7 @@ def run_subprocess(
             except BaseException:
                 # Mirror subprocess.run: any other exception during the
                 # wait still kills the child before propagating.
-                proc.kill()
+                _signal_process_tree(proc, kill=True)
                 proc.wait()
                 raise
             retcode = proc.wait()

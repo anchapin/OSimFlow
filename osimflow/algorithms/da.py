@@ -284,7 +284,7 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
                 restart_temp_ratio=self._restart_temp_ratio,
                 x0=x0,
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - third-party scipy dual_annealing step may raise arbitrary errors; logged, caller keeps best-so-far
             log.warning("Dual annealing scipy step failed: %s; using best-so-far", exc)
             return None
 

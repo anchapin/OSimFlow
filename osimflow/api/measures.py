@@ -558,8 +558,10 @@ async def upload_measure(request: Request, file: UploadFile) -> MeasureUploadRes
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    # Write to a temp file for extraction
-    with tempfile.NamedTemporaryFile(suffix=file.filename or ".zip", delete=False) as tmp:
+    # Fixed suffix chosen from magic bytes; never splice the client filename
+    # into the temp path (issue #1969).
+    archive_suffix = ".tar.gz" if content[:2] == b"\x1f\x8b" else ".zip"
+    with tempfile.NamedTemporaryFile(suffix=archive_suffix, delete=False) as tmp:
         tmp.write(content)
         archive_path = Path(tmp.name)
 

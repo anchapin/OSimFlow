@@ -465,7 +465,7 @@ class KubernetesExecutor(BaseExecutor):
             k8s_config: Any = config
             try:
                 k8s_config.load_kube_config()
-            except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception:  # noqa: BLE001 - kube-config loading raises varied errors; falls back to in-cluster config
                 k8s_config.load_incluster_config()
             self._client = client.BatchV1Api()
         return self._client
@@ -1161,7 +1161,7 @@ class KubernetesExecutor(BaseExecutor):
                     status = core_api.read_namespaced_pod_status(
                         name=job_name, namespace=self.namespace
                     )
-                except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+                except Exception as exc:  # noqa: BLE001 - version-check pod status poll tolerates transient kubernetes API errors and retries
                     log.debug("version-check pod status poll error (retrying): %s", exc)
                     time.sleep(2)
                     continue
@@ -1196,7 +1196,7 @@ class KubernetesExecutor(BaseExecutor):
                     namespace=self.namespace,
                     body=client.V1DeleteOptions(),
                 )
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - version-check pod cleanup is best-effort; kubernetes API error logged at debug
                 log.debug("failed to delete version-check pod %s: %s", job_name, exc)
 
     def _get_core_api(self) -> Any:

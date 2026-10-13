@@ -740,8 +740,8 @@ name in this section.
   inherits from `OSimFlowError` while keeping its historic
   `RuntimeError` / `ValueError` catch behaviour (issue #1484).
 - `osimflow/client.py` — typed Python client for the `[api]`
-  REST surface. **Canonical** REST client; the separate sync
-  `osimflow_client/` package is deprecated (issue #1887).
+  REST surface. **Canonical** (sole) REST client; the deprecated
+  `osimflow_client/` shim was removed (issue #1927).
 - `osimflow/observability/mlflow_hook.py` — optional MLflow integration
   (lazy-imports `mlflow`).
 - `osimflow/tui.py` — optional `rich`-based terminal UI.

@@ -93,6 +93,15 @@ if TYPE_CHECKING:
 _NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
+def _redis_errors() -> tuple[type[BaseException], ...]:
+    """Exception types a Redis call may raise (lazy: ``redis`` is an optional extra)."""
+    try:
+        from redis.exceptions import RedisError  # noqa: PLC0415
+    except ImportError:
+        return (OSError,)
+    return (RedisError, OSError)
+
+
 def validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
     """Validate that a Redis URL meets the minimum security baseline (public).
 
@@ -602,7 +611,7 @@ class DistributedCache:
         )
         try:
             self._get_sync_client().hset(self._shared_key, _field_for_key(key), entry)
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             self._breaker.record_failure()
             log.warning(
                 "DistributedCache: failed to share entry campaign=%s key=%s: %s"
@@ -644,7 +653,7 @@ class DistributedCache:
             return None
         try:
             raw = self._get_sync_client().hget(self._shared_key, _field_for_key(key))
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             self._breaker.record_failure()
             log.warning(
                 "DistributedCache: shared lookup failed campaign=%s: %s — continuing local-only"
@@ -667,7 +676,7 @@ class DistributedCache:
             fields = [field for field, _ in client.hscan_iter(self._shared_key, match=pattern)]
             if fields:
                 client.hdel(self._shared_key, *fields)
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except _redis_errors() as exc:  # redis-py RedisError / socket OSError
             self._breaker.record_failure()
             log.warning(
                 "DistributedCache: shared invalidate failed campaign=%s pattern=%s: %s"
@@ -748,7 +757,7 @@ class DistributedCache:
                                     )
                                     continue
                                 self._handle_invalidation(payload)
-                    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+                    except Exception as exc:  # noqa: BLE001 - subscriber loop must survive any redis error; logged and reconnected with backoff unless stopping
                         if self._stop_subscriber.is_set():
                             break
                         log.warning(
@@ -822,7 +831,7 @@ class DistributedCache:
                     "DistributedCache: unknown action %r in invalidation message",
                     action,
                 )
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - invalidation payload handler must never kill the subscriber thread; logged
             log.warning(
                 "DistributedCache: error handling invalidation payload=%s: %s",
                 payload,
@@ -850,7 +859,7 @@ class DistributedCache:
             try:
                 client = self._get_redis()
                 await client.publish(self._channel, json.dumps(enriched))
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except Exception as exc:  # noqa: BLE001 - redis-py raises varied errors on publish; breaker records failure and publish is dropped
                 self._breaker.record_failure()
                 log.warning(
                     "DistributedCache: failed to publish invalidation for campaign=%s: %s"
@@ -961,7 +970,7 @@ class DistributedCache:
         if self._sync_client is not None:
             try:
                 self._sync_client.close()
-            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+            except _redis_errors() as exc:  # redis-py RedisError / socket OSError
                 log.warning(
                     "DistributedCache: error closing sync client for campaign=%s: %s",
                     self._campaign_id,

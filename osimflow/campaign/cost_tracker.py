@@ -168,7 +168,7 @@ class CampaignCostTracker:
                 aws_spot_per_vcpu_hour=cfg.cost_spot_price,
                 slurm_cost_per_node_hour=getattr(cfg, "slurm_cost_per_node_hour", 0.0),
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - cost tracking is optional: init errors are logged and the campaign runs without cost data
             log.warning("could not initialize cost tracker: %s — continuing without", exc)
             return None
 

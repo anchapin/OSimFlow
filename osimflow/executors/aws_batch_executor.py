@@ -52,7 +52,7 @@ def _aws_error_code(exc: BaseException) -> str:
     """Extract AWS/boto error code from an exception, or empty string if not applicable."""
     try:
         return exc.response.get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
-    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except (AttributeError, TypeError):  # malformed ``response`` payload (not a mapping)
         return ""
 
 
@@ -217,7 +217,7 @@ class _AWSBatchHandle(PollingHandle):
         """
         try:
             resolve_and_materialize(self._result_hint, self._transport)
-        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception:  # noqa: BLE001 - failure-artifact materialization is best-effort and never raises from done(); logged
             log.warning("no failure artifacts materialized for job %s", self.job_id, exc_info=True)
 
     def _failure_error(self, job: Any) -> RuntimeError:
@@ -239,12 +239,14 @@ class _AWSBatchHandle(PollingHandle):
         # network blip) is treated as not-done. Ghost jobs (deleted or
         # never-created) return an empty list — after N consecutive
         # empty responses we raise to break the indefinite-wait loop.
+        from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
         for attempt in range(self._GHOST_RETRIES):
             try:
                 response = self._executor._get_client().describe_jobs(  # noqa: SLF001
                     jobs=[self.job_id]
                 )
-            except Exception as exc:  # noqa: BLE001 — never raise from done()
+            except (BotoCoreError, ClientError, OSError) as exc:
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
@@ -1026,7 +1028,7 @@ class AWSBatchExecutor(BaseExecutor):
             queried_price = self._get_spot_price()
             if queried_price > 0:
                 spot_price = queried_price
-        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+        except Exception as exc:  # noqa: BLE001 - Spot price lookup (boto3 EC2) raises varied errors; logged and the configured price is used
             log.warning("could not query Spot price for cost calc, using default: %s", exc)
 
         on_demand_price = self.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR

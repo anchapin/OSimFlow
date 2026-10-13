@@ -156,7 +156,8 @@ variables.yml ──→ step_generate_lhs ──→ samples.json
 OSimFlow/
 ├── osimflow/                    # The main Python package
 │   ├── __init__.py              # Public API surface (__all__)
-│   ├── __main__.py              # CLI entry point (osimflow run ...)
+│   ├── __main__.py              # Thin CLI entry point (osimflow run ...); re-exports cli/
+│   ├── cli/                     # argparse parser (parser.py) + per-subcommand handlers (executor.py, ...)
 │   ├── campaign/__init__.py           # Campaign orchestrator — the 7-step DAG
 │   │
 │   ├── campaign/lifecycle.py   # CampaignLifecycle + CancelSignal protocol: cancel/pause/resume + signal handlers
@@ -1390,7 +1391,7 @@ automatically. New plug-in hooks must be registered via
 
 ### Campaign-wide flags
 
-1. In `osimflow/__main__.py`, add to `_build_parser()` (via
+1. In `osimflow/cli/parser.py`, add to `_build_parser()` (via
    `_add_run_args()`):
 
 ```python
@@ -1799,7 +1800,10 @@ make contract
 ### Using `act` (local CI mirror)
 
 [nektos/act](https://github.com/nektos/act) runs GitHub Actions
-workflows locally in a Docker container:
+workflows locally in a Docker container.
+
+> **Note:** `make act` requires the external `act` binary (and a running
+> Docker daemon). It is not installed by `make install` or any pip extra.
 
 ```bash
 # Install act

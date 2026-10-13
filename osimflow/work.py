@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time  # noqa: F401  (tests patch osimflow.work.time.sleep)
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 # Names moved to the _work_* modules (issue #1890) stay importable from
 # osimflow.work; the callers of patched seams remain defined in this module.
@@ -671,6 +671,20 @@ def run_openstudio_sim(
     )
 
 
+def _raise_missing_sql(modified_sim_package: Path, sample_id: str) -> NoReturn:
+    """Fail a real-CLI run that exited 0 without ``eplusout.sql`` (issue #1966).
+
+    ``RuntimeError`` is classified non-transient, so the sample fails once
+    instead of caching a bogus ``exit_code=0`` success.
+    """
+    msg = (
+        f"openstudio.cli exited 0 but produced no eplusout.sql under "
+        f"{modified_sim_package}/run for sample={sample_id}"
+    )
+    log.error(msg)
+    raise RuntimeError(msg)
+
+
 def _run_real_openstudio(
     *,
     modified_sim_package: Path,
@@ -748,11 +762,7 @@ def _run_real_openstudio(
         sim_out=sim_out,
         sample_id=sample_id,
     ):
-        log.warning(
-            "openstudio.cli exited 0 but produced no eplusout.sql under %s/run for sample=%s",
-            modified_sim_package,
-            sample_id,
-        )
+        _raise_missing_sql(modified_sim_package, sample_id)
 
     register_values = _parse_register_values(stdout_path)
     if register_values is not None:

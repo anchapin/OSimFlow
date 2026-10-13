@@ -297,6 +297,7 @@ class TestSubprocessSitesPassSanitizedEnv:
         with (
             patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
             patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run_subprocess,
         ):
             mock_run_subprocess.return_value = subprocess.CompletedProcess(
@@ -325,7 +326,10 @@ class TestSubprocessSitesPassSanitizedEnv:
         stdout_path = tmp_path / "stdout.log"
         stderr_path = tmp_path / "stderr.log"
 
-        with patch("osimflow.work.run_subprocess") as mock_run_subprocess:
+        with (
+            patch("osimflow.work._raise_missing_sql"),
+            patch("osimflow.work.run_subprocess") as mock_run_subprocess,
+        ):
             mock_run_subprocess.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -423,6 +427,13 @@ class TestSubprocessSitesPassSanitizedEnv:
         # var back into the child env.
         sanitized = work_mod._sanitize_env()
         for key, value in sanitized.items():
+            if key == "PYTHONPATH":
+                # generate_plots prepends the project root to any inherited
+                # PYTHONPATH, so the parent's value must survive as a suffix.
+                assert env[key].endswith(value), (
+                    f"inherited PYTHONPATH {value!r} lost: {env[key]!r}"
+                )
+                continue
             assert env.get(key) == value, (
                 f"env[{key!r}] drifted from _sanitize_env(): "
                 f"expected {value!r}, got {env.get(key)!r}"
@@ -542,6 +553,7 @@ class TestTaskPayloadSecretExcluded:
         with (
             patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
             patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work._raise_missing_sql"),
             patch("osimflow.work.run_subprocess") as mock_run_subprocess,
         ):
             mock_run_subprocess.return_value = subprocess.CompletedProcess(
@@ -565,7 +577,10 @@ class TestTaskPayloadSecretExcluded:
         (pkg / "workflow.osw").write_text(json.dumps({"name": "t"}))
         stdout_path = tmp_path / "stdout.log"
         stderr_path = tmp_path / "stderr.log"
-        with patch("osimflow.work.run_subprocess") as mock_run_subprocess:
+        with (
+            patch("osimflow.work._raise_missing_sql"),
+            patch("osimflow.work.run_subprocess") as mock_run_subprocess,
+        ):
             mock_run_subprocess.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )

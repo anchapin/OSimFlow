@@ -274,20 +274,20 @@ class TimeSeriesAggregator:
 
         try:
             conn = sqlite3.connect(str(sql_path))
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-            required = {"ReportData", "ReportDataDictionary", "Time"}
-            if not required.issubset(tables):
-                conn.close()
-                return pd.DataFrame()
+            try:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                required = {"ReportData", "ReportDataDictionary", "Time"}
+                if not required.issubset(tables):
+                    return pd.DataFrame()
 
-            query = _TS_QUERIES[self.resolution]
-            df = pd.read_sql_query(query, conn)
-            conn.close()
+                df = pd.read_sql_query(_TS_QUERIES[self.resolution], conn)
+            finally:
+                conn.close()
         except _SQL_ERRORS as exc:
             log.warning("Time-series aggregation failed for %s: %s", sql_path, exc)
             return pd.DataFrame()

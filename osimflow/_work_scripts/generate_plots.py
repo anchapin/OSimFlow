@@ -360,7 +360,7 @@ def _generate_doe_plots(results_csv: Path, outdir: Path) -> list[Path]:
             if sensitivity_path:
                 plots.append(sensitivity_path)
 
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception as exc:  # noqa: BLE001 - optional DOE plots: scipy/statsmodels/pandas errors are logged and the remaining plots still render
         log.warning("DOE analysis failed: %s", exc)
 
     return plots
@@ -975,7 +975,7 @@ def _generate_density_heatmap(results: pd.DataFrame, outdir: Path) -> Path | Non
             np.linspace(ymin, ymax, 200),
         )
         z = kernel(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
-    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
+    except Exception as exc:  # noqa: BLE001 - KDE (scipy/numpy linalg) failure on degenerate data is logged; heatmap is skipped
         log.warning("KDE computation failed for density heatmap: %s", exc)
         return None
 
