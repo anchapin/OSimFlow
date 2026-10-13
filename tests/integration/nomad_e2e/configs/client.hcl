@@ -10,6 +10,9 @@ data_dir   = "/opt/nomad/data"
 
 client {
   enabled = true
+  # Hosts whose CPU MHz cannot be fingerprinted (Apple Silicon, some VMs)
+  # report 0 compute and nothing schedules; pin a nominal capacity.
+  cpu_total_compute = 4000
   server_join {
     retry_join = ["nomad-server-1", "nomad-server-2", "nomad-server-3"]
   }
