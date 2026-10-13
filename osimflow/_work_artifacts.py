@@ -88,6 +88,13 @@ def _publish_run_artifacts(package_dir: Path, sim_out: Path) -> None:
             log.warning("could not publish %s to %s", src, sim_out, exc_info=True)
 
 
+def _clear_stale_simulation_output(sim_out: Path) -> None:
+    """Remove ``eplusout.*`` left in ``sim_out`` by a prior run (issue #1961)."""
+    for stale in sim_out.glob("eplusout.*"):
+        if stale.is_file():
+            stale.unlink()
+
+
 def _reuse_existing_simulation_output(
     modified_sim_package: Path,
     sim_out: Path,
