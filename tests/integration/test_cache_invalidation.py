@@ -416,6 +416,28 @@ def test_aggregate_results_baseline_sample_id_in_cache_key(
     )
 
 
+def test_aggregate_results_key_tracks_sim_dir_contents(tmp_path: Path) -> None:
+    """Issue #1998: rewriting a sim dir's outputs in place must change the key."""
+    from osimflow.campaign.steps import sim_dir_content_digests
+
+    sim = tmp_path / "sample_0001"
+    sim.mkdir()
+    (sim / "eplusout.sql").write_bytes(b"v1")
+    before = sim_dir_content_digests([sim])
+    assert before == sim_dir_content_digests([sim])
+    (sim / "eplusout.sql").write_bytes(b"v2")
+    after_sql = sim_dir_content_digests([sim])
+    assert after_sql != before
+    (sim / "eplusout.err").write_text("  ** Severe  ** boom")
+    assert sim_dir_content_digests([sim]) != after_sql
+    # Relocation-stable: only the directory name, not its parent, is used.
+    moved = tmp_path / "other" / "sample_0001"
+    moved.mkdir(parents=True)
+    (moved / "eplusout.sql").write_bytes(b"v2")
+    (moved / "eplusout.err").write_text("  ** Severe  ** boom")
+    assert sim_dir_content_digests([moved]) == sim_dir_content_digests([sim])
+
+
 def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """Cache primary key has 6 columns; same key replaces, different key adds."""
     out = tmp_path / "o.txt"
