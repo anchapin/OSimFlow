@@ -64,6 +64,11 @@ Orchestrator → Executor → Work function
 - **Work function** — `osimflow/work.py` (per-step logic) +
   `osimflow/_work_scripts/` (CLI scripts invoked by the work layer).
   `bin/*.py` are thin shims over `_work_scripts/` — keep them thin.
+- **Package layout** — `osimflow/campaign/` (Campaign collaborators, e.g.
+  `code_hashes.py`; the old `_campaign_*.py` modules are back-compat aliases),
+  `osimflow/cli/` (parser + subcommand handlers; `__main__.py` is a thin
+  entry), `osimflow/storage/`, `osimflow/queues/`. Tests live in
+  `tests/unit/<area>/` subdirectories (`campaign/`, `cli/`, `config/`, ...).
 
 ### 0.3 The contract checker (hard gate)
 
@@ -83,7 +88,7 @@ mere substring of a longer name, does not count). The flag list is
 *derived*: the checker builds the real parser (which calls the
 per-executor `add_arguments` hooks from `osimflow/executor_configs/`)
 and walks its actions, falling back to a textual
-`add_argument("--…")` scan of `osimflow/__main__.py` +
+`add_argument("--…")` scan of `osimflow/__main__.py` + `osimflow/cli/*.py` +
 `osimflow/executor_configs/*.py` when the package is not importable.
 Stale entries (files/flags listed but no longer in the code) are not
 errors. When you add any of those, update the matching section in the
@@ -494,18 +499,18 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 |---|---|
 | Add a new KPI | `osimflow/_work_scripts/extract_kpis.py` (or `bin/extract_kpis.py` shim) **and** `osimflow/monitoring.py:StepTrace` schema |
 | Add a new sampling algorithm | new module in `osimflow/algorithms/`, subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register` in `osimflow/algorithms/__init__.py`; or declare an entry point under `[project.entry-points."osimflow.algorithms"]` in a third-party `pyproject.toml` (auto-discovered) |
-| Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; own the platform's `XConfig` + `add_arguments` hook in a new `osimflow/executor_configs/<name>.py` module (issue #1575); transport options arrive via the single `transport: ResultTransportConfig \| None` parameter on `_do_submit()` / the handle (issue #1541 — do NOT add per-field `result_transport_mode` / `result_storage_*` kwargs); or declare an entry point under `[project.entry-points."osimflow.executors"]` |
+| Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/cli/executor.py:_build_executor`; own the platform's `XConfig` + `add_arguments` hook in a new `osimflow/executor_configs/<name>.py` module (issue #1575); transport options arrive via the single `transport: ResultTransportConfig \| None` parameter on `_do_submit()` / the handle (issue #1541 — do NOT add per-field `result_transport_mode` / `result_storage_*` kwargs); or declare an entry point under `[project.entry-points."osimflow.executors"]` |
 | Verify a third-party executor plug-in against the contract (issue #1478) | subclass `osimflow.testing.ExecutorConformanceSuite` in the plug-in's test module and point its `executor_factory` at the plug-in; for non-pytest use `osimflow.testing.run_executor_conformance`. Suite covers submit/Handle lifecycle, transport.py result-reference handling, resource directives, fanout chunk size, and health-check registration. |
 | Verify a third-party algorithm plug-in against the contract (issue #1565) | subclass `osimflow.testing.AlgorithmConformanceSuite` in the plug-in's test module and point its `algorithm_factory` at the plug-in (typically `AlgorithmRegistry.get("my_plugin_name")`); for non-pytest use `osimflow.testing.run_algorithm_conformance`. Suite covers `n_samples` exactness, seed determinism, variable-name/order stability, dtype coercion via `osimflow.config.coerce_variable_type`, and cache-key reproducibility. Example: `class TestMyAlgoConformance(AlgorithmConformanceSuite): algorithm_factory = staticmethod(lambda: AlgorithmRegistry.get("my_plugin"))`. |
 | Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign/__init__.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
-| Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
-| Add a user-facing CLI flag | executor-specific: the `add_arguments` hook in `osimflow/executor_configs/<name>.py` **and** (if it maps to a config field) the matching `CampaignConfig`/`XConfig` field + `load_config` parser. Campaign-wide: `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser. Either way `docs/agents-reference.md` ("CLI flags") must list the new flag (`make contract` enforces it — the list is derived from the hooks/parser, issue #1575) |
+| Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/cli/parser.py` |
+| Add a user-facing CLI flag | executor-specific: the `add_arguments` hook in `osimflow/executor_configs/<name>.py` **and** (if it maps to a config field) the matching `CampaignConfig`/`XConfig` field + `load_config` parser. Campaign-wide: `osimflow/cli/parser.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser. Either way `docs/agents-reference.md` ("CLI flags") must list the new flag (`make contract` enforces it — the list is derived from the hooks/parser, issue #1575) |
 | Change KPI output schema | `osimflow/_work_scripts/extract_kpis.py` (dict shape) **and** `osimflow/_work_scripts/aggregate_results.py` (column ordering); update `docs/agents-reference.md` / §8 of this file if it affects the contract |
 | Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign/__init__.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
 | Work with safe expression evaluation | `osimflow/_eval_safe.py` (`safe_eval`, `ExpressionError`); used by chaos engine for variable expansion |
 | Add a new cache invalidation rule | `osimflow/campaign/__init__.py:_compute_code_hashes` **and** a test in `tests/integration/test_cache_invalidation.py` |
 | Add a distributed-cache invalidation rule (issues #993, #1389) | `osimflow/distributed_cache.py:DistributedCache` **and** a test in `tests/integration/test_distributed_cache_invalidation.py` (skip-gated on `fakeredis` / live Redis; asserts cross-worker Redis pub/sub broadcast) |
-| Add an export format | new module in `osimflow/exporters/`, add the `--target` choice to `osimflow/__main__.py` export subcommand |
+| Add an export format | new module in `osimflow/exporters/`, add the `--target` choice in `osimflow/cli/parser.py:_add_export_args` |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture (the stub is already there for `OSIMFLOW_STUB_SIM=1`) |
 | Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/`; IAM roles in `iam.tf`, job definition in `job-definition.tf`; `terraform validate` is in CI on `infra/` path changes |
 | Add a REST API endpoint | new route in `osimflow/api/app.py` **and** a test in `tests/unit/api/test_api_core.py`; re-run `python scripts/generate_openapi.py --output docs/openapi.json` afterwards; add a typed method + test in `osimflow/client.py` / `tests/unit/api/test_client.py` |
