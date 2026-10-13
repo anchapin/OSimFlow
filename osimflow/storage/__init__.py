@@ -739,7 +739,7 @@ class ResultStorageUploader:
                         self._upload_once(local_path, remote_path)
                         last_error = None
                         break
-                    except Exception as exc:  # noqa: BLE001 - boto3 upload raises varied errors; retried with backoff and the last error re-raised
+                    except Exception as exc:  # noqa: BLE001 - pluggable ResultStorage backends (S3/Azure/GCS/third-party) raise unrelated SDK errors; retried with backoff and the last error is recorded
                         last_error = exc
                         if attempt < self._max_retries:
                             sleep_s = min(60.0, self._retry_backoff_s * (2**attempt))

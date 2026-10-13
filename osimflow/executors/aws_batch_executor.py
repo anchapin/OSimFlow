@@ -52,7 +52,7 @@ def _aws_error_code(exc: BaseException) -> str:
     """Extract AWS/boto error code from an exception, or empty string if not applicable."""
     try:
         return exc.response.get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
-    except Exception:  # noqa: BLE001 - error-code probe on arbitrary exception shapes; returns empty string when not a botocore ClientError
+    except (AttributeError, TypeError):  # malformed ``response`` payload (not a mapping)
         return ""
 
 

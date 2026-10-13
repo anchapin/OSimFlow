@@ -63,7 +63,7 @@ def _check_local() -> CheckResult:
     """
     try:
         cpus = os.cpu_count() or 1
-    except Exception:  # noqa: BLE001 — never raise from a health check
+    except (OSError, NotImplementedError):
         cpus = 0
     issues: list[str] = []
     if sys.platform.startswith("win"):
@@ -106,7 +106,7 @@ def _run_subprocess_quiet(cmd: list[str], timeout_s: float = 5.0) -> tuple[int |
         return None, "", f"timeout after {timeout_s:.0f}s"
     except FileNotFoundError:
         return None, "", f"binary not found: {cmd[0] if cmd else '?'}"
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return None, "", f"{type(exc).__name__}: {exc}"
 
 
