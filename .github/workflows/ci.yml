@@ -313,6 +313,34 @@ jobs:
           name: coverage-xml
           path: coverage.xml
 
+  # Issue #1975: pyproject.toml declares the 3.13 classifier, so exercise it.
+  # Non-gating (continue-on-error) and no coverage gate; 3.12 stays authoritative.
+  test-py313:
+    name: test (python 3.13, non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    needs: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Setup Python
+        run: uv python install 3.13
+
+      - name: Install (editable + all extras + pytest-xdist)
+        run: |
+          uv sync --locked --python 3.13 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
+
+      - name: pytest (no coverage gate)
+        run: make test PYTEST_WORKERS=auto
+
   # ---------------------------------------------------------------------------
   # Real MLflow file-tracking smoke test (issue #948)
   # ---------------------------------------------------------------------------
