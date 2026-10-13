@@ -674,7 +674,7 @@ class Campaign(
                     obs_cfg.alert_rules,
                     obs_cfg.alert_destinations,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning("could not initialize AlertManager: %s — continuing without", exc)
 
         # Campaign registry (issue #266). Auto-register on run start
@@ -709,7 +709,7 @@ class Campaign(
                     cfg.result_storage_bucket,
                     cfg.outdir.name,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "could not initialize result storage (%s:%s): %s — continuing without",
                     cfg.result_storage_backend,
@@ -790,7 +790,7 @@ class Campaign(
         if self._alert_manager is not None:
             try:
                 self._alert_manager.notify(event_type, context)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning("alert %s failed: %s", event_type, exc)
 
     def _teardown_observability(self, duration: float) -> None:

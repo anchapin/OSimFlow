@@ -634,7 +634,7 @@ async def batch_update_variables(  # noqa: PLR0912
         except HTTPException as exc:
             phase1b_errors.append(VariableBatchUpdateError(name=var_name, error=str(exc.detail)))
             continue
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             phase1b_errors.append(VariableBatchUpdateError(name=var_name, error=str(exc)))
             continue
 

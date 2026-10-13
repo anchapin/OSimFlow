@@ -293,16 +293,14 @@ fixable = ["ALL"]
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
 # campaign/steps.py: SIM108 if-else blocks are more readable with explanatory comments.
-"osimflow/campaign/__init__.py" = ["BLE001"]
-"osimflow/campaign/runner.py" = ["BLE001"]
 "osimflow/campaign/steps.py" = ["SIM108"]
 # document_store.py: the rich MongoDB-style query semantics
 # (``_document_matches`` / ``update_one``) require one branch per
 # operator and many return statements; refactoring to dispatch tables
 # would obscure the per-operator semantics that the SQLite and Redis
 # backends must agree on (issue #1014).
-"osimflow/document_store.py" = ["PLR0911", "PLR0912", "BLE001"]
-"osimflow/_document_store_base.py" = ["PLR0911", "PLR0912", "BLE001"]
+"osimflow/document_store.py" = ["PLR0911", "PLR0912"]
+"osimflow/_document_store_base.py" = ["PLR0911", "PLR0912"]
 "osimflow/_document_store_sqlite.py" = ["PLR0911", "PLR0912"]
 # campaigns.py uses lazy imports for heavy SDKs to avoid import-time overhead.
 # PLR0912: too many branches in _build_executor_from_request is intentional
@@ -324,39 +322,6 @@ fixable = ["ALL"]
 "docker/**" = ["BLE", "S110", "T20"]
 ".agents/**" = ["BLE", "S110", "T20"]
 
-"osimflow/campaign/cost_tracker.py" = ["BLE001"]
-"osimflow/_work_scripts/aggregate_results.py" = ["BLE001"]
-"osimflow/_work_scripts/excel_to_variables.py" = ["BLE001"]
-"osimflow/_work_scripts/generate_plots.py" = ["BLE001"]
-"osimflow/notifications/alerting.py" = ["BLE001"]
-"osimflow/algorithms/calibration.py" = ["BLE001"]
-"osimflow/algorithms/da.py" = ["BLE001"]
-"osimflow/algorithms/de.py" = ["BLE001"]
-"osimflow/algorithms/doe_analysis.py" = ["BLE001"]
-"osimflow/algorithms/nsga2.py" = ["BLE001"]
-"osimflow/algorithms/rgenoud.py" = ["BLE001"]
-"osimflow/algorithms/spea2.py" = ["BLE001"]
-"osimflow/api/app.py" = ["BLE001"]
-"osimflow/api/coordinator.py" = ["BLE001"]
-"osimflow/api/variables.py" = ["BLE001"]
-"osimflow/audit.py" = ["BLE001"]
-"osimflow/client.py" = ["BLE001"]
-"osimflow/config.py" = ["BLE001"]
-"osimflow/distributed_cache.py" = ["BLE001"]
-"osimflow/queues/control_plane.py" = ["BLE001"]
-"osimflow/executors/aws_batch_executor.py" = ["BLE001"]
-"osimflow/executors/dask_jobqueue_executor.py" = ["BLE001"]
-"osimflow/executors/docker_swarm_executor.py" = ["BLE001"]
-"osimflow/executors/kubernetes_executor.py" = ["BLE001"]
-"osimflow/executors/nomad_executor.py" = ["BLE001"]
-"osimflow/exporters/osa.py" = ["BLE001"]
-"osimflow/exporters/r_dataframe.py" = ["BLE001"]
-"osimflow/health.py" = ["BLE001"]
-"osimflow/logging.py" = ["BLE001"]
-"osimflow/observability/monitoring.py" = ["BLE001"]
-"osimflow/storage/__init__.py" = ["BLE001"]
-"osimflow/queues/dispatch.py" = ["BLE001"]
-"osimflow/webhook.py" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]

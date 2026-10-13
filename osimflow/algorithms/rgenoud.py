@@ -322,7 +322,7 @@ class RgenoudAlgorithm(BaseAlgorithm):
                 atol=0.01,
                 tol=0.01,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("Rgenoud scipy step failed: %s; using best-so-far", exc)
             return None
 

@@ -472,7 +472,7 @@ def main() -> int:
             algorithm=args.algorithm,
             column_map=col_map,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.error("Conversion failed: %s", exc)
         return 1
     return 0

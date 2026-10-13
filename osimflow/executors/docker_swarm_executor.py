@@ -61,7 +61,7 @@ def _docker_error_code(exc: Exception) -> int:
         if response is None:
             return 0
         return getattr(response, "status_code", 0) or 0
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         return 0
 
 
@@ -177,7 +177,7 @@ class _DockerSwarmHandle(PollingHandle):
                 "Docker Swarm done() connection error for service %s: %s", self._service_name, exc
             )
             return False
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             status_code = _docker_error_code(exc)
             if status_code in (401, 403, 404):
                 log.warning(
@@ -328,7 +328,7 @@ class DockerSwarmExecutor(BaseExecutor):
             client = self._get_client()
             info = client.info()
             return bool(info.get("Swarm", {}).get("ControlAvailable", False))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("Docker Swarm not available: %s", exc)
             return False
 
@@ -381,7 +381,7 @@ class DockerSwarmExecutor(BaseExecutor):
             service = client.services.get(service_name)
             tasks = service.tasks(filters={"desired-state": "running"})
             return {"tasks": tasks}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("error getting service status for %s: %s", service_name, exc)
             return {"tasks": []}
 

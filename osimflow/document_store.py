@@ -461,7 +461,7 @@ class RedisDocumentStore(DocumentStore):
         idx_key = self._index_key(collection, field)
         try:
             existing = self._get_client().hget(idx_key, str(value))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning(
                 "RedisDocumentStore: unique-index check failed collection=%s field=%s: %s",
                 collection,
@@ -495,7 +495,7 @@ class RedisDocumentStore(DocumentStore):
         idx_key = self._index_key(collection, field)
         try:
             claimed = self._get_client().hsetnx(idx_key, str(value), doc_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning(
                 "RedisDocumentStore: atomic index claim failed collection=%s field=%s: %s",
                 collection,
@@ -527,7 +527,7 @@ class RedisDocumentStore(DocumentStore):
             existing = client.hget(idx_key, str(value))
             if existing == doc_id:
                 client.hdel(idx_key, str(value))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning(
                 "RedisDocumentStore: index slot release failed collection=%s field=%s: %s",
                 collection,
@@ -825,7 +825,7 @@ class RedisDocumentStore(DocumentStore):
                 continue
             try:
                 index_entries = client.hgetall(key)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "RedisDocumentStore: failed to load index entries for collection=%s field=%s: %s",
                     collection,
@@ -837,7 +837,7 @@ class RedisDocumentStore(DocumentStore):
                 if d == target_id:
                     try:
                         client.hdel(key, value)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                         log.warning(
                             "RedisDocumentStore: failed to delete index entry collection=%s field=%s value=%s: %s",
                             collection,
@@ -918,7 +918,7 @@ class RedisDocumentStore(DocumentStore):
         if self._redis_client is not None:
             try:
                 self._redis_client.close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "RedisDocumentStore: error closing client namespace=%s: %s",
                     self.namespace,
@@ -928,7 +928,7 @@ class RedisDocumentStore(DocumentStore):
         if self._pool is not None:
             try:
                 self._pool.disconnect()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "RedisDocumentStore: error closing pool namespace=%s: %s",
                     self.namespace,
