@@ -1580,18 +1580,21 @@ class TestResultStorageUploaderBoundedClose:
             first_sleep_started.set()
             assert release_sleep.wait(timeout=30.0), "parked sleep never released"
 
-        uploader = ResultStorageUploader(
-            _FailingUploadStorage(),
-            worker_count=1,
-            max_retries=3,
-            retry_backoff_s=30.0,  # sleeps up to 60 s per retry unmocked
-        )
-        f = tmp_path / "parked.txt"
-        f.write_text("x")
-        uploader.upload_file(f, "remote/parked.txt")
-        worker = uploader._workers[0]
-
+        # Patch before the uploader exists: the worker may reach its first
+        # backoff sleep immediately after upload_file(), so a later patch
+        # races with a real (unmocked) 30 s sleep.
         with patch("osimflow.storage.time.sleep", side_effect=_parked_sleep):
+            uploader = ResultStorageUploader(
+                _FailingUploadStorage(),
+                worker_count=1,
+                max_retries=3,
+                retry_backoff_s=30.0,  # sleeps up to 60 s per retry unmocked
+            )
+            f = tmp_path / "parked.txt"
+            f.write_text("x")
+            uploader.upload_file(f, "remote/parked.txt")
+            worker = uploader._workers[0]
+
             assert first_sleep_started.wait(timeout=10.0), "worker never entered backoff"
             start = time.monotonic()
             uploader.close(timeout_s=0.1, raise_on_failure=False)  # must not raise / hang

@@ -588,7 +588,6 @@ class TestMultiProcessStateCoordination:
     Redis shared store, and every cross-process lookup succeeds.
     """
 
-    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork(2)")
     def test_concurrent_processes_coordinate_without_sqlite_locks(self, tmp_path: Path) -> None:
         n_workers = 3
         n_ops = 8
@@ -600,7 +599,8 @@ class TestMultiProcessStateCoordination:
             for i in range(n_ops):
                 (out_base / f"w{w}_{i}").mkdir()
 
-        ctx = multiprocessing.get_context("fork")
+        # spawn, not fork: forking a multi-threaded pytest process segfaults on macOS
+        ctx = multiprocessing.get_context("spawn")
         manager = ctx.Manager()
         storage: MutableMapping[str, str] = manager.dict()
         barrier = ctx.Barrier(n_workers)
