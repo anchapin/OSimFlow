@@ -32,6 +32,7 @@ from typing import Any, NoReturn
 # osimflow.work; the callers of patched seams remain defined in this module.
 from osimflow._subprocess_utils import run_subprocess  # neutral location (issue #910)
 from osimflow._work_artifacts import (  # noqa: F401
+    _clear_stale_simulation_output,
     _extract_severe_error,
     _find_sql_in_package_run,
     _find_workflow_osw,
@@ -425,6 +426,10 @@ def _run_openstudio_sim_impl(
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
+
+    # A step-cache miss means inputs/code changed; outputs left by a prior run
+    # must not be mistaken for this run's results (issue #1961).
+    _clear_stale_simulation_output(sim_out)
 
     if stdout_path is None:
         stdout_path = sim_out / "stdout.log"
