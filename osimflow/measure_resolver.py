@@ -9,7 +9,6 @@ measure's dependencies are not installed, rather than producing obscure
 runtime errors during simulation.
 """
 
-import importlib.util
 import logging
 import os
 import re
@@ -18,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ._work_env import _sanitize_env
 from .errors import OSimFlowError
 
 log = logging.getLogger("osimflow.measure_resolver")
@@ -220,39 +220,54 @@ def scan_measure_directory(measure_dir: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _check_ruby_gem(gem_name: str) -> bool:
-    """Check whether a Ruby gem is installed and loadable."""
+_SAFE_DEP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+_RUBY_GEM_PROBE = "exit(Gem::Specification.find_all_by_name(ARGV[0]).empty? ? 1 : 0)"
+# find_spec on the top-level name only: it never imports a package, whereas a
+# dotted name would import the parent package and run its code.
+_PYTHON_SPEC_PROBE = (
+    "import importlib.util, sys; "
+    "sys.exit(0 if importlib.util.find_spec(sys.argv[1].split('.')[0]) else 1)"
+)
+
+
+def _is_safe_dep_name(name: str) -> bool:
+    """Reject names scraped from untrusted measure sources that are unsafe to probe."""
+    return bool(_SAFE_DEP_NAME_RE.fullmatch(name)) and not name.startswith("-")
+
+
+def _run_probe(cmd: list[str]) -> bool:
+    """Run a dependency probe in a subprocess with a sanitized environment."""
     try:
         result = subprocess.run(
-            ["ruby", "-e", f"require '{gem_name}'"],
+            cmd,
             capture_output=True,
             text=True,
             check=False,
             timeout=30,
+            env=_sanitize_env(),
         )
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
+
+
+def _check_ruby_gem(gem_name: str) -> bool:
+    """Check whether a Ruby gem is installed without loading (executing) it."""
+    if not _is_safe_dep_name(gem_name):
+        log.warning("Ignoring unsafe Ruby dependency name %r", gem_name)
+        return False
+    return _run_probe(["ruby", "-e", _RUBY_GEM_PROBE, gem_name])
 
 
 def _check_python_package(package_name: str) -> bool:
-    """Check whether a Python package is importable."""
-    # Try importlib first (fastest)
-    spec = importlib.util.find_spec(package_name)
-    if spec is not None:
-        return True
-    # Fallback: pip show
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", package_name],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        return result.returncode == 0
-    except (subprocess.SubprocessError, FileNotFoundError):
+    """Check whether a Python package is installed without importing it."""
+    if not _is_safe_dep_name(package_name):
+        log.warning("Ignoring unsafe Python dependency name %r", package_name)
         return False
+    if _run_probe([sys.executable, "-c", _PYTHON_SPEC_PROBE, package_name]):
+        return True
+    return _run_probe([sys.executable, "-m", "pip", "show", package_name])
 
 
 def check_dependencies(

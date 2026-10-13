@@ -223,3 +223,34 @@ class TestResolveSimPackageDependencies:
         assert len(results) == 2
         names = {r["measure_name"] for r in results}
         assert names == {"MeasureA", "MeasureB"}
+
+
+class TestDependencyProbesAreSandboxed:
+    """Issue #1970: availability probes must not execute untrusted code."""
+
+    def test_unsafe_names_rejected_without_subprocess(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with mock.patch.object(mr.subprocess, "run") as run:
+            assert mr._check_ruby_gem("x'; system('id') #") is False
+            assert mr._check_python_package("a b") is False
+            assert mr._check_python_package("--help") is False
+        run.assert_not_called()
+
+    def test_probes_use_sanitized_env_and_no_require(self, monkeypatch) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "shh")
+        with mock.patch.object(mr.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            assert mr._check_ruby_gem("json") is True
+            assert mr._check_python_package("a.b") is True
+        for call in run.call_args_list:
+            assert "AWS_SECRET_ACCESS_KEY" not in call.kwargs["env"]
+        ruby_cmd = run.call_args_list[0].args[0]
+        assert "require" not in ruby_cmd[2]
+        assert ruby_cmd[3] == "json"
