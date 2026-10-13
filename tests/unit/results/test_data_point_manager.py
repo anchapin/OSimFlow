@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -298,28 +299,34 @@ class TestDataPointManagerCrossProcess:
 
     def test_no_lost_update_across_processes(self, tmpdir: Path) -> None:
         """Child processes with stale snapshots must not clobber each other."""
-        import multiprocessing
+        import subprocess
+        import sys
 
         mgr = DataPointManager(tmpdir)
         for i in range(6):
             mgr.register(f"p{i}")
 
-        ctx = multiprocessing.get_context("fork")
-
-        def worker(outdir: str, idx: int) -> None:
-            # Constructed AFTER the parent registered everything, but each
-            # child's snapshot goes stale as soon as a sibling writes.
-            w = DataPointManager(Path(outdir))
-            for _ in range(15):
-                w.update_status(f"p{idx}", DataPointStatus.RUNNING)
-            w.update_status(f"p{idx}", DataPointStatus.COMPLETED)
-
-        procs = [ctx.Process(target=worker, args=(str(tmpdir), i), name=f"w{i}") for i in range(6)]
+        # Fresh interpreters, not fork(): under xdist the worker process has
+        # leaked threads from other tests, and forking while one holds a lock
+        # (logging, import, _THREAD_LOCKS_GUARD) can deadlock the child (#1949).
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from osimflow.data_point_manager import DataPointManager, DataPointStatus\n"
+            "w = DataPointManager(Path(sys.argv[1]))\n"
+            "sid = f'p{sys.argv[2]}'\n"
+            "for _ in range(15):\n"
+            "    w.update_status(sid, DataPointStatus.RUNNING)\n"
+            "w.update_status(sid, DataPointStatus.COMPLETED)\n"
+        )
+        repo_root = str(Path(__file__).resolve().parents[3])
+        env = {**os.environ, "PYTHONPATH": repo_root}
+        procs = [
+            subprocess.Popen([sys.executable, "-c", script, str(tmpdir), str(i)], env=env)
+            for i in range(6)
+        ]
         for p in procs:
-            p.start()
-        for p in procs:
-            p.join()
-            assert p.exitcode == 0
+            assert p.wait(timeout=120) == 0
 
         final = DataPointManager(tmpdir)
         statuses = {f"p{i}": final.get(f"p{i}").status for i in range(6)}
