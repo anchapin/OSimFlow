@@ -11,6 +11,7 @@ runtime errors during simulation.
 
 import importlib.util
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -292,11 +293,39 @@ def check_dependencies(
 # ---------------------------------------------------------------------------
 
 
+_GEM_SOURCE = "https://rubygems.org"
+_GEM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_DEFAULT_GEM_ALLOWLIST = frozenset(
+    {"openstudio-extension", "openstudio-standards", "openstudio-model-articulation"}
+)
+
+
+def _gem_allowlist() -> frozenset[str]:
+    """Gems that may be auto-installed (defaults + ``OSIMFLOW_GEM_ALLOWLIST``)."""
+    extra = {g.strip() for g in os.environ.get("OSIMFLOW_GEM_ALLOWLIST", "").split(",")}
+    return _DEFAULT_GEM_ALLOWLIST | {g for g in extra if g}
+
+
 def _gem_install(gem_name: str) -> bool:
-    """Attempt to install a Ruby gem via ``gem install``."""
+    """Attempt to install an allowlisted Ruby gem from rubygems.org."""
+    if not _GEM_NAME_RE.match(gem_name) or gem_name not in _gem_allowlist():
+        log.warning(
+            "refusing to auto-install Ruby gem %r: not in allowlist "
+            "(add it via OSIMFLOW_GEM_ALLOWLIST)",
+            gem_name,
+        )
+        return False
     try:
         result = subprocess.run(
-            ["gem", "install", gem_name],
+            [
+                "gem",
+                "install",
+                "--no-document",
+                "--clear-sources",
+                "--source",
+                _GEM_SOURCE,
+                gem_name,
+            ],
             capture_output=True,
             text=True,
             check=False,
