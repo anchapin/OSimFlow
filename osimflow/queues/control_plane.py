@@ -299,7 +299,7 @@ class DistributedJobQueue:
                                     )
                                     continue
                                 self._handle_action(payload)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                         if self._stop_subscriber.is_set():
                             break
                         log.warning(
@@ -385,7 +385,7 @@ class DistributedJobQueue:
                     "DistributedJobQueue: unknown action %r in message",
                     action,
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning(
                 "DistributedJobQueue: error handling message payload=%s: %s",
                 payload,
@@ -475,7 +475,7 @@ class DistributedJobQueue:
                     exc,
                     self._breaker.consecutive_failures,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "DistributedJobQueue: unexpected error publishing action for campaign=%s channel=%s: %s",
                     self._campaign_id,

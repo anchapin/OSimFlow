@@ -278,7 +278,7 @@ def _generate_ref_dirs(
         )
         return np.array(ref_dirs, dtype=np.float64)
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("Failed to generate ref_dirs '%s': %s", ref_dirs_spec, exc)
         return None
 
@@ -327,7 +327,7 @@ def _adaptive_ref_points(
             # Update reference point: blend toward closest solution
             updated_refs[i] = 0.5 * ref + 0.5 * population_F[closest_idx]
         return updated_refs
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         return ref_points
 
 
@@ -766,7 +766,7 @@ class NSGA2Algorithm(BaseAlgorithm):
         try:
             hv_indicator = HV(ref_point=ref_point)
             hv = float(hv_indicator(F))
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             hv = 0.0
         self._hv_history.append(hv)
 

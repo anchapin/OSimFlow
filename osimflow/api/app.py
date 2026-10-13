@@ -623,7 +623,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._redis_url:
             try:
                 allowed, retry_after = await self._check_redis(key)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning(
                     "RateLimitMiddleware: Redis unavailable (%s); falling back to in-process",
                     exc,
@@ -1752,7 +1752,7 @@ def create_app(  # noqa: PLR0912
 
             registry = CampaignRegistry(db_path=registry_path)
             log.info("registry loaded from %s", registry_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.error("Failed to load registry from %s: %s", registry_path, exc)
     app.state.registry = registry
 

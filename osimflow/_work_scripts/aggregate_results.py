@@ -462,7 +462,7 @@ def parse_kpi_json(kpi_path: Path) -> dict[str, Any]:
         kpis = data.get("kpis", {})
         res.update(kpis)
         return res
-    except Exception as e:
+    except (OSError, ValueError, AttributeError) as e:
         log.warning("Failed to parse KPI JSON %s: %s", kpi_path, e)
         return {"sample_id": kpi_path.stem.replace("kpi_", "")}
 

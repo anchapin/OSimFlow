@@ -574,7 +574,7 @@ class OSimFlowClient:
         try:
             detail_json = resp.json()
             detail = detail_json.get("detail", body_text)
-        except Exception:
+        except (ValueError, AttributeError):
             detail = body_text
 
         status = resp.status_code

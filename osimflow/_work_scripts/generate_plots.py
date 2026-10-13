@@ -59,13 +59,13 @@ def main() -> int:
     # Read data
     try:
         results = pd.read_csv(args.results_csv)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         log.error(f"Failed to read results CSV {args.results_csv}: {e}")
         results = pd.DataFrame()
 
     try:
         failed = pd.read_csv(args.failed_csv)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         log.error(f"Failed to read failed simulations CSV {args.failed_csv}: {e}")
         failed = pd.DataFrame()
 
@@ -360,7 +360,7 @@ def _generate_doe_plots(results_csv: Path, outdir: Path) -> list[Path]:
             if sensitivity_path:
                 plots.append(sensitivity_path)
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("DOE analysis failed: %s", exc)
 
     return plots
@@ -975,7 +975,7 @@ def _generate_density_heatmap(results: pd.DataFrame, outdir: Path) -> Path | Non
             np.linspace(ymin, ymax, 200),
         )
         z = kernel(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("KDE computation failed for density heatmap: %s", exc)
         return None
 

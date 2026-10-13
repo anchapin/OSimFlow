@@ -200,7 +200,7 @@ class RDataFrameExporter:
 
         try:
             df = pd.read_csv(failed_csv)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("Could not read failed_simulations.csv: %s", exc)
             return outputs
 
@@ -241,7 +241,7 @@ class RDataFrameExporter:
 
         try:
             df = pd.read_parquet(timeseries_parquet)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("Could not read timeseries_aggregated.parquet: %s", exc)
             return outputs
 
@@ -320,13 +320,13 @@ class RDataFrameExporter:
         if parquet is not None and parquet.exists():
             try:
                 return pd.read_parquet(parquet)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning("Could not read Parquet %s: %s — falling back to CSV", parquet, exc)
 
         if csv is not None and csv.exists():
             try:
                 return pd.read_csv(csv)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
                 log.warning("Could not read CSV %s: %s", csv, exc)
 
         return None

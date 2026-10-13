@@ -468,7 +468,7 @@ class CalibrationAlgorithm(BaseAlgorithm):
                 bounds=self._bounds,
                 options={"maxiter": 1},
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
             log.warning("Calibration optimization step failed: %s", exc)
             return None
 

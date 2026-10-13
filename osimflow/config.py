@@ -754,7 +754,7 @@ def _parse_baseline(variables_yml: Path) -> dict[str, object] | None:
                     variables_yml,
                     type(raw_baseline).__name__,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
     return None
 
@@ -975,7 +975,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         objective, constraints = _parse_objective_and_constraints(
             yml_data if isinstance(yml_data, dict) else {}
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("could not parse objective/constraints from %s: %s", variables_yml, exc)
         objective, constraints = None, None
 

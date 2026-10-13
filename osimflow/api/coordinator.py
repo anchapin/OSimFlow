@@ -478,7 +478,7 @@ def _presign_aggregated_get(bucket: str | None, key: str | None, expires: int = 
                 ExpiresIn=expires,
             )
         )
-    except Exception as exc:  # pragma: no cover - botocore exceptions
+    except Exception as exc:  # pragma: no cover - botocore exceptions  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning(
             "Could not presign aggregated results URL for s3://%s/%s: %s",
             bucket,
@@ -798,7 +798,7 @@ async def submit_campaign_array_job(
 
     try:
         batch = boto3.client("batch")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         raise HTTPException(  # noqa: B904
             status_code=503,
             detail=f"Cannot connect to AWS Batch: {exc}",
@@ -826,7 +826,7 @@ async def submit_campaign_array_job(
                 "attemptDurationSeconds": int(rec.get("payload", {}).get("timeout_seconds", 14400))
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         raise HTTPException(  # noqa: B904
             status_code=502,
             detail=f"AWS Batch submit-job failed: {exc}",
@@ -979,7 +979,7 @@ async def get_campaign_results(
                         size_bytes=size,
                     )
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort/boundary catch: failure is logged or degraded, never fatal
         log.warning("Failed to list S3 results for campaign %s: %s", campaign_id, exc)
 
     return CoordinatorResultsResponse(
