@@ -148,6 +148,7 @@ JSON output (the `to_dict()` method filters them out).
 | `extract_exit_code` | `int` | Yes | Exit code from `EXTRACT_KPIS` (`0` = success). |
 | `eplusout_sql` | `str` | No | Absolute path to `eplusout.sql` if the simulation produced one. |
 | `error_summary` | `str` | No | One-line error summary (e.g. `"SIM: RuntimeError('…')"`). |
+| `failure_class` | `str` | No | `"simulation_error"` or `"bookkeeping_error"` on failed samples; `bookkeeping_error` means the simulation succeeded but post-result bookkeeping failed (issue #1997). |
 | `stdout_log` | `str` | No | Absolute path to `${outdir}/work/sim/<sample_id>/stdout.log`. |
 | `stderr_log` | `str` | No | Absolute path to `${outdir}/work/sim/<sample_id>/stderr.log`. |
 | `quality_valid` | `bool` | No | Result of per-sample output quality validation (`true`/`false`); omitted when quality checks did not run. |

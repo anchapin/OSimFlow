@@ -186,6 +186,7 @@ One entry per LHS sample. Fields with `null` values are omitted:
 | `extract_exit_code` | Yes | `0` = `EXTRACT_KPIS` succeeded for this sample. |
 | `eplusout_sql` | No | Path to `eplusout.sql` if the simulation produced one. |
 | `error_summary` | No | One-line error message from the first step that failed. |
+| `failure_class` | No | `simulation_error` or `bookkeeping_error` for failed samples; `bookkeeping_error` = simulation succeeded, post-result bookkeeping failed (issue #1997). |
 | `stdout_log` | No | Path to per-sample stdout log from the simulation step. |
 | `stderr_log` | No | Path to per-sample stderr log from the simulation step. |
 | `quality_valid` | No | `true`/`false` result of output quality validation; omitted when quality checks did not run. |
