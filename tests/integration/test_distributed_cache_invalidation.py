@@ -61,12 +61,15 @@ are public, deterministic, and expose the contract verbatim.
 Test scheduling
 ---------------
 Every test in this file is annotated with
-``@pytest.mark.xdist_group(name="distributed_cache_solo")`` so the
+``@pytest.mark.xdist_group(name="code_hash_repo_tree")`` so the
 distributed-mode tests all run in the same xdist worker, sequentially.
 This avoids cross-test racing between
 :class:`DistributedCache` subscriber / publisher threads that pytest-
 xdist's parallel scheduler can otherwise stagger into flaky
-interactions (issue #1389).  The pattern is borrowed from
+interactions (issue #1389).  The group is shared with
+``test_cache_invalidation.py`` (which edits real files under ``osimflow/``
+and so perturbs ``code_hashes``) so a concurrent worker can never change
+the cache keys mid-run (issue #1995).  The pattern is borrowed from
 ``tests/integration/test_cache_resume.py`` (issue #1047).
 """
 
@@ -316,11 +319,11 @@ def _require_four_artifacts(outdir: Path) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xdist_group(name="distributed_cache_solo")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 class TestDistributedCacheInvalidation:
     """Per-sample cache invalidation exercised end-to-end through the Campaign."""
 
-    @pytest.mark.xdist_group(name="distributed_cache_solo")
+    @pytest.mark.xdist_group(name="code_hash_repo_tree")
     def test_cold_run_then_warm_rerun_is_all_hits_in_distributed_mode(
         self,
         workdir: Path,
@@ -439,7 +442,7 @@ class TestDistributedCacheInvalidation:
                 f"cold={cold_by_step.get(step, 0)}, warm={warm_by_step.get(step, 0)}"
             )
 
-    @pytest.mark.xdist_group(name="distributed_cache_solo")
+    @pytest.mark.xdist_group(name="code_hash_repo_tree")
     def test_edit_extract_kpis_script_invalidates_per_sample_cache(
         self,
         workdir: Path,
@@ -557,7 +560,7 @@ class TestDistributedCacheInvalidation:
             # Restore byte-for-byte so subsequent test runs are unaffected.
             extract_kpis_py.write_text(original_content, encoding="utf-8")
 
-    @pytest.mark.xdist_group(name="distributed_cache_solo")
+    @pytest.mark.xdist_group(name="code_hash_repo_tree")
     def test_per_sample_fanout_invalidation(
         self,
         workdir: Path,
@@ -703,11 +706,11 @@ class TestDistributedCacheInvalidation:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xdist_group(name="distributed_cache_solo")
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 class TestDistributedCacheCrossWorkerBroadcast:
     """``invalidate_*`` broadcasts propagate across worker-local caches via Redis."""
 
-    @pytest.mark.xdist_group(name="distributed_cache_solo")
+    @pytest.mark.xdist_group(name="code_hash_repo_tree")
     def test_invalidate_step_propagates_to_peer_local_cache_via_redis_pubsub(
         self,
         tmp_path: Path,
@@ -843,7 +846,7 @@ class TestDistributedCacheCrossWorkerBroadcast:
             worker_a.close()
             worker_b.close()
 
-    @pytest.mark.xdist_group(name="distributed_cache_solo")
+    @pytest.mark.xdist_group(name="code_hash_repo_tree")
     def test_invalidate_step_broadcast_clears_per_step_entries(
         self,
         tmp_path: Path,

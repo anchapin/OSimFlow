@@ -15,7 +15,7 @@ The settings applied to `anchapin/OSimFlow@main` by
 
 | Setting | Value | Why |
 |---|---|---|
-| `required_status_checks.contexts` | 5 checks (see below) | Gate merges on CI; prevents the #969 failure mode from recurring. |
+| `required_status_checks.contexts` | 6 checks (see below) | Gate merges on CI; prevents the #969 failure mode from recurring. |
 | `required_status_checks.strict` | `false` | Don't require the PR branch to be up-to-date with `main` — keeps wave-style automation unblocked; can be tightened manually later. |
 | `required_linear_history` | `true` | Linear history keeps the graph readable and `git bisect` cheap; the project already squash-merges. (Plain boolean per the GitHub API.) |
 | `required_pull_request_reviews` | `null` (not required) | **Intentional:** requiring reviews would deadlock single-user automation. See *What's NOT enabled* below. |
@@ -31,7 +31,7 @@ The settings applied to `anchapin/OSimFlow@main` by
 
 ### Required status checks (must match `ci.yml` verbatim)
 
-These five names come from the `name:` keys of the corresponding jobs in
+These six names come from the `name:` keys of the corresponding jobs in
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). A mismatch silently
 does nothing on the GitHub side — GitHub looks up required checks by exact
 display-name.
@@ -41,6 +41,7 @@ display-name.
 3. **`test (pytest, 82% coverage gate)`** — `test` job
 4. **`agents & docs contract`** — `contract` job
 5. **`security (pip-audit)`** — `security` job
+6. **`test (python 3.13)`** — `test-py313` job (issue #1995; promoted from non-gating once the flaky tests #1993/#1994 were fixed; no coverage gate)
 
 > ⚠️ If you rename a CI job in `.github/workflows/ci.yml`, update the
 > `REQUIRED_CHECKS` list inside `scripts/apply_branch_protection.sh` in the
@@ -98,7 +99,7 @@ gh api repos/anchapin/OSimFlow/branches/main/protection
 
 This returns the full protection payload. Confirm:
 
-- `required_status_checks.contexts` is the 5-element list above.
+- `required_status_checks.contexts` is the 6-element list above.
 - `required_linear_history` is `true`.
 - `required_pull_request_reviews` is `null`.
 - `allow_force_pushes` / `allow_deletions` /
@@ -250,7 +251,7 @@ delete, an operator triggers `workflow_dispatch` with `apply=true` **and**
 - Issue **#975** — Enable branch protection rules requiring CI checks before merge
 - PR **#969** — The merge that slipped through (test failure)
 - PR **#973** — The hotfix that unblocked Wave 4
-- `.github/workflows/ci.yml` — The CI workflow that the 5 required checks gate
+- `.github/workflows/ci.yml` — The CI workflow that the 6 required checks gate
 - `tools/check_agents_contract.py` — Enforces that new public symbols and
   scripts are reflected in `AGENTS.md` (the drift gate that this file's
   `docs/branch-protection.md` reference participates in).

@@ -19,18 +19,19 @@
 # ---------------------
 # These strings MUST match the `name:` keys in `.github/workflows/ci.yml`
 # verbatim. A mismatch silently does nothing on the GitHub side because the
-# required-check lookup is by exact display-name. The five names are:
+# required-check lookup is by exact display-name. The six names are:
 #
 #     - lint (ruff)
 #     - typecheck (mypy --strict)
 #     - test (pytest, 82% coverage gate)
 #     - agents & docs contract
 #     - security (pip-audit)
+#     - test (python 3.13)
 #
 # SETTINGS APPLIED
 # ----------------
 #   required_status_checks.strict          = false
-#   required_status_checks.contexts        = (5 names above)
+#   required_status_checks.contexts        = (6 names above)
 #   required_linear_history                = true   (plain boolean)
 #   required_pull_request_reviews          = null   (NOT required)
 #   restrictions                           = null
@@ -105,7 +106,8 @@ REQUIRED_CHECKS='[
     "typecheck (mypy --strict)",
     "test (pytest, 82% coverage gate)",
     "agents & docs contract",
-    "security (pip-audit)"
+    "security (pip-audit)",
+    "test (python 3.13)"
 ]'
 
 # Build the JSON payload via heredoc into a tmpfile. Using a tmpfile (rather
