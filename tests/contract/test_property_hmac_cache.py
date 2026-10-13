@@ -98,10 +98,11 @@ class TestCanonicalResultTransportSettings:
         """Output must be parseable JSON, in compact separators, with no
         inserted whitespace."""
         canonical = canonical_result_transport_settings(**kwargs)
-        # Compact separators — no spaces inside the JSON braces.
-        assert ", " not in canonical
-        assert ": " not in canonical
         parsed = json.loads(canonical)
+        # Compact separators. Values are arbitrary text and may legitimately
+        # contain ", " or ": ", so compare against a compact re-serialization
+        # rather than substring-matching the raw output (issue #1957).
+        assert canonical == json.dumps(parsed, sort_keys=True, separators=(",", ":"))
         # The six fixed fields must all be present.
         assert set(parsed.keys()) == {
             "allow_insecure",
