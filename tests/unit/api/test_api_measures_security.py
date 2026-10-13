@@ -338,3 +338,32 @@ class TestMeasuresPermissionGates:
         assert resp.status_code == 400
         assert "links outside extraction directory" in resp.json()["detail"]
         assert not (outside_dir / "evil").exists()
+
+
+class TestUploadIgnoresClientFilename:
+    """Issue #1969: client filename must never reach the temp-file path."""
+
+    def test_hostile_filename_not_used_as_temp_suffix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str] = []
+        real = measures_api.tempfile.NamedTemporaryFile
+
+        def spy(*args: Any, **kwargs: Any) -> Any:
+            seen.append(kwargs.get("suffix", ""))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(measures_api.tempfile, "NamedTemporaryFile", spy)
+        client = TestClient(create_app(outdir=tmp_path, read_only=False))
+        resp = client.post(
+            UPLOAD_URL,
+            files={
+                "file": (
+                    "../../etc/evil/x.zip",
+                    io.BytesIO(_make_ruby_measure_zip()),
+                    "application/zip",
+                )
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen == [".zip"]
