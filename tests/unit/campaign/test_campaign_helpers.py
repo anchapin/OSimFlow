@@ -115,3 +115,16 @@ def test_accumulate_cost_summary_delegates(campaign: Campaign) -> None:
     campaign._sample_traces = traces
     campaign._accumulate_cost_summary()
     traces.accumulate_cost_summary.assert_called_once()
+
+
+def test_kpi_content_digests_change_on_in_place_rewrite(tmp_path):
+    """Issue #1962: same-path KPI content change must change the digests."""
+    from osimflow.campaign.steps import kpi_content_digests
+
+    kpi = tmp_path / "s1" / "kpis.json"
+    kpi.parent.mkdir()
+    kpi.write_text('{"eui": 1}')
+    before = kpi_content_digests([kpi])
+    assert kpi_content_digests([kpi]) == before
+    kpi.write_text('{"eui": 2}')
+    assert kpi_content_digests([kpi]) != before
