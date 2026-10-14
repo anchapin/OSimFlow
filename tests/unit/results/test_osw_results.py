@@ -12,6 +12,8 @@ from osimflow._work_scripts import extract_kpis as extract_kpis_mod
 from osimflow._work_scripts.aggregate_results import extract_failure
 from osimflow._work_scripts.extract_kpis import run_extract_kpis
 from osimflow.osw_results import (
+    BENIGN_ERROR_PATTERN,
+    SIMULATION_FAILED_KEY,
     collect_failure_message_from_run_log,
     extract_failure_message_from_osw,
     failure_message,
@@ -22,11 +24,11 @@ OK_OSW = {
     "steps": [
         {"measure_dir_name": "bar", "result": {"step_result": "Success", "step_values": []}},
         {
-            "measure_dir_name": "reporting_179_d",
+            "measure_dir_name": "openstudio_results",
             "result": {
                 "step_result": "Success",
                 "step_values": [
-                    {"name": "out_total_electricity_179_d_gj", "value": 12.5},
+                    {"name": "out_total_electricity_gj", "value": 12.5},
                     {"name": "label", "value": "x"},
                 ],
             },
@@ -56,8 +58,8 @@ def test_parse_out_osw(tmp_path: Path) -> None:
     p = tmp_path / "out.osw"
     p.write_text(json.dumps(OK_OSW))
     assert parse_out_osw(p) == {
-        "reporting_179_d.out_total_electricity_179_d_gj": 12.5,
-        "reporting_179_d.label": "x",
+        "openstudio_results.out_total_electricity_gj": 12.5,
+        "openstudio_results.label": "x",
     }
     assert parse_out_osw(tmp_path / "nope.osw") == {}
     p.write_text("{not json")
@@ -65,6 +67,7 @@ def test_parse_out_osw(tmp_path: Path) -> None:
 
 
 def test_osw_failure_message() -> None:
+    assert SIMULATION_FAILED_KEY == "simulation_failed_message"
     assert extract_failure_message_from_osw(json.dumps(FAIL_OSW)) == "win: bad R"
     assert extract_failure_message_from_osw(json.dumps(OK_OSW)) is None
     assert extract_failure_message_from_osw("garbage") is None
@@ -79,6 +82,12 @@ def test_run_log_failure_message_filters_benign() -> None:
     ) == ("x [openstudio.measure.OSRunner] boom")
     assert collect_failure_message_from_run_log("[t FATAL] crash") == "crash"
     assert collect_failure_message_from_run_log("[t INFO] fine") is None
+    # Verify measure-specific strings are not hardcoded in BENIGN_ERROR_PATTERN
+    assert not BENIGN_ERROR_PATTERN.search("run_all_orientation flag is set to False")
+    assert BENIGN_ERROR_PATTERN.search("UseWeatherFile' is selected in YearDescription")
+    assert BENIGN_ERROR_PATTERN.search(
+        "This Curve, Object of type 'OS:Curve:Biquadratic' and named"
+    )
 
 
 def test_failure_message_prefers_run_log(tmp_path: Path) -> None:
@@ -139,24 +148,24 @@ def test_extract_kpis_opt_in(tmp_path: Path) -> None:
     # Default (kpis=None, custom_kpi_extractor=None) includes out.osw step values (issue #2028).
     run_extract_kpis(tmp_path, "0001", out)
     default_kpis = json.loads(out.read_text())["kpis"]
-    assert default_kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
-    assert default_kpis["reporting_179_d.label"] == "x"
+    assert default_kpis["openstudio_results.out_total_electricity_gj"] == 12.5
+    assert default_kpis["openstudio_results.label"] == "x"
 
     # Explicit SQL-only allow-list excludes unrequested out.osw step values.
     run_extract_kpis(tmp_path, "0001", out, kpis=["eui_kwh_m2_yr"])
     assert json.loads(out.read_text())["kpis"] == {}
 
     # Explicit glob allow-list filters out.osw step values.
-    run_extract_kpis(tmp_path, "0001", out, kpis=["reporting_179_d.out_*"])
+    run_extract_kpis(tmp_path, "0001", out, kpis=["openstudio_results.out_*"])
     assert json.loads(out.read_text())["kpis"] == {
-        "reporting_179_d.out_total_electricity_179_d_gj": 12.5
+        "openstudio_results.out_total_electricity_gj": 12.5
     }
 
     # Explicit measure_results token includes all out.osw step values.
     run_extract_kpis(tmp_path, "0001", out, kpis=["measure_results"])
     assert json.loads(out.read_text())["kpis"] == {
-        "reporting_179_d.out_total_electricity_179_d_gj": 12.5,
-        "reporting_179_d.label": "x",
+        "openstudio_results.out_total_electricity_gj": 12.5,
+        "openstudio_results.label": "x",
     }
 
 
@@ -170,8 +179,8 @@ def test_extract_kpis_default_with_sql_and_out_osw(tmp_path: Path) -> None:
     assert kpis["eui_kwh_m2_yr"] == 100.0
     assert kpis["total_site_energy_kwh"] == 10000.0
     assert kpis["floor_area_m2"] == 100.0
-    assert kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
-    assert kpis["reporting_179_d.label"] == "x"
+    assert kpis["openstudio_results.out_total_electricity_gj"] == 12.5
+    assert kpis["openstudio_results.label"] == "x"
     assert payload["quality"]["valid"] is True
 
 
@@ -191,7 +200,7 @@ def test_extract_kpis_collision_precedence(
             "openstudio_version": "0.0.0",
             "units": "bad",
             "quality": "bad",
-            "reporting_179_d.out_total_electricity_179_d_gj": 12.5,
+            "openstudio_results.out_total_electricity_gj": 12.5,
         },
     )
     out = tmp_path / "k.json"
@@ -200,7 +209,7 @@ def test_extract_kpis_collision_precedence(
     payload = json.loads(out.read_text())
     kpis = payload["kpis"]
     assert kpis["eui_kwh_m2_yr"] == 100.0
-    assert kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
+    assert kpis["openstudio_results.out_total_electricity_gj"] == 12.5
     for reserved in ("sample_id", "openstudio_version", "units", "quality"):
         assert reserved not in kpis
     assert payload["sample_id"] == "0001"
@@ -224,11 +233,11 @@ def test_extract_kpis_custom_extractor_preserves_schema(tmp_path: Path) -> None:
         "0001",
         out,
         custom_kpi_extractor=extractor,
-        kpis=["custom_eui", "reporting_179_d.label"],
+        kpis=["custom_eui", "openstudio_results.label"],
     )
     assert json.loads(out.read_text())["kpis"] == {
         "custom_eui": 77.7,
-        "reporting_179_d.label": "x",
+        "openstudio_results.label": "x",
     }
 
 

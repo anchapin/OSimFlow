@@ -806,7 +806,7 @@ def run_extract_kpis(
 
     # Issue #1082: filter to user-requested KPIs when --kpis is set.
     if kpis is not None:
-        # Issue #1871: dotted names / globs (``reporting_179_d.*``) or the
+        # Issue #1871: dotted names / globs (``openstudio_results.*``) or the
         # ``measure_results`` token opt in to out.osw measure-reported values.
         patterns = [k for k in kpis if "." in k]
         merged_osw_keys: set[str] = set()

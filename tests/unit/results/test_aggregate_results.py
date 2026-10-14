@@ -328,7 +328,7 @@ class TestExtractFailure:
                     "completed_status": "Fail",
                     "steps": [
                         {
-                            "measure_dir_name": "reporting_179_d",
+                            "measure_dir_name": "openstudio_results",
                             "result": {
                                 "step_result": "Fail",
                                 "step_errors": ["undefined method `[]' for nil:NilClass"],
@@ -341,7 +341,9 @@ class TestExtractFailure:
         result = extract_failure(sim_dir)
         assert result is not None
         assert result["sample_id"] == "0101"
-        assert result["error_summary"] == "reporting_179_d: undefined method `[]' for nil:NilClass"
+        assert (
+            result["error_summary"] == "openstudio_results: undefined method `[]' for nil:NilClass"
+        )
         assert result["exit_code"] == 1
 
     def test_osw_completed_status_fail_without_step_errors_fallback_message(
@@ -389,7 +391,7 @@ class TestExtractFailure:
                     "completed_status": "Success",
                     "steps": [
                         {
-                            "measure_dir_name": "reporting_179_d",
+                            "measure_dir_name": "openstudio_results",
                             "result": {
                                 "step_result": "Fail",
                                 "step_errors": ["Step failed despite top-level status"],
@@ -401,7 +403,7 @@ class TestExtractFailure:
         )
         result = extract_failure(sim_dir)
         assert result is not None
-        assert result["error_summary"] == "reporting_179_d: Step failed despite top-level status"
+        assert result["error_summary"] == "openstudio_results: Step failed despite top-level status"
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +471,7 @@ def test_aggregate_mutually_exclusive_pass_and_fail_rows(tmp_path: Path) -> None
                 "completed_status": "Fail",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Fail",
                             "step_errors": ["Post-EnergyPlus reporting error"],
@@ -522,7 +524,7 @@ def test_aggregate_mutually_exclusive_pass_and_fail_rows(tmp_path: Path) -> None
     assert set(agg_df["sample_id"]).isdisjoint(set(fail_df["sample_id"]))
     assert (
         fail_df.loc[fail_df["sample_id"] == "0001", "error_summary"].iloc[0]
-        == "reporting_179_d: Post-EnergyPlus reporting error"
+        == "openstudio_results: Post-EnergyPlus reporting error"
     )
     assert (
         "Plant loop temperature out of bounds"

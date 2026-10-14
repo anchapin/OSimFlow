@@ -573,11 +573,11 @@ _GEM_23_MEASURES: dict[str, list[tuple[str, str]]] = {
         ("shgc", "Double"),
         ("vlt", "Double"),
     ],
-    "reporting_179_d": [
+    "openstudio_results": [
         ("disable_upstream_arg", "Boolean"),
         ("add_warning_severe_counts", "Boolean"),
     ],
-    "reporting_179_d_support": [
+    "openstudio_results_support": [
         ("disable_upstream_arg", "Boolean"),
         ("hvac_type_from_upgrade", "Boolean"),
     ],

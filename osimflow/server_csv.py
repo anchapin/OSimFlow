@@ -1,17 +1,17 @@
 """openstudio-server ``download_data.csv?export=true`` compatible export (issue #1872).
 
-Builds, from a campaign output directory, a CSV with the column layout the
-openstudio-bem-to-surrogate gem consumes from the EKS / OpenStack server path
+Builds, from a campaign output directory, a CSV with the column layout that
+OpenStudio Server produces for ``download_data.csv?export=true``
 (``rake download_results``). Layout (see ``docs/migration/openstudio-server.md``):
 
 1. ``name``, ``_id``, ``status``, ``status_message`` — datapoint identity.
 2. Variable columns ``<measure>.<argument>`` in ``samples.json`` order.
-3. Output columns (KPI / ``reporting_179_d.*`` values) in aggregated order.
-4. ``reporting_179_d.simulation_failed_message`` — always last, empty on success.
+3. Output columns (KPI / ``openstudio_results.*`` values) in aggregated order.
+4. ``simulation_failed_message`` — always last, empty on success.
 
 Failed samples (``failed_simulations.csv``) are included with
 ``status_message`` ``datapoint failure`` and their error text in the failure
-column, matching what the gem's failure enrichment expects.
+column, matching what failure enrichment expects.
 """
 
 import json
@@ -23,7 +23,7 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SIMULATION_FAILED_COL = "reporting_179_d.simulation_failed_message"
+SIMULATION_FAILED_COL = "simulation_failed_message"
 IDENTITY_COLUMNS = ("name", "_id", "status", "status_message")
 STATUS_COMPLETED = "completed"
 MESSAGE_NORMAL = "completed normal"

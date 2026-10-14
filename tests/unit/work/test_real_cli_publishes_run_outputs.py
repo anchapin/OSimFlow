@@ -56,7 +56,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                 "completed_status": "Fail",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [{"name": "eui", "value": 42.0}],
@@ -76,7 +76,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                 "completed_status": "Success",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [{"name": "eui", "value": 42.0}],
@@ -103,7 +103,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                 "completed_status": "Success",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {"step_result": "Success", "step_values": []},
                     }
                 ],
@@ -120,7 +120,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                 "completed_status": "Success",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [{"name": "total_site_energy_kbtu", "value": 1234.5}],
@@ -156,7 +156,7 @@ def test_real_cli_succeeds_with_valid_out_osw_when_sql_deleted(tmp_path: Path) -
                     "completed_status": "Success",
                     "steps": [
                         {
-                            "measure_dir_name": "reporting_179_d",
+                            "measure_dir_name": "openstudio_results",
                             "result": {
                                 "step_result": "Success",
                                 "step_values": [{"name": "site_eui", "value": 55.2}],
