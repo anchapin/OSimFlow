@@ -88,10 +88,11 @@ _TRANSIENT_EXIT_CODES: frozenset[int] = frozenset([2, 4, 5, 6, 11, 12, 24, 25, 2
 # Signal numbers that are deliberate terminations and MUST NOT be retried
 # (issue #1568). Python's subprocess surfaces a signal kill as
 # ``returncode == -signal_number``; the classifier checks both forms.
+# ``SIGKILL`` is POSIX-only (9) and absent from ``signal`` on Windows.
 _NON_TRANSIENT_SUBPROCESS_SIGNALS: frozenset[int] = frozenset(
     {
-        signal.SIGTERM,  # graceful cancellation / osimflow cancel
-        signal.SIGKILL,  # OOM-killer / hard kill
+        int(signal.SIGTERM),  # graceful cancellation / osimflow cancel
+        int(getattr(signal, "SIGKILL", 9)),  # OOM-killer / hard kill
     }
 )
 
