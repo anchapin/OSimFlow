@@ -36,6 +36,7 @@ from osimflow._campaign_fanout import (
 )
 from osimflow._campaign_lifecycle import CampaignPauseRequested
 from osimflow._campaign_sample_trace import CampaignAbortError
+from osimflow.campaign.fanout import BOOKKEEPING_MAX_ATTEMPTS
 from osimflow.executors import Handle
 from osimflow.monitoring import RunTrace, WorkerRecoveryManager
 
@@ -386,10 +387,11 @@ class TestSubmitAndAwaitAll:
         recovery_manager.check_and_recover = MagicMock(return_value=(True, 1))  # type: ignore[method-assign]
         resubmit_callback = MagicMock()
         on_success = MagicMock(side_effect=OSError("unlink failed"))
+        handle = _make_ok_handle(Path("/tmp/r"))
         with caplog.at_level(logging.ERROR):
             submit_and_await_all(
                 deps,
-                {"sample_0": (_make_ok_handle(Path("/tmp/r")), on_success)},
+                {"sample_0": (handle, on_success)},
                 "RUN_OPENSTUDIO_SIM",
                 recovery_manager=recovery_manager,
                 resubmit_callback=resubmit_callback,
@@ -400,6 +402,20 @@ class TestSubmitAndAwaitAll:
         assert "RUN_OPENSTUDIO_SIM sample_0 failed:" not in caplog.text
         spies["job_queue"].mark_failed.assert_called_once()
         assert deps.sample_state["sample_0"]["failure_class"] == "bookkeeping_error"
+        assert on_success.call_count == BOOKKEEPING_MAX_ATTEMPTS
+
+    def test_bookkeeping_transient_error_retried_without_rerun(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+        on_success = MagicMock(side_effect=[OSError("transient"), None])
+        handle = _make_ok_handle(Path("/tmp/r"))
+        submit_and_await_all(deps, {"sample_0": (handle, on_success)}, "RUN_OPENSTUDIO_SIM")
+        assert on_success.call_count == 2
+        spies["job_queue"].mark_failed.assert_not_called()
+        spies["job_queue"].mark_completed.assert_called_once_with("sample_0_RUN_OPENSTUDIO_SIM")
+        assert "failure_class" not in deps.sample_state.get("sample_0", {})
 
     def test_simulation_failure_class(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
