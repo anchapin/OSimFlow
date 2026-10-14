@@ -156,6 +156,26 @@ class PostResultBookkeepingError(OSimFlowRuntimeError):
     """
 
 
+class BookkeepingOnce:
+    """Run each named non-idempotent bookkeeping action at most once (issue #2016).
+
+    The fan-out success callback may be invoked up to ``BOOKKEEPING_MAX_ATTEMPTS``
+    times per sample. Actions whose repetition would duplicate state or events
+    (progress counters, observability metrics, coordinator reports, list appends)
+    are wrapped in :meth:`run`; an action is marked done only after it returns,
+    so a failed action is retried while completed ones are skipped.
+    """
+
+    def __init__(self) -> None:
+        self._done: set[str] = set()
+
+    def run(self, name: str, action: Callable[[], None]) -> None:
+        if name in self._done:
+            return
+        action()
+        self._done.add(name)
+
+
 def _run_bookkeeping_with_retry(
     on_success: Callable[[Any], None],
     result: Any,
