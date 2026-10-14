@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -253,7 +254,7 @@ def _apply_probe_rlimits() -> None:
         (resource.RLIMIT_CPU, _PROBE_CPU_LIMIT_S),
         (resource.RLIMIT_FSIZE, _PROBE_FILE_SIZE_LIMIT_BYTES),
     ]
-    # RLIMIT_AS is not reliably enforced (and may be rejected) on macOS.
+    # RLIMIT_AS is not reliably enforced on macOS; _run_probe uses an RSS watchdog there.
     if sys.platform != "darwin":
         limits.append((resource.RLIMIT_AS, _PROBE_MEMORY_LIMIT_BYTES))
     for res, wanted in limits:
@@ -265,13 +266,64 @@ def _apply_probe_rlimits() -> None:
             continue
 
 
+_PROBE_WATCHDOG_INTERVAL_S = 0.1
+
+
+def _rss_bytes(pid: int) -> int | None:
+    """Resident set size of ``pid`` in bytes via ``ps`` (None if unavailable)."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        ).stdout.strip()
+        return int(out.split()[0]) * 1024 if out else None
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
+        return None
+
+
+def _run_probe_with_rss_watchdog(cmd: list[str]) -> bool:
+    """Run a probe, killing it on timeout or when its RSS exceeds the cap.
+
+    macOS does not enforce RLIMIT_AS/RLIMIT_DATA for most allocations, so the
+    parent polls the child's resident set size instead (issue #2011).
+    """
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=_sanitize_env(),
+        # Only async-signal-safe setrlimit calls run pre-exec.
+        preexec_fn=_apply_probe_rlimits if resource is not None else None,  # noqa: PLW1509
+    ) as proc:
+        deadline = time.monotonic() + _PROBE_TIMEOUT_S
+        while proc.poll() is None:
+            rss = _rss_bytes(proc.pid)
+            if rss is not None and rss > _PROBE_MEMORY_LIMIT_BYTES:
+                log.warning("probe %r exceeded memory limit; killing", cmd[:1])
+                proc.kill()
+                proc.wait()
+                return False
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait()
+                return False
+            time.sleep(_PROBE_WATCHDOG_INTERVAL_S)
+        return proc.returncode == 0
+
+
 def _run_probe(cmd: list[str]) -> bool:
     """Run a dependency probe in a subprocess with a sanitized environment.
 
     The child runs with a wall-clock timeout and (on POSIX) CPU, memory and
-    file-size rlimits so an untrusted-name probe cannot exhaust the host.
+    file-size limits so an untrusted-name probe cannot exhaust the host. On
+    macOS the memory cap is enforced by an RSS watchdog.
     """
     try:
+        if sys.platform == "darwin":
+            return _run_probe_with_rss_watchdog(cmd)
         result = subprocess.run(
             cmd,
             capture_output=True,
