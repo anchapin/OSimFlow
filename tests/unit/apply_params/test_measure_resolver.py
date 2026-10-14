@@ -440,10 +440,12 @@ class TestMacOSRssWatchdog:
     def test_ps_tree_rss_counts_grandchild(self) -> None:
         import subprocess
         import sys
+        import threading
         import time
 
         from osimflow import measure_resolver as mr
 
+        tick = threading.Event()
         code = (
             "import subprocess,sys,time;"
             "subprocess.Popen([sys.executable,'-c',"
@@ -458,7 +460,7 @@ class TestMacOSRssWatchdog:
                 rss = mr._ps_tree_rss(proc.pid) or 0
                 if rss > 60 * 2**20:
                     break
-                time.sleep(0.2)
+                tick.wait(0.2)
             assert rss > 60 * 2**20
         finally:
             proc.kill()
