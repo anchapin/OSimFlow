@@ -843,11 +843,10 @@ def preflight_check(
     # more than one step's arguments in the same .osw. The caller must
     # disambiguate by switching to the dotted form.
     _check_ambiguous_parameters(parameters, mappings)
-    # Detect cross-measure conflicts: when the user specifies the same
-    # argument via two different measures (e.g. both
-    # SetThermostatSchedule.heating_setpoint AND
-    # SetEnvelopePerformance.heating_setpoint). Both are valid individually
-    # but together they represent a potential runtime conflict.
+    # Detect colliding parameter targets (e.g., an unqualified `<arg>`
+    # combined with `<Measure>.<arg>`, or dotted keys that lack distinct
+    # OSW step isolation). Disambiguated `<MeasureA>.<arg>` and
+    # `<MeasureB>.<arg>` targeting distinct OSW steps are allowed (#2065).
     _check_cross_measure_conflicts(parameters, mappings)
 
 
@@ -905,46 +904,72 @@ def _check_cross_measure_conflicts(
     parameters: dict[str, Any],
     mappings: dict[str, MappedParameter],
 ) -> None:
-    """Detect when the same argument is specified for multiple measures.
+    """Detect when two parameters collide on the same target argument.
 
-    When a user specifies both ``MeasureA.argument`` AND
-    ``MeasureB.argument`` (where both measures have an argument with the
-    same name), this creates a potential runtime conflict because both
-    measures will receive different values for what is effectively the
-    same semantic parameter.
+    In OpenStudio ``.osw`` workflows, each step has its own isolated
+    ``arguments`` dictionary and ``_mutate_osw`` writes ``<MeasureA>.<arg>``
+    exclusively to step ``MeasureA``'s ``step_index``.  Consequently,
+    disambiguated ``<MeasureA>.<arg>`` and ``<MeasureB>.<arg>`` targeting
+    distinct OSW steps (different ``step_index`` values) do not collide
+    (issue #2065).
 
-    Only checks DOTTED keys that appear in *parameters* — we don't warn
-    about dotted names the user isn't actually varying.
+    A true conflict arises when:
+    1. Both an unqualified ``<arg>`` and a qualified ``<Measure>.<arg>``
+       are specified together in *parameters*.
+    2. Multiple parameters resolve to the same ``(step_index, plain_arg)``
+       target (or have ``step_index=None``, where measure prefixes are not
+       isolated per OSW step).
     """
-    # Build a map of dotted name -> (measure_name, plain_arg)
-    # This lets us detect when multiple dotted names share the same
-    # plain argument but target different measures.
-    dotted_params: dict[str, tuple[str, str]] = {}
+    plain_params_by_arg: dict[str, list[tuple[str, str | None, int | None]]] = {}
+    dotted_params_by_arg: dict[str, list[tuple[str, str, int | None]]] = {}
+
     for key in parameters:
-        if "." not in key:
-            continue  # Plain names handled by _check_ambiguous_parameters
         mapping = mappings.get(key)
         if mapping is None or mapping.kind != "measure_argument":
             continue
+        if "." not in key:
+            plain_params_by_arg.setdefault(mapping.name, []).append(
+                (key, mapping.measure_name, mapping.step_index)
+            )
+            continue
         if mapping.measure_name is None:
             continue
-        # Extract the plain argument name from "MeasureName.arg"
         _, _, plain_arg = key.rpartition(".")
         if plain_arg:
-            dotted_params[key] = (mapping.measure_name, plain_arg)
-
-    # Group by plain argument name: arg_name -> list of (dotted_key, measure_name)
-    arg_to_dotted: dict[str, list[tuple[str, str]]] = {}
-    for dotted_key, (measure_name, plain_arg) in dotted_params.items():
-        arg_to_dotted.setdefault(plain_arg, []).append((dotted_key, measure_name))
+            dotted_params_by_arg.setdefault(plain_arg, []).append(
+                (key, mapping.measure_name, mapping.step_index)
+            )
 
     conflicts: list[str] = []
-    for plain_arg, dotted_list in arg_to_dotted.items():
-        if len(dotted_list) > 1:
-            measures = sorted(set(measure_name for _, measure_name in dotted_list))
-            dotted_keys = sorted(set(dotted_key for dotted_key, _ in dotted_list))
+    all_args = sorted(set(plain_params_by_arg) | set(dotted_params_by_arg))
+    for plain_arg in all_args:
+        plain_entries = plain_params_by_arg.get(plain_arg, [])
+        dotted_entries = dotted_params_by_arg.get(plain_arg, [])
+        if plain_entries and dotted_entries:
+            dotted_keys = sorted({dk for dk, _, _ in dotted_entries})
+            measures = sorted(
+                {m for _, m, _ in plain_entries if m is not None}
+                | {m for _, m, _ in dotted_entries}
+            )
             conflicts.append(
-                f"  {plain_arg!r} specified for multiple measures: "
+                f"  {plain_arg!r} specified as both unqualified {plain_arg!r} and "
+                f"qualified {', '.join(repr(k) for k in dotted_keys)} "
+                f"(measures: {', '.join(measures)}). Choose ONE dotted form "
+                f"(e.g. {dotted_keys[0]!r}) to avoid ambiguous runtime behavior."
+            )
+            continue
+
+        if len(dotted_entries) > 1:
+            step_indices = [step_idx for _, _, step_idx in dotted_entries]
+            # Distinct non-None OSW step_index values are isolated per step.
+            if all(idx is not None for idx in step_indices) and len(set(step_indices)) == len(
+                step_indices
+            ):
+                continue
+            measures = sorted({measure_name for _, measure_name, _ in dotted_entries})
+            dotted_keys = sorted({dotted_key for dotted_key, _, _ in dotted_entries})
+            conflicts.append(
+                f"  {plain_arg!r} specified for multiple measures without step isolation: "
                 f"{', '.join(measures)}. Choose ONE dotted form "
                 f"(e.g. {dotted_keys[0]!r}) to avoid ambiguous runtime behavior."
             )
@@ -952,9 +977,8 @@ def _check_cross_measure_conflicts(
     if conflicts:
         if not os.environ.get("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT"):
             raise CrossMeasureConflictError(
-                "Pre-flight check failed: the same argument is specified for "
-                "multiple measures via dotted names, creating a potential runtime "
-                "conflict:\n" + "\n".join(conflicts)
+                "Pre-flight check failed: conflicting measure argument specifications "
+                "detected, creating a potential runtime conflict:\n" + "\n".join(conflicts)
             )
         else:
             log.warning(
