@@ -394,7 +394,11 @@ def _resolve_work_fn(
     return default_fn
 
 
-def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
+def _verify_cosign_or_raise(
+    cfg: CampaignConfig,
+    *,
+    resolved_image_ref: str | None = None,
+) -> None:
     """Verify the OpenStudio image signature when opted in (issue #1385).
 
     Extracted from ``Campaign.__init__`` (issue #1462).  When the
@@ -407,11 +411,14 @@ def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
     """
     if not cfg.require_cosign_identity:
         return
-    os_image_ref = build_cosign_image_ref(
-        container="docker.io/nrel/openstudio",
-        container_digest=cfg.container_digest,
-        openstudio_version=cfg.openstudio_version,
-    )
+    if not cfg.container_digest and resolved_image_ref and "@sha256:" in resolved_image_ref:
+        os_image_ref = resolved_image_ref
+    else:
+        os_image_ref = build_cosign_image_ref(
+            container="docker.io/nrel/openstudio",
+            container_digest=cfg.container_digest,
+            openstudio_version=cfg.openstudio_version,
+        )
     issuer = cfg.cosign_oidc_issuer or DEFAULT_COSIGN_OIDC_ISSUER
     # Issue #1536: verifying a mutable-tag ref resolves tag→digest once
     # inside cosign, but the executors pull by tag later — a re-push
@@ -553,31 +560,33 @@ class Campaign(
         # is not called per-sample. ``_container_digest_for`` falls back to
         # a SHA-256 of the label when docker is absent, hung, or the image
         # is not pulled locally. See issue #1023.
+        os_label = CONTAINER_OS.format(version=cfg.openstudio_version)
         self._python_container_digest = _container_digest_for(self._python_container_image)
-        self._os_container_digest = _container_digest_for(
-            CONTAINER_OS.format(version=cfg.openstudio_version)
-        )
+        self._os_container_digest = _container_digest_for(os_label)
         # Issue #1081: when the caller pins images by SHA256 digest via
         # ``--container-digest``, honor that digest for BOTH images instead
         # of the resolved mutable-tag digest. The digest is content-addressable
         # across machines, so cache keys stay stable and no executor ever sees
         # a bare ``:latest`` / ``:<version>`` tag as the image reference.
+        job_def_digest_ref: str | None = None
         if cfg.container_digest:
             self._python_container_digest = cfg.container_digest
             self._os_container_digest = cfg.container_digest
             log.info("container images pinned by digest: %s", cfg.container_digest)
+        else:
+            job_def_digest_ref = self._discover_aws_batch_digest(os_label)
         # Issue #1536: the pullable digest-pinned ref every container
         # substrate must execute (``<repo>@sha256:<hex>``).  ``None`` when
         # the digest is unresolved — ``run()`` fails loudly for container
         # substrates in that case instead of silently resolving by tag.
         self._os_digest_ref = digest_pinned_image_ref(
-            CONTAINER_OS.format(version=cfg.openstudio_version),
+            os_label,
             self._os_container_digest,
         )
         # Issue #1385: when the operator opts in via
         # ``--require-cosign-identity``, verify the OpenStudio image
         # signature (keyless sigstore) BEFORE anything runs.
-        _verify_cosign_or_raise(cfg)
+        _verify_cosign_or_raise(cfg, resolved_image_ref=job_def_digest_ref)
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
@@ -601,6 +610,7 @@ class Campaign(
             config_summary={
                 "executor": executor.name,
                 "openstudio_version": cfg.openstudio_version,
+                "container_digest": self._os_digest_ref,
                 "n_samples": cfg.n_samples,
                 "archive_intermediates": cfg.archive_intermediates,
                 "algorithm": cfg.algorithm,
@@ -1396,9 +1406,71 @@ class Campaign(
     # Manifest writers (issue #277 → #1462: logic lives in
     # CampaignArtifactWriter; thin delegators below).
     # ------------------------------------------------------------------
+    def _discover_aws_batch_digest(self, os_label: str) -> str | None:
+        """Discover the container digest from the AWS Batch job definition (issue #2027)."""
+        if self.executor.name != "aws_batch":
+            return None
+        resolve_image_fn = getattr(self.executor, "resolve_job_definition_image", None)
+        resolve_digest_fn = getattr(self.executor, "resolve_job_definition_digest", None)
+        if not (callable(resolve_image_fn) and callable(resolve_digest_fn)):
+            return None
+        if resolve_image_fn() is None:
+            return None
+        resolved_ref = resolve_digest_fn(label=os_label)
+        job_def_digest_ref = resolved_ref if isinstance(resolved_ref, str) else None
+        if job_def_digest_ref is not None:
+            self._python_container_digest = f"{self._python_container_image}@{job_def_digest_ref}"
+            self._os_container_digest = f"{os_label}@{job_def_digest_ref}"
+            log.info(
+                "resolved container digest from AWS Batch job definition: %s",
+                job_def_digest_ref,
+            )
+            return job_def_digest_ref
+        # Issue #2027: the AWS Batch job definition specifies a mutable image
+        # tag that could not be resolved to a sha256 digest; do not allow an
+        # unrelated local image digest to satisfy the AWS Batch digest check.
+        self._os_container_digest = f"{os_label}@unresolved"
+        return None
+
+    def _resolve_aws_batch_container_digest(self) -> None:
+        """Resolve or validate the AWS Batch job-definition container digest (issue #2027).
+
+        Called at the start of ``Campaign.run()`` so that even if a caller
+        attaches a mocked/configured Batch client after ``Campaign.__init__``:
+
+        1. When ``--container-digest`` was omitted and ``_os_digest_ref`` is
+           still ``None``, inspects the AWS Batch job definition's
+           ``containerProperties.image`` and populates ``_os_digest_ref`` /
+           ``_os_container_digest`` / ``_python_container_digest`` when it
+           resolves to an immutable ``sha256:`` digest.
+        2. When ``--container-digest`` was explicitly supplied and the AWS
+           Batch job definition exposes an image, validates that the job
+           definition's image matches ``--container-digest`` before any DAG
+           step or Batch job is submitted.
+        """
+        if self.executor.name != "aws_batch":
+            return
+        if self.cfg.container_digest:
+            getattr(self.executor, "validate_job_definition_digest", lambda _d: None)(
+                self.cfg.container_digest
+            )
+            return
+        if self._os_digest_ref is None:
+            os_label = CONTAINER_OS.format(version=self.cfg.openstudio_version)
+            if self._discover_aws_batch_digest(os_label) is not None:
+                self._os_digest_ref = digest_pinned_image_ref(
+                    os_label,
+                    self._os_container_digest,
+                )
+                self.trace.config_summary["container_digest"] = self._os_digest_ref
+
     def _write_campaign_meta(self) -> None:
         """Write ``campaign_meta.json`` to outdir at campaign start."""
-        self._artifacts.write_campaign_meta(self.executor.name, self._shard_label())
+        self._artifacts.write_campaign_meta(
+            self.executor.name,
+            self._shard_label(),
+            container_digest=self._os_digest_ref,
+        )
 
     def _write_provenance(self) -> None:
         """Write ``provenance.json`` to outdir at campaign completion."""
@@ -1407,6 +1479,7 @@ class Campaign(
             cache_stats=self.cache.stats(),
             latest_samples_file=self._latest_samples_file,
             shard_label=self._shard_label(),
+            container_digest=self._os_digest_ref,
         )
 
     def _write_artifact_manifest(self) -> None:

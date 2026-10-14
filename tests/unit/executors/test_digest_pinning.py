@@ -17,13 +17,14 @@ refs before verification and the receipt records the verified digest.
 from __future__ import annotations
 
 import json
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.cache import digest_pinned_image_ref
+from osimflow.cache import ImageDigestUnavailableError, digest_pinned_image_ref
 from osimflow.campaign import CONTAINER_SUBSTRATE_EXECUTORS, Campaign
 from osimflow.config import CampaignConfig
 from osimflow.cosign import (
@@ -31,6 +32,7 @@ from osimflow.cosign import (
     triangulate_image_ref,
     write_cosign_receipt,
 )
+from osimflow.executors.base import Handle
 
 HEX = "a" * 64
 PINNED = f"docker.io/nrel/openstudio@sha256:{HEX}"
@@ -268,3 +270,282 @@ class TestCosignTriangulate:
         assert receipt["verified_digest"] == f"sha256:{HEX}"
         assert receipt["triangulated_from_tag"] == "docker.io/nrel/openstudio:3.11.0"
         assert receipt["verified"] is True
+
+
+class TestAwsBatchJobDefinitionDigestResolution:
+    """Issue #2027: AWS Batch resolves/validates job-definition digest without local Docker."""
+
+    @staticmethod
+    def _cfg(
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        **overrides: Any,
+    ) -> CampaignConfig:
+        defaults: dict[str, Any] = {
+            "input_variables": variables_yml,
+            "template_sim_package": template_pkg,
+            "n_samples": 1,
+            "outdir": outdir,
+            "openstudio_version": "3.11.0",
+        }
+        defaults.update(overrides)
+        return CampaignConfig(**defaults)
+
+    @staticmethod
+    def _make_batch_executor(job_def_image: str) -> tuple[Any, MagicMock]:
+        from osimflow.executors.aws_batch_executor import AWSBatchExecutor
+
+        ex = AWSBatchExecutor.__new__(AWSBatchExecutor)
+        ex.job_queue = "osimflow-batch-queue"
+        ex.job_definition = "osimflow-openstudio-job-def"
+        ex.region_name = "us-east-1"
+        ex.poll_interval_s = 0.01
+        ex.max_retries = 0
+        ex.use_spot = False
+        ex.spot_price_pct = 100
+        ex.on_demand_queue = None
+        ex.ecr_repository = None
+        ex.s3_artifact_bucket = None
+        ex.s3_artifact_prefix = "osimflow"
+        ex.s3_artifact_endpoint = None
+        ex.allow_insecure_storage_endpoint = False
+        ex.submit_rate_per_sec = 0.0
+        ex.fanout_chunk_size = 0
+        ex.allow_long_lived_credentials = True
+        ex._container_digest = None
+        ex._fargate = False
+        ex._payload_secret_arn = None
+
+        fake_client = MagicMock()
+        fake_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 3,
+                    "status": "ACTIVE",
+                    "containerProperties": {"image": job_def_image},
+                }
+            ]
+        }
+        ex._client = fake_client
+        return ex, fake_client
+
+    def test_no_local_docker_digest_pinned_job_def_succeeds_and_records_digest(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """No local Docker + job definition specifies nrel/openstudio@sha256:... -> succeeds and records digest."""
+        import sqlite3
+
+        assert "aws_batch" in CONTAINER_SUBSTRATE_EXECUTORS
+        pinned_job_def_image = f"nrel/openstudio@sha256:{HEX}"
+        ex, fake_client = self._make_batch_executor(pinned_job_def_image)
+
+        def _exec_inline(
+            fn: Any,
+            *args: Any,
+            name: str | None = None,
+            cpus: float = 1,
+            memory_mb: int = 2048,
+            time_min: int = 30,
+            openstudio_version: str | None = None,
+            container: str | None = None,
+            container_digest: str | None = None,
+            result_hint: Any = None,
+            transport: Any = None,
+            **kwargs: Any,
+        ) -> Handle:
+            fut: Future[Any] = Future()
+            try:
+                fut.set_result(fn(*args, **kwargs))
+            except BaseException as exc:  # noqa: BLE001
+                fut.set_exception(exc)
+            return Handle(job_id="batch-stub", _future=fut)
+
+        ex.submit = _exec_inline  # type: ignore[method-assign]
+
+        with patch(
+            "osimflow.cache._resolve_image_digest",
+            side_effect=ImageDigestUnavailableError("docker unavailable"),
+        ):
+            campaign = Campaign(
+                self._cfg(variables_yml, template_pkg, outdir, container_digest=None),
+                ex,
+            )
+            assert campaign._os_digest_ref == pinned_job_def_image
+            assert pinned_job_def_image in campaign._os_container_digest
+            result = campaign.run()
+
+        assert (outdir / "aggregated_results.csv").is_file()
+        assert "samples" in result
+        fake_client.describe_job_definitions.assert_called_once()
+
+        # Verify digest is recorded in run.json, campaign_meta.json, provenance.json, and SQLite cache.
+        run_json = json.loads((outdir / "run.json").read_text())
+        assert run_json["config"]["container_digest"] == pinned_job_def_image
+        meta_json = json.loads((outdir / "campaign_meta.json").read_text())
+        assert meta_json["container_digest"] == pinned_job_def_image
+        prov_json = json.loads((outdir / "provenance.json").read_text())
+        assert prov_json["container_digest"] == pinned_job_def_image
+
+        with sqlite3.connect(outdir / "work" / "cache.sqlite") as conn:
+            rows = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT DISTINCT container_digest FROM cache_entries WHERE step = 'RUN_OPENSTUDIO_SIM'"
+                ).fetchall()
+            ]
+        assert rows == [f"docker.io/nrel/openstudio:3.11.0@{pinned_job_def_image}"]
+
+    def test_no_local_docker_mutable_job_def_without_container_digest_fails_before_submission(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """No local Docker + mutable/unresolvable job definition image without --container-digest -> fails before job submission."""
+        ex, fake_client = self._make_batch_executor("nrel/openstudio:3.11.0")
+        with patch(
+            "osimflow.cache._resolve_image_digest",
+            side_effect=ImageDigestUnavailableError("docker unavailable"),
+        ):
+            campaign = Campaign(
+                self._cfg(variables_yml, template_pkg, outdir, container_digest=None),
+                ex,
+            )
+            assert campaign._os_digest_ref is None
+            with pytest.raises(
+                RuntimeError,
+                match=r"requires a digest-pinned container image.*containerProperties\.image",
+            ):
+                campaign.run()
+        fake_client.submit_job.assert_not_called()
+
+    def test_explicit_container_digest_mismatching_digest_pinned_job_def_fails_before_submission(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Explicitly supplied --container-digest mismatching a digest-pinned job definition -> fails."""
+        other_hex = "b" * 64
+        ex, fake_client = self._make_batch_executor(f"nrel/openstudio@sha256:{HEX}")
+        with patch(
+            "osimflow.cache._resolve_image_digest",
+            side_effect=ImageDigestUnavailableError("docker unavailable"),
+        ):
+            campaign = Campaign(
+                self._cfg(
+                    variables_yml,
+                    template_pkg,
+                    outdir,
+                    container_digest=f"nrel/openstudio@sha256:{other_hex}",
+                ),
+                ex,
+            )
+            with pytest.raises(RuntimeError, match="does not match the image"):
+                campaign.run()
+        fake_client.submit_job.assert_not_called()
+
+    def test_other_container_substrates_remain_gated(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        tmp_path: Path,
+    ) -> None:
+        """All other container substrates remain gated in CONTAINER_SUBSTRATE_EXECUTORS."""
+        expected = {
+            "aws_batch",
+            "azure_batch",
+            "google_batch",
+            "kubernetes",
+            "docker_swarm",
+            "nomad",
+        }
+        assert CONTAINER_SUBSTRATE_EXECUTORS == expected
+        for name in sorted(expected):
+            stub = _NamedStubExecutor()
+            stub.name = name
+            with patch(
+                "osimflow.cache._resolve_image_digest",
+                side_effect=ImageDigestUnavailableError("docker unavailable"),
+            ):
+                campaign = Campaign(
+                    self._cfg(variables_yml, template_pkg, tmp_path / name, dry_run=True),
+                    stub,
+                )
+                with pytest.raises(RuntimeError, match="requires a digest-pinned container image"):
+                    campaign.run()
+
+    def test_late_attached_batch_client_resolves_digest_at_run_time_and_cosign_uses_job_def_digest(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Handles late-attached Batch client at run() time and cosign verification against job-def digest."""
+        pinned_job_def_image = (
+            f"123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow:3.11.0@sha256:{HEX}"
+        )
+        ex, fake_client = self._make_batch_executor(pinned_job_def_image)
+        # First return empty jobDefinitions during Campaign.__init__ so
+        # resolve_job_definition_image() returns None, then return the
+        # digest-pinned job definition when Campaign.run() calls
+        # _resolve_aws_batch_container_digest().
+        fake_client.describe_job_definitions.side_effect = [
+            {"jobDefinitions": []},
+            {
+                "jobDefinitions": [
+                    {
+                        "revision": 1,
+                        "containerProperties": {"image": pinned_job_def_image},
+                    }
+                ]
+            },
+        ]
+        expected_digest_ref = f"123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow@sha256:{HEX}"
+        with patch(
+            "osimflow.cache._resolve_image_digest",
+            side_effect=ImageDigestUnavailableError("docker unavailable"),
+        ):
+            campaign = Campaign(
+                self._cfg(
+                    variables_yml,
+                    template_pkg,
+                    outdir,
+                    container_digest=None,
+                    dry_run=True,
+                ),
+                ex,
+            )
+            assert campaign._os_digest_ref is None
+            campaign._resolve_aws_batch_container_digest()
+            assert campaign._os_digest_ref == expected_digest_ref
+            assert campaign.trace.config_summary["container_digest"] == expected_digest_ref
+
+        # Also verify _verify_cosign_or_raise uses resolved_image_ref when
+        # --require-cosign-identity is set without --container-digest.
+        cfg_cosign = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=template_pkg,
+            n_samples=1,
+            outdir=outdir / "cosign",
+            openstudio_version="3.11.0",
+            container_digest=None,
+            require_cosign_identity="https://github.com/NREL/OpenStudio/*",
+            dry_run=True,
+        )
+        with (
+            patch(
+                "osimflow.cache._resolve_image_digest",
+                side_effect=ImageDigestUnavailableError("docker unavailable"),
+            ),
+            patch("osimflow.campaign.verify_image_signature") as mock_verify,
+        ):
+            ex2, _ = self._make_batch_executor(pinned_job_def_image)
+            Campaign(cfg_cosign, ex2)
+            mock_verify.assert_called_once()
+            assert mock_verify.call_args.args[0] == expected_digest_ref

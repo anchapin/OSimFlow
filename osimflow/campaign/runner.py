@@ -43,21 +43,25 @@ class CampaignRunMixin:
             self._coordinator_url(),
             allow_insecure=bool(getattr(self.cfg, "allow_insecure_storage_endpoint", False)),
         )
-        # Issue #1536: container substrates must execute the digest-pinned
-        # image.  When the digest could not be resolved (docker absent, the
-        # image not pulled locally) and the operator did not pass
-        # ``--container-digest``, fail loudly instead of silently resolving
-        # the image by its mutable tag — a re-published tag would change
-        # what runs while the cache key still describes the old digest.
+        self._resolve_aws_batch_container_digest()
+        # Issue #1536 / #2027: container substrates must execute the
+        # digest-pinned image.  When the digest could not be resolved
+        # (docker absent, the image not pulled locally, and for aws_batch
+        # the job definition is not digest-pinned) and the operator did
+        # not pass ``--container-digest``, fail loudly instead of silently
+        # resolving the image by its mutable tag — a re-published tag
+        # would change what runs while the cache key still describes the
+        # old digest.
         if self.executor.name in _c.CONTAINER_SUBSTRATE_EXECUTORS and self._os_digest_ref is None:
             raise RuntimeError(
                 f"executor {self.executor.name!r} requires a digest-pinned "
                 "container image, but the OpenStudio image digest could not "
                 "be resolved (docker unavailable or image not pulled) and no "
                 "--container-digest was provided. Pass --container-digest "
-                "<repo>@sha256:<hex> (or resolve/pull the image where docker "
-                "is reachable) so the executed image matches the cache key "
-                "(issue #1536)."
+                "<repo>@sha256:<hex>, pin the AWS Batch job definition "
+                "containerProperties.image to <repo>@sha256:<hex>, or "
+                "resolve/pull the image where docker is reachable so the "
+                "executed image matches the cache key (issues #1536, #2027)."
             )
         self._reject_unsupported_remote_hooks()
         _c.log.info("=" * 60)
