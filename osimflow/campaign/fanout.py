@@ -141,6 +141,11 @@ class FanoutDeps:
 FAILURE_CLASS_SIMULATION = "simulation_error"
 FAILURE_CLASS_BOOKKEEPING = "bookkeeping_error"
 
+#: Total attempts (first try + retries) of the post-result bookkeeping
+#: callback before the sample is marked failed (issue #2009). The
+#: simulation is never re-run.
+BOOKKEEPING_MAX_ATTEMPTS = 3
+
 
 class PostResultBookkeepingError(OSimFlowRuntimeError):
     """Post-result bookkeeping failed after the work function succeeded (issue #1997).
@@ -149,6 +154,35 @@ class PostResultBookkeepingError(OSimFlowRuntimeError):
     :func:`mark_sample_failed` can record ``failure_class="bookkeeping_error"``
     and users can tell it apart from a genuine simulation failure.
     """
+
+
+def _run_bookkeeping_with_retry(
+    on_success: Callable[[Any], None],
+    result: Any,
+    step_name: str,
+    sid: str,
+) -> None:
+    """Run ``on_success`` up to ``BOOKKEEPING_MAX_ATTEMPTS`` times (issue #2009).
+
+    Only the bookkeeping callback is retried; the simulation is not re-run.
+    The last error is re-raised on exhaustion.
+    """
+    for attempt in range(1, BOOKKEEPING_MAX_ATTEMPTS + 1):
+        try:
+            on_success(result)
+            return
+        except Exception as retry_error:
+            if attempt == BOOKKEEPING_MAX_ATTEMPTS:
+                raise
+            log.warning(
+                "%s %s post-result bookkeeping attempt %d/%d failed "
+                "(retrying without re-running the simulation): %s",
+                step_name,
+                sid,
+                attempt,
+                BOOKKEEPING_MAX_ATTEMPTS,
+                retry_error,
+            )
 
 
 def mark_sample_failed(
@@ -472,7 +506,7 @@ def submit_and_await_all(
         try:
             result = handle.result(timeout=await_deadline)
             try:
-                on_success(result)
+                _run_bookkeeping_with_retry(on_success, result, step_name, sid)
                 # Mark completed in the job queue (issue #263).
                 deps.job_queue.mark_completed(f"{sid}_{step_name}")
                 # Reset recovery attempts on successful completion (issue #443).
