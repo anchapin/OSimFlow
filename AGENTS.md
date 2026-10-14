@@ -200,7 +200,7 @@ bypass `_verify_step_inputs` when adding a step.
 
 ### CLI subcommands
 
-`run` (campaign), `import-osa` / `import-gem-osa` / `export` (PAT/OSA I/O), `serve`
+`run` (campaign), `import-osa` / `export` (PAT/OSA I/O), `serve`
 (REST, `[api]` extra), `list` / `show` / `compare` / `status` /
 `download` (registry), `backup` / `restore` (registry),
 `mark-for-reanalysis` / `merge` (data-point lifecycle),

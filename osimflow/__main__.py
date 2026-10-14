@@ -62,7 +62,6 @@ from osimflow.cli.executor import (  # noqa: F401
 )
 from osimflow.cli.io import (  # noqa: F401
     _run_export,
-    _run_import_gem_osa,
     _run_import_osa,
 )
 from osimflow.cli.lifecycle import (  # noqa: F401
@@ -88,7 +87,6 @@ from osimflow.cli.parser import (  # noqa: F401
     _add_export_results_args,
     _add_from_s3_args,
     _add_health_args,
-    _add_import_gem_osa_args,
     _add_import_osa_args,
     _add_list_args,
     _add_mark_for_reanalysis_args,
@@ -426,7 +424,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     )
     dispatch = {
         "import-osa": _run_import_osa,
-        "import-gem-osa": _run_import_gem_osa,
         "export": _run_export,
         "serve": _cmd_serve,
         "dashboard": _cmd_dashboard,

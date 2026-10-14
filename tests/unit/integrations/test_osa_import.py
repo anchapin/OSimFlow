@@ -1,6 +1,7 @@
 """Unit tests for osimflow.importers.osa — OSA import converter."""
 
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -989,6 +990,210 @@ class TestStageOsaTemplatePackage:
         assert rc == 0
         assert out_yml.is_file()
         assert (pkg_out / "workflow.osw").is_file()
+
+    def test_normalize_osw_paths_missing_or_ambiguous_raises_osa_import_error(
+        self, tmp_path: Path
+    ) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        analysis_json = _write_json(tmp_path / "analysis.json", SAMPLE_ANALYSIS)
+
+        # Missing seed_file
+        pkg_missing = tmp_path / "pkg_missing"
+        pkg_missing.mkdir()
+        (pkg_missing / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "seed_file": "../outside/missing.osm",
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(OSAImportError, match="does not exist in package"):
+            stage_osa_template_package(
+                analysis_json, tmp_path / "out_missing", template_package=pkg_missing
+            )
+
+        # Ambiguous weather_file
+        pkg_ambig = tmp_path / "pkg_ambig"
+        (pkg_ambig / "weather_a").mkdir(parents=True)
+        (pkg_ambig / "weather_b").mkdir(parents=True)
+        (pkg_ambig / "weather_a" / "dup.epw").write_text("A\n", encoding="utf-8")
+        (pkg_ambig / "weather_b" / "dup.epw").write_text("B\n", encoding="utf-8")
+        (pkg_ambig / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "weather_file": "../outside/dup.epw",
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(OSAImportError, match="multiple files named 'dup.epw'"):
+            stage_osa_template_package(
+                analysis_json, tmp_path / "out_ambig", template_package=pkg_ambig
+            )
+
+        # Ambiguous measure_dir_name when measure_paths escaped package
+        pkg_ambig_m = tmp_path / "pkg_ambig_m"
+        (pkg_ambig_m / "custom_a" / "bar").mkdir(parents=True)
+        (pkg_ambig_m / "custom_b" / "bar").mkdir(parents=True)
+        (pkg_ambig_m / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "measure_paths": ["../../measures"],
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(OSAImportError, match="measure 'bar' is ambiguous"):
+            stage_osa_template_package(
+                analysis_json, tmp_path / "out_ambig_m", template_package=pkg_ambig_m
+            )
+
+        # Missing measure_dir_name when measure_paths escaped package
+        pkg_missing_m = tmp_path / "pkg_missing_m"
+        pkg_missing_m.mkdir()
+        (pkg_missing_m / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "measure_paths": ["../../measures"],
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(OSAImportError, match="could not resolve step measure 'bar'"):
+            stage_osa_template_package(
+                analysis_json, tmp_path / "out_missing_m", template_package=pkg_missing_m
+            )
+
+    def test_normalize_osw_paths_contained_absolute_path_with_duplicate_basename(
+        self, tmp_path: Path
+    ) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        analysis_json = _write_json(tmp_path / "analysis.json", SAMPLE_ANALYSIS)
+        pkg = tmp_path / "pkg_abs"
+        (pkg / "measures" / "bar").mkdir(parents=True)
+        (pkg / "seed_a").mkdir(parents=True)
+        (pkg / "seed_b").mkdir(parents=True)
+        (pkg / "seed_a" / "model.osm").write_text("A\n", encoding="utf-8")
+        (pkg / "seed_b" / "model.osm").write_text("B\n", encoding="utf-8")
+        (pkg / "weather_a").mkdir(parents=True)
+        (pkg / "weather_b").mkdir(parents=True)
+        (pkg / "weather_a" / "site.epw").write_text("WA\n", encoding="utf-8")
+        (pkg / "weather_b" / "site.epw").write_text("WB\n", encoding="utf-8")
+        (pkg / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "seed_file": str((pkg / "seed_b" / "model.osm").resolve()),
+                    "weather_file": str((pkg / "weather_a" / "site.epw").resolve()),
+                    "measure_paths": [str((pkg / "measures").resolve())],
+                    "file_paths": [str((pkg / "seed_b").resolve())],
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        out = tmp_path / "out_abs"
+        stage_osa_template_package(analysis_json, out, template_package=pkg)
+        osw = json.loads((out / "workflow.osw").read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "seed_b/model.osm"
+        assert osw["weather_file"] == "weather_a/site.epw"
+        assert osw["measure_paths"] == ["measures"]
+        assert "seed_b" in osw["file_paths"]
+        assert "weather_a" in osw["file_paths"]
+
+    def test_normalize_osw_paths_rewrites_out_of_tree_and_works_in_isolated_dir(
+        self, tmp_path: Path
+    ) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        analysis_json = _write_json(tmp_path / "analysis.json", SAMPLE_ANALYSIS)
+        pkg = tmp_path / "staged_pkg"
+        (pkg / "measures" / "bar").mkdir(parents=True)
+        (pkg / "weather").mkdir(parents=True)
+        (pkg / "weather" / "Chicago.epw").write_text("LOCATION,Chicago\n", encoding="utf-8")
+        (pkg / "seed_models").mkdir(parents=True)
+        (pkg / "seed_models" / "model.osm").write_text("OS:Version,{1};\n", encoding="utf-8")
+        (pkg / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "seed_file": "../seed_models/model.osm",
+                    "weather_file": "../../weather/Chicago.epw",
+                    "measure_paths": ["../../measures"],
+                    "file_paths": ["../../weather", "../../seed_models"],
+                    "steps": [
+                        {"measure_dir_name": "bar", "arguments": {"floor_area": 100}},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        out = tmp_path / "out_isolated"
+        stage_osa_template_package(analysis_json, out, template_package=pkg)
+
+        isolated = tmp_path / "isolated_worker" / "0000"
+        isolated.parent.mkdir(parents=True)
+        shutil.copytree(out, isolated)
+        isolated_root = isolated.resolve()
+        osw = json.loads((isolated / "workflow.osw").read_text(encoding="utf-8"))
+
+        assert osw["measure_paths"] == ["measures"]
+        assert "seed_models" in osw["file_paths"]
+        assert "weather" in osw["file_paths"]
+        assert osw["seed_file"] == "seed_models/model.osm"
+        assert osw["weather_file"] == "weather/Chicago.epw"
+
+        for mp in osw["measure_paths"]:
+            p = (isolated / mp).resolve()
+            p.relative_to(isolated_root)
+            assert p.is_dir()
+        for fp in osw["file_paths"]:
+            p = (isolated / fp).resolve()
+            p.relative_to(isolated_root)
+            assert p.is_dir()
+        for field in ("seed_file", "weather_file"):
+            p = (isolated / osw[field]).resolve()
+            p.relative_to(isolated_root)
+            assert p.is_file()
+
+    def test_normalize_osw_paths_preserves_valid_in_package_paths(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        analysis_json = _write_json(tmp_path / "analysis.json", SAMPLE_ANALYSIS)
+        pkg = tmp_path / "pkg_valid"
+        (pkg / "custom_measures" / "bar").mkdir(parents=True)
+        (pkg / "files" / "seeds").mkdir(parents=True)
+        (pkg / "files" / "seeds" / "seed.osm").write_text("OS:Version,{1};\n", encoding="utf-8")
+        (pkg / "files" / "epw").mkdir(parents=True)
+        (pkg / "files" / "epw" / "site.epw").write_text("LOCATION,Site\n", encoding="utf-8")
+        (pkg / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "seed_file": "seed.osm",
+                    "weather_file": "files/epw/site.epw",
+                    "measure_paths": ["custom_measures"],
+                    "file_paths": ["files/seeds"],
+                    "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        out = tmp_path / "out_valid"
+        stage_osa_template_package(analysis_json, out, template_package=pkg)
+        osw = json.loads((out / "workflow.osw").read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "files/seeds/seed.osm"
+        assert osw["weather_file"] == "files/epw/site.epw"
+        assert osw["measure_paths"] == ["custom_measures"]
+        assert "files/seeds" in osw["file_paths"]
+        assert "files/epw" in osw["file_paths"]
 
 
 # ---------------------------------------------------------------------------
