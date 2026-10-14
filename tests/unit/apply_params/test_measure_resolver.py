@@ -452,7 +452,7 @@ class TestMacOSRssWatchdog:
             "'x=bytearray(60*2**20);import time;time.sleep(20)']);"
             "time.sleep(20)"
         )
-        proc = subprocess.Popen([sys.executable, "-c", code])
+        proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
         try:
             deadline = time.monotonic() + 10
             rss = 0
@@ -463,5 +463,126 @@ class TestMacOSRssWatchdog:
                 tick.wait(0.2)
             assert rss > 60 * 2**20
         finally:
-            proc.kill()
+            mr._kill_probe_tree(proc)
             proc.wait()
+
+    def test_kill_probe_tree_signals_pgid_and_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import signal
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        proc = mock.Mock(pid=4242)
+        monkeypatch.setattr(mr.sys, "platform", "darwin")
+        with mock.patch.object(mr.os, "killpg") as killpg:
+            mr._kill_probe_tree(proc)
+            killpg.assert_called_once_with(4242, signal.SIGKILL)
+            proc.kill.assert_not_called()
+
+        with mock.patch.object(mr.os, "killpg", side_effect=ProcessLookupError):
+            mr._kill_probe_tree(proc)
+            proc.kill.assert_called_once_with()
+
+        proc.kill.reset_mock()
+        monkeypatch.setattr(mr.sys, "platform", "win32")
+        with mock.patch.object(mr.os, "killpg") as killpg:
+            mr._kill_probe_tree(proc)
+            killpg.assert_not_called()
+            proc.kill.assert_called_once_with()
+
+    def test_watchdog_cleans_up_process_group_on_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        fake_proc = mock.MagicMock()
+        fake_proc.__enter__.return_value = fake_proc
+        fake_proc.pid = 9999
+        fake_proc.poll.return_value = None
+
+        monkeypatch.setattr(mr, "_rss_bytes", mock.Mock(side_effect=RuntimeError("boom")))
+        with (
+            mock.patch.object(mr.subprocess, "Popen", return_value=fake_proc) as popen,
+            mock.patch.object(mr, "_kill_probe_tree") as kill_tree,
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            mr._run_probe_with_rss_watchdog(["probe"])
+
+        assert popen.call_args.kwargs.get("start_new_session") is (mr.sys.platform != "win32")
+        kill_tree.assert_called_once_with(fake_proc)
+        fake_proc.wait.assert_called_once_with()
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+    def test_watchdog_kills_grandchild_on_rss_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import threading
+        import time
+
+        from osimflow import measure_resolver as mr
+
+        tick = threading.Event()
+        pid_file = tmp_path / "gc.pid"
+        real_rss = mr._rss_bytes
+
+        def _rss_after_grandchild_ready(pid: int) -> int | None:
+            wait_deadline = time.monotonic() + 5.0
+            while not pid_file.exists() and time.monotonic() < wait_deadline:
+                tick.wait(0.02)
+            return real_rss(pid)
+
+        monkeypatch.setattr(mr, "_PROBE_MEMORY_LIMIT_BYTES", 1)
+        monkeypatch.setattr(mr, "_PROBE_WATCHDOG_INTERVAL_S", 0.01)
+        monkeypatch.setattr(mr, "_rss_bytes", _rss_after_grandchild_ready)
+
+        script = f"sleep 60 & echo $! > {pid_file}.tmp && mv {pid_file}.tmp {pid_file}; wait"
+        assert not mr._run_probe_with_rss_watchdog(["sh", "-c", script])
+
+        gc_pid = int(pid_file.read_text().strip())
+        deadline = time.monotonic() + 5.0
+        while self._pid_alive(gc_pid) and time.monotonic() < deadline:
+            tick.wait(0.02)
+        assert not self._pid_alive(gc_pid)
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+    def test_watchdog_kills_grandchild_on_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import threading
+        import time
+
+        from osimflow import measure_resolver as mr
+
+        tick = threading.Event()
+        pid_file = tmp_path / "gc.pid"
+
+        def _wait_for_grandchild(_pid: int) -> int | None:
+            wait_deadline = time.monotonic() + 5.0
+            while not pid_file.exists() and time.monotonic() < wait_deadline:
+                tick.wait(0.02)
+            return 0
+
+        monkeypatch.setattr(mr, "_PROBE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(mr, "_PROBE_WATCHDOG_INTERVAL_S", 0.01)
+        monkeypatch.setattr(mr, "_rss_bytes", _wait_for_grandchild)
+
+        script = f"sleep 60 & echo $! > {pid_file}.tmp && mv {pid_file}.tmp {pid_file}; wait"
+        assert not mr._run_probe_with_rss_watchdog(["sh", "-c", script])
+
+        gc_pid = int(pid_file.read_text().strip())
+        deadline = time.monotonic() + 5.0
+        while self._pid_alive(gc_pid) and time.monotonic() < deadline:
+            tick.wait(0.02)
+        assert not self._pid_alive(gc_pid)

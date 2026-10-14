@@ -13,9 +13,11 @@ import importlib
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -334,37 +336,55 @@ def _rss_bytes(pid: int) -> int | None:
     return rss if rss is not None else _ps_tree_rss(pid)
 
 
+def _kill_probe_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the probe child and its entire process group (issue #2022)."""
+    if sys.platform != "win32":
+        with suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+    with suppress(OSError):
+        proc.kill()
+
+
 def _run_probe_with_rss_watchdog(cmd: list[str]) -> bool:
-    """Run a probe, killing it on timeout or when its RSS exceeds the cap.
+    """Run a probe, killing its process group on timeout or RSS cap (issues #2011, #2022).
 
     macOS does not enforce RLIMIT_AS/RLIMIT_DATA for most allocations, so the
     parent polls the child's resident set size instead (issue #2011).
+    Spawns the probe with ``start_new_session=True`` so grandchildren are in the
+    same process group and are reaped when the cap or timeout triggers (#2022).
     """
     with subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=_sanitize_env(),
+        start_new_session=sys.platform != "win32",
         # Only async-signal-safe setrlimit calls run pre-exec.
         preexec_fn=_apply_probe_rlimits if resource is not None else None,  # noqa: PLW1509
     ) as proc:
-        deadline = time.monotonic() + _PROBE_TIMEOUT_S
-        interval = _PROBE_WATCHDOG_INTERVAL_S
-        while proc.poll() is None:
-            rss = _rss_bytes(proc.pid)
-            if rss is not None and rss > _PROBE_MEMORY_LIMIT_BYTES:
-                log.warning("probe %r exceeded memory limit; killing", cmd[:1])
-                proc.kill()
+        try:
+            deadline = time.monotonic() + _PROBE_TIMEOUT_S
+            interval = _PROBE_WATCHDOG_INTERVAL_S
+            while proc.poll() is None:
+                rss = _rss_bytes(proc.pid)
+                if rss is not None and rss > _PROBE_MEMORY_LIMIT_BYTES:
+                    log.warning("probe %r exceeded memory limit; killing", cmd[:1])
+                    _kill_probe_tree(proc)
+                    proc.wait()
+                    return False
+                if time.monotonic() >= deadline:
+                    _kill_probe_tree(proc)
+                    proc.wait()
+                    return False
+                time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
+                # Back off: short probes stay responsive, long ones poll cheaply.
+                interval = min(interval * _PROBE_WATCHDOG_BACKOFF, _PROBE_WATCHDOG_MAX_INTERVAL_S)
+            return proc.returncode == 0
+        finally:
+            if proc.poll() is None:
+                _kill_probe_tree(proc)
                 proc.wait()
-                return False
-            if time.monotonic() >= deadline:
-                proc.kill()
-                proc.wait()
-                return False
-            time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
-            # Back off: short probes stay responsive, long ones poll cheaply.
-            interval = min(interval * _PROBE_WATCHDOG_BACKOFF, _PROBE_WATCHDOG_MAX_INTERVAL_S)
-        return proc.returncode == 0
 
 
 def _run_probe(cmd: list[str]) -> bool:
