@@ -698,6 +698,20 @@ def _parse_measure_xml_arg_info(xml_path: Path) -> list[tuple[str, str, Any]]:
     return entries
 
 
+def read_measure_xml_aliases(xml_path: Path) -> list[str]:
+    """Return the ``<name>`` and ``<class_name>`` identifiers declared in ``measure.xml``."""
+    try:
+        root = _parse_xml_root(xml_path.read_text(encoding="utf-8"))
+    except (OSError, ET.ParseError, ValueError):
+        return []
+    aliases: list[str] = []
+    for tag in ("name", "class_name"):
+        text = (root.findtext(tag) or "").strip()
+        if text and text not in aliases:
+            aliases.append(text)
+    return aliases
+
+
 def _register_osw_argument(
     result: dict[str, MappedParameter],
     *,
@@ -705,8 +719,13 @@ def _register_osw_argument(
     default: Any,
     step_idx: int,
     measure_name: str,
+    aliases: tuple[str, ...] = (),
 ) -> None:
-    """Register plain (first-match) and dotted (per-measure) OSW argument mappings."""
+    """Register plain (first-match) and dotted (per-measure) OSW argument mappings.
+
+    *aliases* are extra measure identifiers (``measure.xml`` ``<name>`` /
+    ``<class_name>``) that also resolve to this step as ``<alias>.<arg>``.
+    """
     param = MappedParameter(
         name=str(arg_name),
         kind="measure_argument",
@@ -721,6 +740,46 @@ def _register_osw_argument(
         dotted_key = f"{measure_name}.{arg_name}"
         if dotted_key not in result:
             result[dotted_key] = param
+    for alias in aliases:
+        alias_key = f"{alias}.{arg_name}"
+        if alias and alias != measure_name and alias_key not in result:
+            result[alias_key] = param
+
+
+def _collect_step_aliases(
+    steps: list[Any],
+    search_dirs: list[Path],
+) -> dict[int, tuple[str, ...]]:
+    """Per-step extra measure identifiers (step ``name``, ``measure.xml`` names).
+
+    An alias is dropped when it equals any step's canonical measure name or is
+    claimed by more than one step, so ``<alias>.<arg>`` can never silently
+    resolve to a different measure than ``<measure_dir_name>.<arg>`` would.
+    """
+    canonical: set[str] = set()
+    raw: dict[int, list[str]] = {}
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        dir_name = step.get("measure_dir_name")
+        canonical.add(str(dir_name or step.get("name") or ""))
+        if not dir_name:
+            continue
+        found: list[str] = []
+        if step.get("name"):
+            found.append(str(step["name"]))
+        xml_path = _locate_step_measure_xml(str(dir_name), search_dirs)
+        if xml_path is not None:
+            found.extend(read_measure_xml_aliases(xml_path))
+        raw[idx] = list(dict.fromkeys(found))
+    claims: dict[str, set[int]] = {}
+    for idx, names in raw.items():
+        for name in names:
+            claims.setdefault(name, set()).add(idx)
+    return {
+        idx: tuple(n for n in names if n not in canonical and len(claims[n]) == 1)
+        for idx, names in raw.items()
+    }
 
 
 def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
@@ -750,6 +809,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
         raise ValueError(f"Invalid .osw JSON in {template}: {exc}") from exc
     result: dict[str, MappedParameter] = {}
     search_dirs = _measure_search_dirs(template, data if isinstance(data, dict) else {})
+    step_aliases = _collect_step_aliases(data.get("steps", []), search_dirs)
     for step_idx, step in enumerate(data.get("steps", [])):
         if not isinstance(step, dict):
             continue
@@ -759,6 +819,12 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
         # Resolve the measure name from measure_dir_name or name field.
         measure_dir_name = step.get("measure_dir_name")
         measure_name = str(measure_dir_name or step.get("name") or "")
+        xml_path = (
+            _locate_step_measure_xml(str(measure_dir_name), search_dirs)
+            if measure_dir_name
+            else None
+        )
+        aliases = step_aliases.get(step_idx, ())
         for arg_name, default in arguments.items():
             _register_osw_argument(
                 result,
@@ -766,21 +832,19 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
                 default=default,
                 step_idx=step_idx,
                 measure_name=measure_name,
+                aliases=aliases,
             )
-        if measure_dir_name:
-            xml_path = _locate_step_measure_xml(str(measure_dir_name), search_dirs)
-            if xml_path is not None:
-                for xml_arg_name, _xml_arg_type, xml_default in _parse_measure_xml_arg_info(
-                    xml_path
-                ):
-                    if xml_arg_name not in arguments:
-                        _register_osw_argument(
-                            result,
-                            arg_name=xml_arg_name,
-                            default=xml_default,
-                            step_idx=step_idx,
-                            measure_name=measure_name,
-                        )
+        if xml_path is not None:
+            for xml_arg_name, _xml_arg_type, xml_default in _parse_measure_xml_arg_info(xml_path):
+                if xml_arg_name not in arguments:
+                    _register_osw_argument(
+                        result,
+                        arg_name=xml_arg_name,
+                        default=xml_default,
+                        step_idx=step_idx,
+                        measure_name=measure_name,
+                        aliases=aliases,
+                    )
         if "__SKIP__" not in arguments:
             _register_osw_argument(
                 result,
@@ -788,8 +852,56 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
                 default=False,
                 step_idx=step_idx,
                 measure_name=measure_name,
+                aliases=aliases,
             )
     return result
+
+
+def build_measure_argument_alias_map(variable_defs: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each variable ``name`` to its explicit ``measure_argument`` target.
+
+    Only variables whose ``measure_argument`` differs from ``name`` are
+    included; ``epw_file`` variables are skipped (they use ``target``).
+    Raises :class:`CrossMeasureConflictError` when two variables resolve to
+    the same target.
+    """
+    alias_map: dict[str, str] = {}
+    owners: dict[str, str] = {}
+    for var in variable_defs:
+        name = var.get("name")
+        target = var.get("measure_argument")
+        if not name or not isinstance(target, str) or not target.strip():
+            continue
+        name, target = str(name), target.strip()
+        if var.get("target") == "epw_file" or EPW_FILE_KEY in (name, target):
+            continue
+        if target in owners and owners[target] != name:
+            raise CrossMeasureConflictError(
+                f"Variables {owners[target]!r} and {name!r} both map to "
+                f"measure_argument {target!r}; each target may be varied only once."
+            )
+        owners[target] = name
+        if target != name:
+            alias_map[name] = target
+    return alias_map
+
+
+def resolve_measure_argument_keys(
+    parameters: dict[str, Any],
+    alias_map: dict[str, str],
+) -> dict[str, Any]:
+    """Return *parameters* with variable names rewritten to their ``measure_argument`` targets."""
+    if not alias_map:
+        return dict(parameters)
+    resolved: dict[str, Any] = {}
+    for key, value in parameters.items():
+        target = alias_map.get(key, key)
+        if target in resolved:
+            raise CrossMeasureConflictError(
+                f"Parameter {key!r} resolves to {target!r}, which is already set by another variable."
+            )
+        resolved[target] = value
+    return resolved
 
 
 # ---------------------------------------------------------------------------

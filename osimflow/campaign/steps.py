@@ -22,6 +22,8 @@ from ..apply_params import (
     EPW_FILE_KEY,
     OpenStudioBindingsMissingError,
     _build_mappings_without_osm_bindings,
+    build_measure_argument_alias_map,
+    resolve_measure_argument_keys,
 )
 from ..cache import CacheKey
 from ..config import CampaignConfig
@@ -529,11 +531,14 @@ class CampaignStepsMixin:
         epw_var_names = {
             str(v["name"]) for v in variable_defs if v.get("target") == "epw_file" and "name" in v
         }
+        # Variables with an explicit ``measure_argument`` target that map onto
+        # that ``<Measure>.<argument>`` in preflight and OSW mutation (#2078).
+        alias_map = build_measure_argument_alias_map(variable_defs)
         all_param_keys: dict[str, None] = {}
         for s in samples:
             for k in s["values"]:
                 if k not in epw_var_names and k != EPW_FILE_KEY:
-                    all_param_keys[k] = None
+                    all_param_keys[alias_map.get(k, k)] = None
         mappings: dict[str, Any] = {}
         if all_param_keys:
             try:
@@ -580,6 +585,9 @@ class CampaignStepsMixin:
             resolved_params = self._resolve_epw_targets(
                 params, variable_defs, weather_file_override=weather_file_override
             )
+            # Custom (BYOS) apply functions keep receiving the variable names.
+            if self.apply_fn is _c.default_apply_parameters:
+                resolved_params = resolve_measure_argument_keys(resolved_params, alias_map)
             # Include seed_model_override in the cache key so a different
             # seed model for the same sample params is a distinct cache entry.
             apply_inputs: dict[str, Any] = {
