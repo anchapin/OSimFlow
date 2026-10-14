@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 
 import pytest
@@ -122,8 +123,10 @@ class TestParseOswSingleMeasure:
         result = parse_osw_arguments(osw)
         assert "heating_setpoint" in result
         assert "cooling_setpoint" in result
-        # 2 plain + 2 dotted = 4 total
-        assert len(result) == 4
+        assert "__SKIP__" in result
+        assert "SetThermostatSchedule.__SKIP__" in result
+        # 3 plain (heating_setpoint, cooling_setpoint, __SKIP__) + 3 dotted = 6 total
+        assert len(result) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -173,19 +176,21 @@ class TestParseOswMultiMeasure:
         assert result["wall_r_value"].measure_name == "SetEnvelopePerformance"
 
     def test_total_key_count(self, tmp_path: Path) -> None:
-        """2 measures, 2+3 args with 1 collision.
+        """2 measures, 2+3 args + __SKIP__ per step with 2 collisions.
 
         Plain keys (first-match wins): heating_setpoint, cooling_setpoint,
-        wwr, wall_r_value = 4.
+        __SKIP__, wwr, wall_r_value = 5.
         Dotted keys: SetThermostatSchedule.heating_setpoint,
         SetThermostatSchedule.cooling_setpoint,
+        SetThermostatSchedule.__SKIP__,
         SetEnvelopePerformance.heating_setpoint, SetEnvelopePerformance.wwr,
-        SetEnvelopePerformance.wall_r_value = 5.
-        Total = 9.
+        SetEnvelopePerformance.wall_r_value,
+        SetEnvelopePerformance.__SKIP__ = 7.
+        Total = 12.
         """
         osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
         result = parse_osw_arguments(osw)
-        assert len(result) == 9
+        assert len(result) == 12
 
 
 # ---------------------------------------------------------------------------
@@ -842,3 +847,185 @@ def test_load_custom_apply_deprecated_raises(tmp_path: Path) -> None:
     """Deprecated _load_custom_apply warns and raises RuntimeError."""
     with pytest.deprecated_call(), pytest.raises(RuntimeError, match="has been removed"):
         _load_custom_apply(tmp_path / "custom.py")
+
+
+# ---------------------------------------------------------------------------
+# Issue #2067: measure.xml argument + __SKIP__ discovery & Boolean coercion
+# ---------------------------------------------------------------------------
+def _write_measure_xml(measure_dir: Path, arguments_xml: str) -> Path:
+    measure_dir.mkdir(parents=True, exist_ok=True)
+    xml_path = measure_dir / "measure.xml"
+    xml_path.write_text(
+        f"<measure><arguments>{arguments_xml}</arguments></measure>",
+        encoding="utf-8",
+    )
+    return xml_path
+
+
+class TestIssue2067MeasureXmlAndSkip:
+    """Issue #2067: index measure.xml args + __SKIP__ and coerce Boolean strings."""
+
+    def test_parse_osw_indexes_measure_xml_args_and_skip_with_empty_step_arguments(
+        self, tmp_path: Path
+    ) -> None:
+        _write_measure_xml(
+            tmp_path / "measures" / "SetLighting",
+            """
+            <argument>
+              <name>lpd_multiplier</name>
+              <type>Double</type>
+              <required>true</required>
+              <default_value>1.0</default_value>
+            </argument>
+            <argument>
+              <name>enable_daylighting</name>
+              <type>Boolean</type>
+              <required>true</required>
+              <default_value>false</default_value>
+            </argument>
+            """,
+        )
+        osw = _write_osw(
+            tmp_path,
+            {"steps": [{"measure_dir_name": "SetLighting", "arguments": {}}]},
+        )
+
+        result = parse_osw_arguments(osw)
+        assert "lpd_multiplier" in result
+        assert "SetLighting.lpd_multiplier" in result
+        assert result["SetLighting.lpd_multiplier"].step_index == 0
+        assert result["SetLighting.lpd_multiplier"].default == "1.0"
+
+        assert "enable_daylighting" in result
+        assert "SetLighting.enable_daylighting" in result
+        assert result["SetLighting.enable_daylighting"].default is False
+
+        assert "__SKIP__" in result
+        assert "SetLighting.__SKIP__" in result
+        assert result["SetLighting.__SKIP__"].default is False
+        assert result["SetLighting.__SKIP__"].step_index == 0
+
+    def test_parse_osw_resolves_measure_paths_from_workflow_osw(self, tmp_path: Path) -> None:
+        custom_measures = tmp_path / "external_measures"
+        _write_measure_xml(
+            custom_measures / "CustomHvacMeasure",
+            """
+            <argument>
+              <name>cop</name>
+              <type>Double</type>
+              <default_value>3.5</default_value>
+            </argument>
+            """,
+        )
+        pkg_dir = tmp_path / "pkg"
+        pkg_dir.mkdir()
+        osw = _write_osw(
+            pkg_dir,
+            {
+                "measure_paths": ["../external_measures"],
+                "steps": [{"measure_dir_name": "CustomHvacMeasure", "arguments": {}}],
+            },
+        )
+
+        result = parse_osw_arguments(osw)
+        assert "cop" in result
+        assert "CustomHvacMeasure.cop" in result
+        assert result["CustomHvacMeasure.cop"].step_index == 0
+
+    def test_preflight_and_default_apply_parameters_succeed_for_xml_arg_and_skip(
+        self, tmp_path: Path
+    ) -> None:
+        from osimflow.work import default_apply_parameters
+
+        pkg = tmp_path / "template"
+        _write_measure_xml(
+            pkg / "measures" / "SetLighting",
+            """
+            <argument>
+              <name>lpd_multiplier</name>
+              <type>Double</type>
+              <default_value>1.0</default_value>
+            </argument>
+            <argument>
+              <name>enable_daylighting</name>
+              <type>Boolean</type>
+              <default_value>false</default_value>
+            </argument>
+            """,
+        )
+        osw = _write_osw(
+            pkg,
+            {"steps": [{"measure_dir_name": "SetLighting", "arguments": {}}]},
+        )
+        (pkg / "model.osm").write_text(json.dumps({"attributes": {}}))
+
+        mappings = parse_osw_arguments(osw)
+        params = {
+            "SetLighting.lpd_multiplier": 0.85,
+            "SetLighting.__SKIP__": "TRUE",
+            "SetLighting.enable_daylighting": "false",
+        }
+        preflight_check(params, mappings)
+
+        sample_out = tmp_path / "sample_0001"
+        shutil.copytree(pkg, sample_out)
+        default_apply_parameters(pkg, dict(params), "0001", sample_out)
+
+        mutated = json.loads((sample_out / "workflow.osw").read_text())
+        step_args = mutated["steps"][0]["arguments"]
+        assert step_args["lpd_multiplier"] == 0.85
+        assert step_args["__SKIP__"] is True
+        assert step_args["enable_daylighting"] is False
+
+    @pytest.mark.parametrize(
+        ("raw_skip", "raw_bool", "expected_skip", "expected_bool"),
+        [
+            ("TRUE", "FALSE", True, False),
+            ("FALSE", "TRUE", False, True),
+            ("true", "false", True, False),
+            ("false", "true", False, True),
+        ],
+    )
+    def test_mutate_osw_coerces_boolean_strings_for_skip_and_boolean_measure_xml_args(
+        self,
+        tmp_path: Path,
+        raw_skip: str,
+        raw_bool: str,
+        expected_skip: bool,
+        expected_bool: bool,
+    ) -> None:
+        _write_measure_xml(
+            tmp_path / "measures" / "MyBoolMeasure",
+            """
+            <argument>
+              <name>flag_arg</name>
+              <type>Boolean</type>
+              <default_value>true</default_value>
+            </argument>
+            <argument>
+              <name>str_arg</name>
+              <type>String</type>
+              <default_value>true</default_value>
+            </argument>
+            """,
+        )
+        osw = _write_osw(
+            tmp_path,
+            {"steps": [{"measure_dir_name": "MyBoolMeasure", "arguments": {}}]},
+        )
+        mappings = parse_osw_arguments(osw)
+        _mutate_osw(
+            osw,
+            {
+                "MyBoolMeasure.__SKIP__": raw_skip,
+                "MyBoolMeasure.flag_arg": raw_bool,
+                "MyBoolMeasure.str_arg": "TRUE",
+            },
+            mappings,
+        )
+        mutated = json.loads(osw.read_text())
+        step_args = mutated["steps"][0]["arguments"]
+        assert step_args["__SKIP__"] is expected_skip
+        assert step_args["flag_arg"] is expected_bool
+        # Non-Boolean string arguments keep their string literal untouched
+        assert step_args["str_arg"] == "TRUE"

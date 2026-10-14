@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import shutil
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -625,6 +626,103 @@ def _discover_people(model: Any, result: dict[str, MappedParameter]) -> None:
 # ---------------------------------------------------------------------------
 # .osw parsing
 # ---------------------------------------------------------------------------
+def _parse_xml_root(xml_text: str) -> ET.Element:
+    """Parse XML text using ``defusedxml.ElementTree`` when installed."""
+    try:
+        defused_et = importlib.import_module("defusedxml.ElementTree")
+        root: ET.Element = defused_et.fromstring(xml_text)
+        return root
+    except ModuleNotFoundError:
+        return ET.fromstring(xml_text)
+
+
+def _measure_search_dirs(osw_path: Path, data: dict[str, Any]) -> list[Path]:
+    """Return ordered candidate directories where measure folders may live."""
+    base_dir = osw_path.parent
+    candidates: list[Path] = [base_dir / "measures"]
+    raw_paths = data.get("measure_paths")
+    if isinstance(raw_paths, list):
+        for raw in raw_paths:
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            p = Path(raw)
+            if not p.is_absolute():
+                p = base_dir / p
+            if p not in candidates:
+                candidates.append(p)
+    return candidates
+
+
+def _locate_step_measure_xml(
+    measure_name: str,
+    search_dirs: list[Path],
+) -> Path | None:
+    """Return the first matching ``<dir>/<measure_name>/measure.xml`` if present."""
+    if not measure_name:
+        return None
+    for base in search_dirs:
+        xml_path = base / measure_name / "measure.xml"
+        if xml_path.is_file():
+            return xml_path
+    return None
+
+
+def _parse_measure_xml_arg_info(xml_path: Path) -> list[tuple[str, str, Any]]:
+    """Return ``(name, type, default)`` tuples declared in ``measure.xml``."""
+    try:
+        root = _parse_xml_root(xml_path.read_text(encoding="utf-8"))
+    except (OSError, ET.ParseError, ValueError):
+        log.warning("Failed to parse measure.xml at %s", xml_path, exc_info=True)
+        return []
+    entries: list[tuple[str, str, Any]] = []
+    seen: set[str] = set()
+    for arg_elem in root.findall("./arguments/argument"):
+        raw_name = arg_elem.findtext("name")
+        if raw_name is None or not raw_name.strip():
+            continue
+        arg_name = raw_name.strip()
+        if arg_name in seen:
+            continue
+        seen.add(arg_name)
+        raw_type = (arg_elem.findtext("type") or "").strip().lower()
+        arg_type = "Boolean" if raw_type in ("boolean", "bool") else raw_type.capitalize()
+        default_elem = arg_elem.find("default_value")
+        default_val: Any = default_elem.text if default_elem is not None else None
+        if arg_type == "Boolean" and isinstance(default_val, str):
+            lowered = default_val.strip().lower()
+            if lowered == "true":
+                default_val = True
+            elif lowered == "false":
+                default_val = False
+        entries.append((arg_name, arg_type, default_val))
+    return entries
+
+
+def _register_osw_argument(
+    result: dict[str, MappedParameter],
+    *,
+    arg_name: str,
+    default: Any,
+    step_idx: int,
+    measure_name: str,
+) -> None:
+    """Register plain (first-match) and dotted (per-measure) OSW argument mappings."""
+    param = MappedParameter(
+        name=str(arg_name),
+        kind="measure_argument",
+        default=default,
+        step_index=step_idx,
+        measure_name=str(measure_name) if measure_name else None,
+    )
+    plain_key = str(arg_name)
+    if plain_key not in result:
+        result[plain_key] = param
+    if measure_name:
+        dotted_key = f"{measure_name}.{arg_name}"
+        if dotted_key not in result:
+            result[dotted_key] = param
+
+
 def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
     """Parse an .osw file and return a name→MappedParameter map for all
     measure arguments across all steps.
@@ -632,7 +730,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
     The .osw format is JSON: ``{"steps": [{"measure_dir_name": "...",
     "arguments": {name: value}}]}``.
 
-    Two key behaviours:
+    Key behaviours:
 
     1. **Dotted-name keys** — for each argument we also register the
        qualified form ``MeasureName.argument_name`` so that users can
@@ -640,33 +738,57 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
     2. **First-match for plain names** — if two steps expose the same
        argument name, the *first* step wins in the plain-key entry.
        Use the dotted form to target a specific measure.
+    3. **measure.xml + ``__SKIP__`` discovery (issue #2067)** — for each
+       step with a ``measure_dir_name``, arguments declared in the
+       step's ``measure.xml`` (under ``measures/`` or ``measure_paths``)
+       and OpenStudio's built-in ``__SKIP__`` toggle are also indexed
+       even when omitted from ``step["arguments"]`` in the seed ``.osw``.
     """
     try:
         data = json.loads(template.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid .osw JSON in {template}: {exc}") from exc
     result: dict[str, MappedParameter] = {}
+    search_dirs = _measure_search_dirs(template, data if isinstance(data, dict) else {})
     for step_idx, step in enumerate(data.get("steps", [])):
+        if not isinstance(step, dict):
+            continue
         arguments = step.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
         # Resolve the measure name from measure_dir_name or name field.
-        measure_name = step.get("measure_dir_name") or step.get("name") or ""
+        measure_dir_name = step.get("measure_dir_name")
+        measure_name = str(measure_dir_name or step.get("name") or "")
         for arg_name, default in arguments.items():
-            param = MappedParameter(
-                name=str(arg_name),
-                kind="measure_argument",
+            _register_osw_argument(
+                result,
+                arg_name=str(arg_name),
                 default=default,
-                step_index=step_idx,
-                measure_name=str(measure_name) if measure_name else None,
+                step_idx=step_idx,
+                measure_name=measure_name,
             )
-            # Plain name: first-match wins.
-            plain_key = str(arg_name)
-            if plain_key not in result:
-                result[plain_key] = param
-            # Dotted name: always registered (no collision possible;
-            # each measure+arg pair is unique).
-            if measure_name:
-                dotted_key = f"{measure_name}.{arg_name}"
-                result[dotted_key] = param
+        if measure_dir_name:
+            xml_path = _locate_step_measure_xml(str(measure_dir_name), search_dirs)
+            if xml_path is not None:
+                for xml_arg_name, _xml_arg_type, xml_default in _parse_measure_xml_arg_info(
+                    xml_path
+                ):
+                    if xml_arg_name not in arguments:
+                        _register_osw_argument(
+                            result,
+                            arg_name=xml_arg_name,
+                            default=xml_default,
+                            step_idx=step_idx,
+                            measure_name=measure_name,
+                        )
+        if "__SKIP__" not in arguments:
+            _register_osw_argument(
+                result,
+                arg_name="__SKIP__",
+                default=False,
+                step_idx=step_idx,
+                measure_name=measure_name,
+            )
     return result
 
 
@@ -1234,6 +1356,33 @@ def mutate_osw_weather_file(osw_path: Path, epw_path: str) -> None:
     log.info("mutated .osw weather_file -> %s in %s", epw_path, osw_path)
 
 
+def _coerce_osw_argument_value(
+    arg_name: str,
+    value: Any,
+    *,
+    existing_value: Any,
+    mapping_default: Any,
+    boolean_xml_args: set[str],
+) -> Any:
+    """Coerce string boolean literals for ``__SKIP__`` and Boolean OSW arguments."""
+    if not isinstance(value, str):
+        return value
+    is_boolean_arg = (
+        arg_name == "__SKIP__"
+        or arg_name in boolean_xml_args
+        or isinstance(existing_value, bool)
+        or isinstance(mapping_default, bool)
+    )
+    if not is_boolean_arg:
+        return value
+    lowered = value.strip().lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return value
+
+
 def _mutate_osw(
     osw_path: Path,
     parameters: dict[str, Any],
@@ -1250,6 +1399,8 @@ def _mutate_osw(
     """
     data = json.loads(osw_path.read_text())
     steps = data.setdefault("steps", [])
+    search_dirs = _measure_search_dirs(osw_path, data if isinstance(data, dict) else {})
+    step_bool_args: dict[int, set[str]] = {}
     for param_key, value in parameters.items():
         mapping = mappings.get(param_key)
         if mapping is None or mapping.kind != "measure_argument":
@@ -1257,9 +1408,28 @@ def _mutate_osw(
         step_index = mapping.step_index
         if step_index is None or step_index >= len(steps):
             continue
+        step_obj = steps[step_index]
+        step_args = step_obj.setdefault("arguments", {})
+        if step_index not in step_bool_args:
+            bool_names: set[str] = {"__SKIP__"}
+            measure_dir_name = step_obj.get("measure_dir_name")
+            if isinstance(measure_dir_name, str) and measure_dir_name:
+                xml_path = _locate_step_measure_xml(measure_dir_name, search_dirs)
+                if xml_path is not None:
+                    for xml_arg_name, xml_arg_type, _ in _parse_measure_xml_arg_info(xml_path):
+                        if xml_arg_type == "Boolean":
+                            bool_names.add(xml_arg_name)
+            step_bool_args[step_index] = bool_names
+        coerced = _coerce_osw_argument_value(
+            mapping.name,
+            value,
+            existing_value=step_args.get(mapping.name),
+            mapping_default=mapping.default,
+            boolean_xml_args=step_bool_args[step_index],
+        )
         # mapping.name is the plain argument name inside the step's
         # arguments dict (never dotted).
-        steps[step_index].setdefault("arguments", {})[mapping.name] = value
+        step_args[mapping.name] = coerced
     osw_path.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 
