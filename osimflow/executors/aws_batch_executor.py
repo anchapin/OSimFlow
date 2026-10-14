@@ -327,6 +327,122 @@ class _SpotPriceCache:
             self._cache.clear()
 
 
+# ---------------------------------------------------------------------------
+# Submitter credential validation (issue #2026)
+# ---------------------------------------------------------------------------
+
+# Federated, role-based, and metadata credential provider ``METHOD`` values
+# permitted on the submitter host when ``allow_long_lived_credentials=False``
+# (issue #2026). Static providers (``env``, ``shared-credentials-file``,
+# ``config-file``, ``explicit``) are only permitted when the resolved
+# credentials carry a non-empty STS session ``token`` (e.g. ``AWS_SESSION_TOKEN``
+# or ``aws_session_token``).
+_FEDERATED_OR_ROLE_CREDENTIAL_METHODS: frozenset[str] = frozenset(
+    {
+        "sso",
+        "assume-role",
+        "assume-role-with-web-identity",
+        "custom-process",
+        "iam-role",
+        "container-role",
+        "ec2-instance-metadata",
+        "ec2-credentials-file",
+        "boto-config",
+        "login",
+    }
+)
+
+
+def _validate_submitter_credentials(creds: Any) -> Any:
+    """Validate resolved submitter credentials for ``AWSBatchExecutor`` (issue #2026).
+
+    Distinguishes submitter credentials (used by the host running
+    ``osimflow run --executor aws_batch``) from worker credentials (which
+    always come from the Batch job/compute-environment IAM roles and are
+    never passed in ``containerOverrides``).
+
+    When ``allow_long_lived_credentials=False`` (default):
+    - Accepts any resolved credential with a non-empty session ``token``
+      (``frozen_credentials.token is not None``) as well as federated / role
+      providers in ``_FEDERATED_OR_ROLE_CREDENTIAL_METHODS`` (``sso``,
+      ``assume-role``, ``assume-role-with-web-identity``, ``custom-process``,
+      ``iam-role``, ``container-role``, ``ec2-instance-metadata``,
+      ``boto-config``).
+    - Rejects direct static credentials without a session token
+      (``token is None`` from ``env``, ``shared-credentials-file``,
+      ``config-file``, or ``explicit``).
+    - Surfaces a clear ``RuntimeError`` when SSO or assumed-role credentials
+      are expired or missing instead of a provider-stripped
+      ``NoCredentialsError``.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
+    if creds is None:
+        raise RuntimeError(
+            "AWSBatchExecutor: no AWS submitter credentials found "
+            "(SSO / assumed-role session may be missing or expired; run "
+            "'aws sso login', assume an IAM role, or export short-lived STS "
+            "credentials with AWS_SESSION_TOKEN)."
+        )
+
+    method = str(getattr(creds, "method", None) or "explicit")
+    try:
+        frozen = creds.get_frozen_credentials()
+    except (BotoCoreError, ClientError) as exc:
+        raise RuntimeError(
+            f"AWSBatchExecutor: failed to resolve temporary AWS credentials via "
+            f"{method!r} (SSO or assumed-role session may be expired or missing; "
+            f"run 'aws sso login' or refresh your role session): {exc}"
+        ) from exc
+
+    token = getattr(frozen, "token", None) if frozen is not None else getattr(creds, "token", None)
+    if token or method in _FEDERATED_OR_ROLE_CREDENTIAL_METHODS:
+        return creds
+
+    raise RuntimeError(
+        f"AWSBatchExecutor: direct static long-lived AWS credentials from {method!r} "
+        "(token is None) are rejected by default when allow_long_lived_credentials=False. "
+        "Use federated or short-lived session credentials (AWS IAM Identity Center / SSO, "
+        "AssumeRole, web-identity OIDC, credential_process, IAM instance/container role, "
+        "or STS session credentials with AWS_SESSION_TOKEN), or pass "
+        "--aws-batch-allow-long-lived-credentials (allow_long_lived_credentials=True) "
+        "to explicitly opt in (issue #1833, #2026)."
+    )
+
+
+class _SubmitterCredentialResolver:
+    """Botocore credential resolver wrapper that validates resolved submitter credentials.
+
+    Preserves the full standard botocore provider chain (including SSO,
+    AssumeRole, web-identity, ``credential_process``, STS session tokens, and
+    IMDS/container roles) while rejecting direct static IAM user access keys
+    when ``allow_long_lived_credentials=False`` (issue #2026).
+    """
+
+    def __init__(self, resolver: Any) -> None:
+        self._resolver = resolver
+
+    @property
+    def providers(self) -> list[Any]:
+        return list(self._resolver.providers)
+
+    def load_credentials(self) -> Any:
+        from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
+        try:
+            creds = self._resolver.load_credentials()
+        except (BotoCoreError, ClientError) as exc:
+            raise RuntimeError(
+                "AWSBatchExecutor: failed to resolve AWS submitter credentials "
+                "(SSO or assumed-role session may be expired or missing; run "
+                f"'aws sso login' or refresh your role session): {exc}"
+            ) from exc
+        return _validate_submitter_credentials(creds)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolver, name)
+
+
 class AWSBatchExecutor(BaseExecutor):
     """AWS Batch executor (issue #5).
 
@@ -345,9 +461,13 @@ class AWSBatchExecutor(BaseExecutor):
     `SlurmExecutor` exports, so downstream work scripts can be
     substrate-agnostic.
 
-    Security: the boto3 client
-    sources credentials from the IAM role attached to the Batch compute
-    environment. The constructor does **not** accept
+    Security: worker containers inside AWS Batch always source credentials
+    from the IAM task/instance roles attached to the Batch job definition
+    and compute environment (never passed in container environment overrides).
+    On the submitter host, the boto3 session permits federated, role-based,
+    and short-lived STS session credentials by default while rejecting
+    direct static IAM user keys unless ``allow_long_lived_credentials=True``
+    (issue #1833, #2026). The constructor does **not** accept
     `aws_access_key_id` / `aws_secret_access_key`; passing long-lived
     keys would violate the security policy. The ``region_name`` parameter
     pins the region passed to boto3; when ``None``, boto3 follows the
@@ -450,65 +570,44 @@ class AWSBatchExecutor(BaseExecutor):
         # user opted into the [aws] extra, so a missing boto3 is a
         # user error, not a silent fallback.
         import boto3  # noqa: PLC0415
-        import botocore.credentials  # noqa: PLC0415
         import botocore.session  # noqa: PLC0415
         from botocore.config import Config as BotoConfig  # noqa: PLC0415
 
-        # Security: by default, restrict credential providers to IAM role
-        # only (EC2 instance metadata / ECS container credentials).
-        # This prevents accidental use of long-lived AWS_ACCESS_KEY_ID /
-        # AWS_SECRET_ACCESS_KEY from the environment or ~/.aws/credentials.
-        # Set allow_long_lived_credentials=True to opt out (not recommended
-        # for production). See issue #1160.
+        # Security (issue #1160, #1833, #2026):
+        # Worker containers inside AWS Batch always use the IAM role on the
+        # Batch compute environment / job definition (never passed via
+        # containerOverrides). On the submitter host, default
+        # (allow_long_lived_credentials=False) retains the full botocore
+        # credential provider chain and validates the resolved credentials so
+        # federated / role-based / short-lived STS session credentials are
+        # accepted while direct static IAM user access keys (token is None)
+        # are rejected.
         self._allow_long_lived_credentials = allow_long_lived_credentials
 
         if not allow_long_lived_credentials:
-            # Check for long-lived credentials in environment and warn.
-            import os
-
-            env_creds = []
-            if os.environ.get("AWS_ACCESS_KEY_ID"):
-                env_creds.append("AWS_ACCESS_KEY_ID")
-            if os.environ.get("AWS_SECRET_ACCESS_KEY"):
-                env_creds.append("AWS_SECRET_ACCESS_KEY")
-            if os.environ.get("AWS_SESSION_TOKEN"):
-                env_creds.append("AWS_SESSION_TOKEN")
-            if env_creds:
+            static_env_creds = [
+                var for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY") if os.environ.get(var)
+            ]
+            if static_env_creds and not os.environ.get("AWS_SESSION_TOKEN"):
                 log.warning(
-                    "AWSBatchExecutor: long-lived AWS credentials detected in "
-                    "environment (%s). These will be IGNORED because "
-                    "allow_long_lived_credentials=False (default). The executor "
-                    "will only use IAM role credentials from the EC2/ECS "
-                    "metadata service. Set allow_long_lived_credentials=True "
-                    "to opt out (not recommended for production).",
-                    ", ".join(env_creds),
+                    "AWSBatchExecutor: long-lived static AWS credentials detected in "
+                    "environment (%s without AWS_SESSION_TOKEN) while "
+                    "allow_long_lived_credentials=False (default). Direct static keys "
+                    "will be rejected when resolving submitter credentials; use "
+                    "short-lived/federated credentials (SSO, AssumeRole, STS session "
+                    "token, or IAM role) or set allow_long_lived_credentials=True to "
+                    "opt out (not recommended for production).",
+                    ", ".join(static_env_creds),
                 )
 
-            # Create a custom botocore session with ONLY the IAM role
-            # credential providers. Filter the default chain to keep only:
-            # - InstanceMetadataProvider: IMDSv2 (EC2 instance profile)
-            # - ContainerProvider: ECS/Fargate/Batch task role
-            # - OriginalEC2Provider: Legacy IMDSv1 (EC2 instance profile)
-            # - BotoProvider: boto config (for region, etc.)
-            # This excludes: EnvProvider, SharedCredentialProvider, ConfigProvider,
-            # ProcessProvider, SSOProvider, LoginProvider, AssumeRoleProvider, etc.
             session = botocore.session.get_session()
             default_resolver = session.get_component("credential_provider")
-            iam_role_provider_names = {
-                "InstanceMetadataProvider",
-                "ContainerProvider",
-                "OriginalEC2Provider",
-                "BotoProvider",
-            }
-            iam_role_providers = [
-                p for p in default_resolver.providers if type(p).__name__ in iam_role_provider_names
-            ]
-            restricted_resolver = botocore.credentials.CredentialResolver(iam_role_providers)
-            session.register_component("credential_provider", restricted_resolver)
+            validating_resolver = _SubmitterCredentialResolver(default_resolver)
+            session.register_component("credential_provider", validating_resolver)
             # Keep the boto3 MODULE as the client-factory seam (tests patch
-            # ``boto3.client``); carry the restricted session as a kwarg so
+            # ``boto3.client``); carry the validating session as a kwarg so
             # ``self._boto3.client(...)`` stays interceptable while still
-            # routing credentials through IAM-role providers only.
+            # validating resolved submitter credentials.
             self._botocore_session: Any = session
         else:
             log.warning(

@@ -427,9 +427,15 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
    (`template_sim_package`, `variables.yml`) **and** per-sample
    `.osw`/`.osm` + `eplusout.sql`. Do not blindly archive
    `eplusout.err` / `eplusout.log`.
-6. **AWS Batch security** — IAM roles for EC2 instances, not
-   long-lived keys. `AWSBatchExecutor` must source credentials
-   from the IAM role on the compute env.
+6. **AWS Batch security** — IAM roles for Batch worker compute
+   environments/tasks, not long-lived keys. Worker containers
+   source credentials from the IAM role on the compute env / job
+   definition (never passed in `containerOverrides`); on the
+   submitter host, `AWSBatchExecutor` accepts federated,
+   role-based, and short-lived STS session credentials by default
+   while rejecting direct static IAM user keys (`token is None`)
+   unless `--aws-batch-allow-long-lived-credentials` is passed
+   (issue #2026).
 7. **OpenStudio Measure deps** — custom Ruby/Python measure
    deps must be packaged *inside* the `template_sim_package`,
    not installed at runtime.
@@ -541,14 +547,22 @@ context-mode / codebase-memory-mcp are exposed):
   `eplusout.*` files. `.gitignore` excludes them; double-check
   before staging. For very large inputs that must be tracked,
   use `git-lfs` — don't bypass the gitignore.
-- **AWS:** IAM roles for EC2 compute environments only. No
-  long-lived AWS access keys in the repo or in any config
-  file. `AWSBatchExecutor` must source credentials from the
-  IAM role on the compute env. Terraform
-  (`infra/aws/terraform/iam.tf`) provisions least-privilege
-  roles: a task role scoped to the campaign S3 bucket and
-  CloudWatch Logs, a task-execution role for ECR image pulls,
-  and a Batch service role.
+- **AWS:** IAM roles for EC2/Fargate compute environments and
+  Batch worker tasks only — never pass AWS credentials in
+  container environment overrides, job definitions, or config
+  files. No long-lived AWS access keys in the repo or in any
+  config file. On the submitter host, `AWSBatchExecutor` permits
+  federated, role-based, and short-lived session credentials
+  (`sso`, `assume-role`, `assume-role-with-web-identity`,
+  `custom-process`, `iam-role`, `container-role`,
+  `ec2-instance-metadata`, and STS session tokens with
+  `token is not None`) by default while rejecting direct static
+  keys without a session token unless
+  `--aws-batch-allow-long-lived-credentials` is set (issue #2026).
+  Terraform (`infra/aws/terraform/iam.tf`) provisions
+  least-privilege roles: a task role scoped to the campaign S3
+  bucket and CloudWatch Logs, a task-execution role for ECR image
+  pulls, and a Batch service role.
 - **S3 storage endpoints** (issue #1386): `--result-storage-endpoint`
   and `--s3-artifact-endpoint` must use `https://` unless
   `--allow-insecure-storage-endpoint` is set (fail-closed;
