@@ -16,14 +16,14 @@ from osimflow.measures import MeasureArgument, MeasureRegistry, UnmappedVariable
 
 def test_read_measure_arguments_parses_measure_xml(tmp_path: Path) -> None:
     """measure.xml <argument> entries are parsed with normalized types and defaults."""
-    measure_dir = tmp_path / "ServerDirectoryCleanup"
+    measure_dir = tmp_path / "FileCleanup"
     measure_dir.mkdir()
     (measure_dir / "measure.xml").write_text(
         """<?xml version="1.0"?>
 <measure>
   <schema_version>3.1</schema_version>
   <name>server_directory_cleanup</name>
-  <class_name>ServerDirectoryCleanup</class_name>
+  <class_name>FileCleanup</class_name>
   <arguments>
     <argument>
       <name>sql</name>
@@ -255,8 +255,8 @@ end
 
 
 def test_server_directory_cleanup_dynamic_loop_via_measure_xml(tmp_path: Path) -> None:
-    """ServerDirectoryCleanup defines args in a Ruby loop; measure.xml supplies all 12."""
-    measure_dir = tmp_path / "ServerDirectoryCleanup"
+    """FileCleanup defines args in a Ruby loop; measure.xml supplies all of them."""
+    measure_dir = tmp_path / "FileCleanup"
     measure_dir.mkdir()
     expected_names = [
         "sql",
@@ -282,10 +282,10 @@ def test_server_directory_cleanup_dynamic_loop_via_measure_xml(tmp_path: Path) -
     )
     (measure_dir / "measure.rb").write_text(
         """
-class ServerDirectoryCleanup < OpenStudio::Measure::UtilityMeasure
+class FileCleanup < OpenStudio::Measure::UtilityMeasure
   def arguments
     args = OpenStudio::Measure::OSArgumentVector.new
-    ServerDirectoryCleanup.file_types.each do |file_type, _|
+    FileCleanup.file_types.each do |file_type, _|
       arg = OpenStudio::Measure::OSArgument.makeBoolArgument(file_type, true)
       arg.setDefaultValue(true)
       args << arg
@@ -480,218 +480,108 @@ class PyAdvancedMeasure(openstudio.measure.ModelMeasure):
 
 
 # ---------------------------------------------------------------------------
-# 3. All 23 commercial-building measures discovery + validation (__epw_file__, __SKIP__, .osm)
+# 3. General OpenStudio measure fixture: all argument types, identifier
+#    matching (dir name / <name> / <class_name>), and measure_argument
+#    disambiguation (__epw_file__, __SKIP__, .osm)
 # ---------------------------------------------------------------------------
 
-_COMMERCIAL_23_MEASURES: dict[str, list[tuple[str, str]]] = {
-    "baseline_hvac_control": [
-        ("standard", "Choice"),
-        ("building_type", "Choice"),
-        ("climate_zone", "Choice"),
-        ("custom", "Choice"),
-        ("debug", "Boolean"),
-        ("use_upstream_args", "Boolean"),
-    ],
-    "ChangeBuildingLocation": [
-        ("weather_file_name", "String"),
-        ("set_year", "Integer"),
-        ("use_upstream_args", "Boolean"),
-        ("epw_gsub", "Choice"),
-    ],
-    "IncreaseInsulationRValueForExteriorWalls": [
-        ("r_value", "Double"),
-        ("allow_reduction", "Boolean"),
-        ("material_cost_increase_ip", "Double"),
-        ("one_time_retrofit_cost_ip", "Double"),
-        ("years_until_retrofit_cost", "Integer"),
-    ],
-    "IncreaseInsulationRValueForRoofs": [
-        ("r_value", "Double"),
-        ("allow_reduction", "Boolean"),
-        ("material_cost_increase_ip", "Double"),
-        ("one_time_retrofit_cost_ip", "Double"),
-        ("years_until_retrofit_cost", "Integer"),
-    ],
-    "ServerDirectoryCleanup": [
-        ("sql", "Boolean"),
-        ("eso", "Boolean"),
-        ("audit", "Boolean"),
-        ("osm", "Boolean"),
-        ("idf", "Boolean"),
-        ("bnd", "Boolean"),
-        ("eio", "Boolean"),
-        ("shd", "Boolean"),
-        ("mdd", "Boolean"),
-        ("rdd", "Boolean"),
-        ("csv", "Boolean"),
-        ("Sizing Run Directories", "Boolean"),
-    ],
-    "SetLightingLoadsByLPD": [("lpd", "Double")],
-    "create_baseline_building": [
-        ("standard", "Choice"),
-        ("building_type", "Choice"),
-        ("climate_zone", "Choice"),
-        ("custom", "Choice"),
-        ("debug", "Boolean"),
-        ("use_upstream_args", "Boolean"),
-    ],
-    "create_bar_from_building_type_ratios_comstock": [
-        ("bldg_type_a", "Choice"),
-        ("total_bldg_floor_area", "Double"),
-        ("num_stories_above_grade", "Double"),
-        ("num_stories_below_grade", "Integer"),
-        ("building_rotation", "Double"),
-        ("template", "Choice"),
-        ("ns_to_ew_ratio", "Double"),
-        ("wwr", "Double"),
-        ("climate_zone", "Choice"),
-    ],
-    "create_typical_building_from_model_comstock": [
-        ("template", "Choice"),
-        ("system_type", "Choice"),
-        ("hvac_delivery_type", "Choice"),
-        ("htg_src", "Choice"),
-        ("clg_src", "Choice"),
-        ("swh_src", "Choice"),
-        ("wkdy_op_hrs_start_time", "Double"),
-        ("wkdy_op_hrs_duration", "Double"),
-        ("climate_zone", "Choice"),
-    ],
-    "hardsize_model": [("apply_hardsize", "Boolean")],
-    "hardsize_model_copy": [("apply_hardsize", "Boolean")],
-    "nze_hvac": [
-        ("remove_existing_hvac", "Boolean"),
-        ("hvac_system_type", "Choice"),
-        ("doas_dcv", "Boolean"),
-        ("hvac_system_partition", "Choice"),
-    ],
-    "replace_baseline_windows_Rvalues": [
-        ("window_pane_type", "Choice"),
-        ("fenestration_frame_type", "Choice"),
-        ("u_value_ip", "Double"),
-        ("shgc", "Double"),
-        ("vlt", "Double"),
-    ],
-    "openstudio_results": [
-        ("disable_upstream_arg", "Boolean"),
-        ("add_warning_severe_counts", "Boolean"),
-    ],
-    "openstudio_results_support": [
-        ("disable_upstream_arg", "Boolean"),
-        ("hvac_type_from_upgrade", "Boolean"),
-    ],
-    "set_heating_cooling_cop_efficiency": [
-        ("cooling_cop", "Double"),
-        ("heating_cop", "Double"),
-        ("efficiency", "Double"),
-        ("boiler_efficiency", "Double"),
-        ("chiller_cop", "Double"),
-    ],
-    "set_water_heater_efficiency": [
-        ("performance_category_ratio", "Double"),
-        ("capacity_btu_per_hr_ratio", "Double"),
-        ("first_hour_rating_ratio", "Double"),
-    ],
-    "simulation_settings": [
-        ("timesteps_per_hr", "Integer"),
-        ("enable_dst", "Boolean"),
-        ("dst_start", "String"),
-        ("dst_end", "String"),
-        ("calendar_year", "Integer"),
-        ("jan_first_day_of_wk", "String"),
-        ("begin_month", "Integer"),
-        ("begin_day", "Integer"),
-        ("end_month", "Integer"),
-        ("end_day", "Integer"),
-        ("output_diagnostics", "Boolean"),
-    ],
-    "swh_patch": [
-        ("capacity_btu_per_hr_ratio", "Double"),
-        ("first_hour_rating_ratio", "Double"),
-        ("use_upstream_arg", "Boolean"),
-    ],
-    "upgrade_hvac_add_heat_pump_rtu": [
-        ("backup_ht_fuel_scheme", "Choice"),
-        ("performance_oversizing_factor", "Double"),
-        ("htg_sizing_option", "Choice"),
-        ("clg_oversizing_estimate", "Double"),
-        ("htg_to_clg_hp_ratio", "Double"),
-        ("hp_min_comp_lockout_temp_f", "Double"),
-        ("hprtu_scenario", "Choice"),
-        ("hr", "Boolean"),
-        ("dcv", "Boolean"),
-        ("econ", "Boolean"),
-        ("roof", "Boolean"),
-        ("window", "Boolean"),
-        ("sizing_run", "Boolean"),
-        ("debug_verbose", "Boolean"),
-        ("modify_setbacks", "Boolean"),
-        ("setback_value", "Double"),
-    ],
-    "upgrade_hvac_doas_hp_minisplits": [
-        ("area_limit_sf", "Double"),
-        ("doas_htg_fuel", "Choice"),
-        ("performance_oversizing_factor", "Double"),
-        ("apply_measure", "Boolean"),
-    ],
-    "upgrade_hvac_erv_dcv": [("erv_or_dcv", "Choice")],
-    "upgrade_hvac_vrf_hr_doas": [
-        ("vrf_defrost_strategy", "Choice"),
-        ("disable_defrost", "Boolean"),
-        ("upsizing_allowance_pct", "Double"),
-        ("apply_measure", "Boolean"),
-    ],
+# dir name -> (xml <name>, xml <class_name>, [(argument, type)])
+_GENERAL_MEASURES: dict[str, tuple[str, str, list[tuple[str, str]]]] = {
+    "SetWallInsulation": (
+        "set_wall_insulation",
+        "SetWallInsulationMeasure",
+        [("r_value", "Double"), ("apply_to_all", "Boolean")],
+    ),
+    "SetRoofInsulation": (
+        "set_roof_insulation",
+        "SetRoofInsulationMeasure",
+        [("r_value", "Double"), ("roof_type", "Choice")],
+    ),
+    "SetThermostat": (
+        "set_thermostat",
+        "SetThermostatMeasure",
+        [("setpoint_count", "Integer"), ("schedule_name", "String")],
+    ),
 }
 
 
-def test_all_23_commercial_measures_indexed_and_validated(tmp_path: Path) -> None:
-    """All 23 commercial measures are indexed and validate including __SKIP__ and __epw_file__."""
-    pkg = tmp_path / "commercial_package"
-    measures_root = pkg / "measures"
-    for measure_name, arg_specs in _COMMERCIAL_23_MEASURES.items():
-        mdir = measures_root / measure_name
+def _write_general_package(pkg: Path) -> None:
+    for dir_name, (xml_name, class_name, arg_specs) in _GENERAL_MEASURES.items():
+        mdir = pkg / "measures" / dir_name
         mdir.mkdir(parents=True)
         xml_args = "\n".join(
-            f"    <argument><name>{aname}</name><type>{atype}</type><required>true</required></argument>"
+            f"    <argument><name>{aname}</name><type>{atype}</type>"
+            "<required>true</required></argument>"
             for aname, atype in arg_specs
         )
         (mdir / "measure.xml").write_text(
-            f"<measure><name>{measure_name.lower()}</name><arguments>\n{xml_args}\n</arguments></measure>",
+            f"<measure><name>{xml_name}</name><class_name>{class_name}</class_name>"
+            f"<arguments>\n{xml_args}\n</arguments></measure>",
             encoding="utf-8",
         )
 
+
+def test_general_measures_indexed_with_all_argument_types(tmp_path: Path) -> None:
+    pkg = tmp_path / "general_package"
+    _write_general_package(pkg)
     registry = MeasureRegistry()
     registry.index_measures(pkg)
 
-    assert len(registry._measures) == 23
-    assert set(registry._measures.keys()) == set(_COMMERCIAL_23_MEASURES.keys())
+    assert set(registry._measures) == set(_GENERAL_MEASURES)
+    seen_types = {a.type for m in registry._measures.values() for a in m.arguments}
+    assert seen_types == {"Double", "Integer", "Boolean", "Choice", "String"}
+    assert registry._measures["SetWallInsulation"].aliases == [
+        "set_wall_insulation",
+        "SetWallInsulationMeasure",
+    ]
+
+
+def test_general_measures_validate_dir_name_xml_name_and_class_name(tmp_path: Path) -> None:
+    pkg = tmp_path / "general_package"
+    _write_general_package(pkg)
+    registry = MeasureRegistry()
+    registry.index_measures(pkg)
 
     variables: list[dict[str, Any]] = [
-        {"name": "__epw_file__"},
+        {"name": "wall_r", "measure_argument": "SetWallInsulation.r_value"},
+        {"name": "roof_r", "measure_argument": "set_roof_insulation.r_value"},
+        {"name": "stat_n", "measure_argument": "SetThermostatMeasure.setpoint_count"},
         {"name": "weather_override", "measure_argument": "__epw_file__"},
-        {
-            "name": "upgrade_hvac_doas_hp_minisplits.__SKIP__",
-            "measure_argument": "upgrade_hvac_doas_hp_minisplits.__SKIP__",
-        },
-        {"name": "upgrade_hvac_vrf_hr_doas.__SKIP__"},
-        {
-            "name": "create_typical_building_from_model_comstock.climate_zone",
-            "measure_argument": "create_typical_building_from_model_comstock.climate_zone",
-        },
-        {
-            "name": "simulation_settings.jan_first_day_of_wk",
-            "measure_argument": "simulation_settings.jan_first_day_of_wk",
-        },
-        {
-            "name": "ServerDirectoryCleanup.Sizing Run Directories",
-            "measure_argument": "ServerDirectoryCleanup.Sizing Run Directories",
-        },
-        {
-            "name": "upgrade_hvac_add_heat_pump_rtu.backup_ht_fuel_scheme",
-            "measure_argument": "upgrade_hvac_add_heat_pump_rtu.backup_ht_fuel_scheme",
-        },
+        {"name": "SetThermostat.__SKIP__"},
+        {"name": "wall_skip", "measure_argument": "set_wall_insulation.__SKIP__"},
     ]
     registry.validate_variables_mapping(variables, registry)
+
+
+def test_general_measures_plain_duplicate_argument_requires_measure_argument(
+    tmp_path: Path,
+) -> None:
+    """``r_value`` exists in two measures: a plain name is ambiguous, ``measure_argument`` is not."""
+    pkg = tmp_path / "general_package"
+    _write_general_package(pkg)
+    registry = MeasureRegistry()
+    registry.index_measures(pkg)
+
+    with pytest.raises(UnmappedVariableError, match="r_value"):
+        registry.validate_variables_mapping([{"name": "r_value"}], registry)
+    registry.validate_variables_mapping(
+        [
+            {"name": "r_value_wall", "measure_argument": "SetWallInsulation.r_value"},
+            {"name": "r_value_roof", "measure_argument": "SetRoofInsulation.r_value"},
+        ],
+        registry,
+    )
+
+
+def test_general_measures_reject_unknown_identifier_or_argument(tmp_path: Path) -> None:
+    pkg = tmp_path / "general_package"
+    _write_general_package(pkg)
+    registry = MeasureRegistry()
+    registry.index_measures(pkg)
+
+    for bad in ("NoSuchMeasure.r_value", "SetWallInsulation.no_such_arg"):
+        with pytest.raises(UnmappedVariableError, match="not found"):
+            registry.validate_variables_mapping([{"name": "x", "measure_argument": bad}], registry)
 
 
 def test_validate_variables_mapping_rejects_unknown_measure_skip(tmp_path: Path) -> None:
