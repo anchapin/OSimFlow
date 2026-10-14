@@ -22,6 +22,8 @@ log = logging.getLogger("osimflow.osw_results")
 
 OUT_OSW_NAME = "out.osw"
 RUN_LOG_NAME = "run.log"
+FAILED_MARKER_NAME = "_OSIMFLOW_FAILED"
+RETRYING_STATE = "retrying"
 MEASURE_RESULTS_TOKEN = "measure_results"
 SIMULATION_FAILED_KEY = "reporting_179_d.simulation_failed_message"
 
@@ -172,7 +174,7 @@ def collect_failure_message_from_run_log(content: str) -> str | None:
 
 
 def failure_message(sim_dir: Path) -> str | None:
-    """Failure message for a sample dir: ``run.log`` first, then ``out.osw``."""
+    """Failure message for a sample dir: ``run.log``, ``out.osw``, then ``_OSIMFLOW_FAILED``."""
     run_log = sim_dir / RUN_LOG_NAME
     if run_log.is_file():
         try:
@@ -187,9 +189,21 @@ def failure_message(sim_dir: Path) -> str | None:
     out_osw = sim_dir / OUT_OSW_NAME
     if out_osw.is_file():
         try:
-            return extract_failure_message_from_osw(
+            message = extract_failure_message_from_osw(
                 out_osw.read_text(encoding="utf-8", errors="replace")
             )
         except OSError:
             log.warning("could not read %s", out_osw, exc_info=True)
+            message = None
+        if message:
+            return message
+    failed_marker = sim_dir / FAILED_MARKER_NAME
+    if failed_marker.is_file():
+        try:
+            marker_text = failed_marker.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            log.warning("could not read %s", failed_marker, exc_info=True)
+            marker_text = ""
+        if marker_text and marker_text.lower() != RETRYING_STATE:
+            return marker_text
     return None

@@ -244,6 +244,61 @@ def test_failed_simulations_uses_measure_message(tmp_path: Path) -> None:
     assert row is not None and row["error_summary"] == "eplusout.sql missing"
 
 
+def test_failure_message_falls_back_to_osimflow_failed_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #2058: failure_message reads _OSIMFLOW_FAILED when run.log/out.osw have no error."""
+    # 1. No run.log or out.osw, non-empty _OSIMFLOW_FAILED -> returns marker text
+    sim_oom = tmp_path / "0001"
+    sim_oom.mkdir()
+    oom_msg = (
+        "AWS Batch job job-123 FAILED (exit_code=137): "
+        "OutOfMemoryError: Container killed due to memory usage"
+    )
+    (sim_oom / "_OSIMFLOW_FAILED").write_text(f"  {oom_msg}\n", encoding="utf-8")
+    assert failure_message(sim_oom) == oom_msg
+    row = extract_failure(sim_oom)
+    assert row is not None and row["error_summary"] == oom_msg
+
+    # 2. Passing out.osw (no step failure) still falls back to _OSIMFLOW_FAILED
+    sim_ok_osw = tmp_path / "0002"
+    sim_ok_osw.mkdir()
+    (sim_ok_osw / "out.osw").write_text(json.dumps(OK_OSW), encoding="utf-8")
+    (sim_ok_osw / "_OSIMFLOW_FAILED").write_text(oom_msg, encoding="utf-8")
+    assert failure_message(sim_ok_osw) == oom_msg
+
+    # 3. "retrying" (case-insensitive) or empty _OSIMFLOW_FAILED is ignored -> None / eplusout.sql missing
+    sim_retry = tmp_path / "0003"
+    sim_retry.mkdir()
+    (sim_retry / "_OSIMFLOW_FAILED").write_text("  Retrying \n", encoding="utf-8")
+    assert failure_message(sim_retry) is None
+    row_retry = extract_failure(sim_retry)
+    assert row_retry is not None and row_retry["error_summary"] == "eplusout.sql missing"
+
+    sim_empty = tmp_path / "0004"
+    sim_empty.mkdir()
+    (sim_empty / "_OSIMFLOW_FAILED").write_text("   \n", encoding="utf-8")
+    assert failure_message(sim_empty) is None
+
+    # 4. out.osw / run.log failure messages take precedence over _OSIMFLOW_FAILED
+    sim_prec = tmp_path / "0005"
+    sim_prec.mkdir()
+    (sim_prec / "out.osw").write_text(json.dumps(FAIL_OSW), encoding="utf-8")
+    (sim_prec / "_OSIMFLOW_FAILED").write_text(oom_msg, encoding="utf-8")
+    assert failure_message(sim_prec) == "win: bad R"
+
+    # 5. OSError reading _OSIMFLOW_FAILED returns None gracefully
+    orig_read_text = Path.read_text
+
+    def _fail_marker_read(self: Path, *args: object, **kwargs: object) -> str:
+        if self.name == "_OSIMFLOW_FAILED":
+            raise OSError("disk read error")
+        return orig_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", _fail_marker_read)
+    assert failure_message(sim_oom) is None
+
+
 def test_publish_run_artifacts(tmp_path: Path) -> None:
     pkg, sim = tmp_path / "pkg", tmp_path / "sim"
     (pkg / "run").mkdir(parents=True)
