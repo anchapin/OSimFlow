@@ -29,7 +29,10 @@ behavior is testable and reusable without constructing (or faking)
 a full Campaign.
 """
 
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: POSIX-only module
+    fcntl = None  # type: ignore[assignment]
 import logging
 import os
 import signal
