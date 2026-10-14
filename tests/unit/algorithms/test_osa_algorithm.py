@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from osimflow.algorithms import AlgorithmRegistry, LHSAlgorithm
+from osimflow.algorithms import AlgorithmRegistry, GridSamplingAlgorithm, LHSAlgorithm
 from osimflow.importers.osa import (
     _OSA_ALGORITHM_MAP,
     OSAImportError,
@@ -82,9 +82,15 @@ class TestResolveAlgorithm:
         algo = _resolve_algorithm({"type": "latin_hypercube"})
         assert isinstance(algo, LHSAlgorithm)
 
-    def test_doe_maps_to_lhs(self) -> None:
+    def test_doe_maps_to_grid(self) -> None:
         algo = _resolve_algorithm({"type": "doe"})
-        assert isinstance(algo, LHSAlgorithm)
+        assert isinstance(algo, GridSamplingAlgorithm)
+        assert algo.name() == "grid"
+
+    def test_full_factorial_maps_to_grid(self) -> None:
+        algo = _resolve_algorithm({"type": "full_factorial"})
+        assert isinstance(algo, GridSamplingAlgorithm)
+        assert algo.name() == "grid"
 
     def test_case_insensitive(self) -> None:
         algo = _resolve_algorithm({"type": "LHS"})
@@ -189,13 +195,18 @@ class TestAlgorithmTranslationTable:
             "morris",
             "fast99",
             "doe",
+            "full_factorial",
+            "grid",
+            "preflight",
+            "repeat_run",
+            "single_run",
         ],
     )
     def test_expected_osa_types_in_map(self, osa_type: str) -> None:
         assert osa_type in _OSA_ALGORITHM_MAP
 
-    def test_map_has_10_entries(self) -> None:
-        assert len(_OSA_ALGORITHM_MAP) == 10
+    def test_map_has_expected_entries(self) -> None:
+        assert len(_OSA_ALGORITHM_MAP) == 15
 
     def test_all_mapped_values_are_strings(self) -> None:
         for osimflow_name in _OSA_ALGORITHM_MAP.values():

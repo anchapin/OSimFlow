@@ -155,6 +155,7 @@ physically live in their executor's config module, not in
   `--registry`;   `health` — `--json`, `--offline`, `--redis-url`;
   `mark-for-reanalysis` — `--priority`;
   `merge` — `--source-ids`, `--target-id`, `--target-work-dir`;
+  `import-osa` — `--output`, `--package-output`, `--template-package`;
   `import-gem-osa` — `--output-dir`, `--batch`, `--template-package`,
   `--configs`;
   `measure` / `list-measures` — `--filter`, `--project`,

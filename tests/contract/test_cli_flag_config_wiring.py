@@ -226,6 +226,8 @@ REGISTRY_INLINE_DESTS: frozenset[str] = frozenset(
         # `import-osa`
         "input",
         "output",
+        "template_package",
+        "package_output",
         "log_level",
         # `dashboard`
         "port",

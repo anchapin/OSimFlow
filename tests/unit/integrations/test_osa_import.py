@@ -427,10 +427,22 @@ class TestResolveAlgorithm:
         algo = _resolve_algorithm({"type": "sobol"})
         assert algo.name() == "sobol"
 
-    def test_doe_maps_to_lhs(self) -> None:
+    def test_doe_maps_to_grid(self) -> None:
         from osimflow.importers.osa import _resolve_algorithm
 
         algo = _resolve_algorithm({"type": "doe"})
+        assert algo.name() == "grid"
+
+    def test_full_factorial_maps_to_grid(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "full_factorial"})
+        assert algo.name() == "grid"
+
+    def test_single_run_maps_to_lhs(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "single_run"})
         assert algo.name() == "lhs"
 
     def test_unknown_algorithm_raises(self) -> None:
@@ -715,6 +727,268 @@ class TestOsaToVariablesYmlAdditional:
         assert v["min"] == 5.0
         assert v["max"] == 30.0
         assert v["measure_argument"] == "SetRValue.r_val"
+        assert yml["seed"] == 123
+        assert yml["_metadata"]["seed"] == 123
+        assert yml["_metadata"]["algorithm"] == "lhs"
+
+    def test_metadata_preserves_seed_n_samples_and_doe_grid_mapping(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {
+                    "type": "doe",
+                    "number_of_samples": 16,
+                    "seed": 1973,
+                },
+                "variables": [
+                    {
+                        "name": "SetRValue.r_val",
+                        "distribution": {"type": "discrete", "values": [5.0, 10.0]},
+                    }
+                ],
+            }
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert yml["algorithm"] == "grid"
+        assert yml["seed"] == 1973
+        assert yml["_metadata"] == {
+            "algorithm": "grid",
+            "n_samples": 16,
+            "seed": 1973,
+        }
+
+    def test_invalid_seed_raises(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "lhs", "seed": True},
+                "variables": [
+                    {"name": "x", "distribution": {"type": "uniform", "minimum": 0, "maximum": 1}},
+                ],
+            }
+        }
+        with pytest.raises(OSAImportError, match="seed"):
+            osa_to_variables_yml(data, tmp_path / "variables.yml")
+
+    def test_invalid_n_samples_raises(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "lhs", "number_of_samples": 0},
+                "variables": [
+                    {"name": "x", "distribution": {"type": "uniform", "minimum": 0, "maximum": 1}},
+                ],
+            }
+        }
+        with pytest.raises(OSAImportError, match="number_of_samples"):
+            osa_to_variables_yml(data, tmp_path / "variables.yml")
+
+    def test_zero_variable_workflow_emits_prebuilt_workflow(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "single_run", "seed": 1973},
+                "workflow": [
+                    {
+                        "name": "set_thermostat",
+                        "measure_definition_directory": "./measures/SetThermostat",
+                        "arguments": [{"name": "heating_setpoint", "value": 21.0}],
+                        "variables": [
+                            {
+                                "variable": False,
+                                "argument": {"name": "cooling_setpoint"},
+                                "static_value": 24.0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert yml["prebuilt_workflow"] is True
+        assert yml["variables"] == []
+        assert yml["seed"] == 1973
+        assert yml["_metadata"]["n_samples"] == 1
+        assert yml["_metadata"]["seed"] == 1973
+
+
+# ---------------------------------------------------------------------------
+# Test: stage_osa_template_package & CLI import-osa staging
+# ---------------------------------------------------------------------------
+
+
+class TestStageOsaTemplatePackage:
+    def _make_seed_package(self, pkg_dir: Path) -> Path:
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "seeds").mkdir()
+        (pkg_dir / "seeds" / "baseline.osm").write_text("OS:Version,3.10.0;\n", encoding="utf-8")
+        (pkg_dir / "weather").mkdir()
+        (pkg_dir / "weather" / "USA_CO_Golden.epw").write_text("LOCATION,...\n", encoding="utf-8")
+        (pkg_dir / "measures" / "SetThermostat").mkdir(parents=True)
+        (pkg_dir / "measures" / "ServerDirectoryCleanup").mkdir(parents=True)
+        osw = {
+            "seed_file": "../../seeds/baseline.osm",
+            "weather_file": "../../weather/USA_CO_Golden.epw",
+            "measure_paths": ["../../measures"],
+            "file_paths": ["../../weather", "../../seeds"],
+            "steps": [
+                {
+                    "measure_dir_name": "SetThermostat",
+                    "arguments": {
+                        "__SKIP__": False,
+                        "heating_setpoint": 20.0,
+                        "cooling_setpoint": "25.0",
+                    },
+                },
+                {
+                    "measure_dir_name": "ServerDirectoryCleanup",
+                    "arguments": {
+                        "sql": True,
+                    },
+                },
+            ],
+        }
+        (pkg_dir / "workflow.osw").write_text(json.dumps(osw, indent=2), encoding="utf-8")
+        return pkg_dir
+
+    def test_stage_from_template_package_overlays_static_args_and_normalizes_paths(
+        self, tmp_path: Path
+    ) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        seed_pkg = self._make_seed_package(tmp_path / "seed_pkg")
+        analysis_data = {
+            "analysis": {
+                "problem": {
+                    "algorithm": {"type": "lhs", "number_of_samples": 10, "seed": 42},
+                    "workflow": [
+                        {
+                            "measure_definition_directory": "./measures/SetThermostat",
+                            "arguments": {
+                                "__SKIP__": "true",
+                                "heating_setpoint": 22.5,
+                                "cooling_setpoint": 24.0,
+                            },
+                            "variables": [
+                                {
+                                    "name": "heating_setpoint",
+                                    "variable": True,
+                                    "argument": {"name": "heating_setpoint"},
+                                    "uncertainty_description": {
+                                        "type": "uniform",
+                                        "attributes": [
+                                            {"name": "lower_bounds", "value": 18.0},
+                                            {"name": "upper_bounds", "value": 23.0},
+                                        ],
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+        }
+        analysis_json = _write_json(tmp_path / "analysis.json", analysis_data)
+        staged_pkg = tmp_path / "staged_pkg"
+
+        stage_osa_template_package(
+            analysis_json,
+            staged_pkg,
+            template_package=seed_pkg,
+        )
+
+        osw = json.loads((staged_pkg / "workflow.osw").read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "seeds/baseline.osm"
+        assert osw["weather_file"] == "weather/USA_CO_Golden.epw"
+        assert osw["measure_paths"] == ["measures"]
+        assert "weather" in osw["file_paths"]
+        assert "seeds" in osw["file_paths"]
+
+        thermostat_step = osw["steps"][0]
+        # __SKIP__ coerced to bool True; cooling_setpoint coerced to str "24.0"
+        assert thermostat_step["arguments"]["__SKIP__"] is True
+        assert thermostat_step["arguments"]["cooling_setpoint"] == "24.0"
+        # heating_setpoint is varied in problem.workflow, so static value 22.5 is NOT overlaid
+        assert thermostat_step["arguments"]["heating_setpoint"] == 20.0
+
+        cleanup_step = osw["steps"][1]
+        assert cleanup_step["arguments"]["sql"] is False
+
+    def test_stage_directly_from_osa_zip(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        osa_zip = tmp_path / "study.osa"
+        analysis_data = {
+            "analysis": {
+                "seed": {"file_name": "baseline.osm"},
+                "weather_file": {"file_name": "USA_CO_Golden.epw"},
+                "problem": {
+                    "algorithm": {"type": "single_run"},
+                    "workflow": [
+                        {
+                            "name": "set_thermostat",
+                            "measure_definition_directory": "./measures/SetThermostat",
+                            "arguments": [{"name": "heating_setpoint", "value": 21.0}],
+                        }
+                    ],
+                },
+            }
+        }
+        with zipfile.ZipFile(osa_zip, "w") as zf:
+            zf.writestr("analysis.json", json.dumps(analysis_data))
+            zf.writestr("seeds/baseline.osm", "OS:Version,3.10.0;\n")
+            zf.writestr("weather/USA_CO_Golden.epw", "LOCATION,...\n")
+            zf.writestr("measures/SetThermostat/measure.rb", "# measure\n")
+
+        staged_pkg = tmp_path / "staged_from_zip"
+        stage_osa_template_package(osa_zip, staged_pkg)
+
+        osw = json.loads((staged_pkg / "workflow.osw").read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "seeds/baseline.osm"
+        assert osw["weather_file"] == "weather/USA_CO_Golden.epw"
+        assert osw["measure_paths"] == ["measures"]
+        assert osw["steps"] == [
+            {
+                "measure_dir_name": "SetThermostat",
+                "arguments": {"heating_setpoint": 21.0},
+                "name": "set_thermostat",
+            }
+        ]
+
+    def test_stage_rejects_zip_slip(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        osa_zip = tmp_path / "malicious.osa"
+        with zipfile.ZipFile(osa_zip, "w") as zf:
+            zf.writestr("analysis.json", json.dumps(SAMPLE_ANALYSIS))
+            zf.writestr("../escape.txt", "pwned")
+
+        with pytest.raises(OSAImportError, match="outside destination"):
+            stage_osa_template_package(osa_zip, tmp_path / "staged")
+
+    def test_cli_import_osa_stages_package(self, tmp_path: Path) -> None:
+        from osimflow.__main__ import main
+
+        seed_pkg = self._make_seed_package(tmp_path / "seed_pkg")
+        analysis_json = _write_json(tmp_path / "analysis.json", SAMPLE_ANALYSIS)
+        out_yml = tmp_path / "out" / "variables.yml"
+        pkg_out = tmp_path / "out" / "staged_package"
+
+        rc = main(
+            [
+                "import-osa",
+                str(analysis_json),
+                "--output",
+                str(out_yml),
+                "--template-package",
+                str(seed_pkg),
+                "--package-output",
+                str(pkg_out),
+            ]
+        )
+        assert rc == 0
+        assert out_yml.is_file()
+        assert (pkg_out / "workflow.osw").is_file()
 
 
 # ---------------------------------------------------------------------------
