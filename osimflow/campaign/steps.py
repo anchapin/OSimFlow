@@ -264,15 +264,16 @@ class CampaignStepsMixin:
         re-execute the simulation.  The cache key includes the template
         package hash and the OpenStudio version.
 
-        Skipped when ``cfg.skip_preflight`` is ``True`` (the
-        ``--skip-preflight`` CLI flag).
+        Skipped when ``cfg.skip_preflight`` or ``cfg.detach_s3`` is
+        ``True`` (the ``--skip-preflight`` or ``--detach-s3`` CLI flags).
 
         Raises:
             SevereEnergyPlusError: the seed model has errors that would
                 cause every sample to fail.
         """
-        if self.cfg.skip_preflight:
-            _c.log.info("PREFLIGHT_RUN_MODEL: skipped (--skip-preflight)")
+        if self.cfg.skip_preflight or self.cfg.detach_s3:
+            reason = "--skip-preflight" if self.cfg.skip_preflight else "--detach-s3"
+            _c.log.info("PREFLIGHT_RUN_MODEL: skipped (%s)", reason)
             self.trace.step_finished(
                 "PREFLIGHT_RUN_MODEL",
                 cache="SKIPPED",

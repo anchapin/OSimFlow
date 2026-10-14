@@ -270,3 +270,145 @@ class TestExtractSevereError:
         result = _extract_severe_error(output)
         assert "First error" in result
         assert "Second error" not in result
+
+
+class TestDetachS3SkipsPreflight:
+    """--detach-s3 skips PREFLIGHT_RUN_MODEL local simulation (issue #2029)."""
+
+    def test_step_preflight_skipped_when_detach_s3_enabled(
+        self,
+        tmp_path: Path,
+        template_package: Path,
+        variables_yml: Path,
+    ) -> None:
+        """step_preflight_run_model skips simulation, marker, and cache when detach_s3=True."""
+        from osimflow.cache import CacheKey, sha256_of_files
+
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=template_package,
+            n_samples=2,
+            outdir=tmp_path / "results",
+            openstudio_version="3.11.0",
+            skip_preflight=False,
+            detach_s3=True,
+        )
+        campaign = Campaign(cfg, LocalExecutor(max_workers=1))
+
+        with (
+            mock.patch("osimflow.campaign.preflight_run_model") as mock_preflight,
+            mock.patch.object(campaign.cache, "store") as mock_store,
+        ):
+            campaign.step_preflight_run_model()
+            mock_preflight.assert_not_called()
+            mock_store.assert_not_called()
+
+        preflight_steps = [s for s in campaign.trace.steps if s.step == "PREFLIGHT_RUN_MODEL"]
+        assert len(preflight_steps) == 1
+        assert preflight_steps[0].cache == "SKIPPED"
+        assert preflight_steps[0].exit_code == 0
+        assert not (cfg.work_dir / "preflight_OK").exists()
+
+        key = CacheKey(
+            step="PREFLIGHT_RUN_MODEL",
+            sample_id="ALL",
+            openstudio_version=cfg.openstudio_version,
+            inputs_sha256=sha256_of_files(sorted(cfg.template_sim_package.rglob("*"))),
+            code_sha256=campaign.code_hashes["bin"],
+            container_digest=campaign._os_container_digest,
+        )
+        assert campaign.cache.lookup(key) is None
+
+    def test_detach_s3_campaign_run_records_skipped_preflight_in_run_json(
+        self,
+        tmp_path: Path,
+        template_package: Path,
+        variables_yml: Path,
+    ) -> None:
+        """Full detach_s3 run writes PREFLIGHT_RUN_MODEL as SKIPPED in run.json without marker or cache."""
+        from tests.unit.results.test_s3_campaign import FakeStorage
+
+        from osimflow.s3_campaign import S3CampaignStore
+
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=template_package,
+            n_samples=2,
+            outdir=tmp_path / "results",
+            openstudio_version="3.11.0",
+            skip_preflight=False,
+            detach_s3=True,
+            result_storage_backend="s3",
+            result_storage_bucket="test-bucket",
+        )
+        store = S3CampaignStore(FakeStorage(tmp_path / "bucket"), tmp_path / "scratch")
+        with mock.patch("osimflow.campaign.build_result_storage", return_value=store.storage):
+            campaign = Campaign(cfg, LocalExecutor(max_workers=1))
+        campaign._detach_store_obj = store
+
+        with (
+            mock.patch("osimflow.campaign.preflight_run_model") as mock_preflight,
+            mock.patch("osimflow.campaign.run_openstudio_sim"),
+        ):
+            result = campaign.run()
+            mock_preflight.assert_not_called()
+
+        assert result["status"] == "detached"
+        assert not (cfg.work_dir / "preflight_OK").exists()
+
+        run_data = json.loads((cfg.outdir / "run.json").read_text())
+        preflight_entries = [s for s in run_data["steps"] if s["step"] == "PREFLIGHT_RUN_MODEL"]
+        assert len(preflight_entries) == 1
+        assert preflight_entries[0]["cache"] == "SKIPPED"
+        assert preflight_entries[0]["exit_code"] == 0
+
+    @pytest.mark.parametrize(
+        "bad_var_name",
+        [
+            "nonexistent_osm_attr",
+            "UnknownMeasure.nonexistent_arg",
+        ],
+    )
+    def test_detach_s3_invalid_variable_fails_fast_before_sim_submission(
+        self,
+        tmp_path: Path,
+        template_package: Path,
+        bad_var_name: str,
+    ) -> None:
+        """Invalid measure argument or .osm variable mapping still fails fast before sim submission."""
+        from tests.unit.results.test_s3_campaign import FakeStorage
+
+        from osimflow.apply_params import UnmappedParameterError
+        from osimflow.s3_campaign import S3CampaignStore
+
+        bad_vars = tmp_path / "bad_variables.yml"
+        bad_vars.write_text(
+            f"variables:\n  - name: {bad_var_name}\n    distribution: uniform\n    min: 0.0\n    max: 1.0\n"
+        )
+        cfg = CampaignConfig(
+            input_variables=bad_vars,
+            template_sim_package=template_package,
+            n_samples=2,
+            outdir=tmp_path / "results",
+            openstudio_version="3.11.0",
+            skip_preflight=False,
+            detach_s3=True,
+            result_storage_backend="s3",
+            result_storage_bucket="test-bucket",
+        )
+        store = S3CampaignStore(FakeStorage(tmp_path / "bucket"), tmp_path / "scratch")
+        executor = LocalExecutor(max_workers=1)
+        with mock.patch("osimflow.campaign.build_result_storage", return_value=store.storage):
+            campaign = Campaign(cfg, executor)
+        campaign._detach_store_obj = store
+
+        with (
+            mock.patch("osimflow.campaign.preflight_run_model") as mock_preflight,
+            mock.patch.object(executor, "submit", wraps=executor.submit) as mock_submit,
+            pytest.raises(UnmappedParameterError),
+        ):
+            campaign.run()
+
+        mock_preflight.assert_not_called()
+        mock_submit.assert_not_called()
+        assert not store.handoff_exists(cfg.outdir.name)
