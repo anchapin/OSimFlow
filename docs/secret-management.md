@@ -610,9 +610,21 @@ export OSIMFLOW_TASK_PAYLOAD_SECRET="$(openssl rand -hex 32)"
 osimflow run --executor nomad ...
 ```
 
-Since issue #1449, two substrates deliver the worker-side secret through their
+Since issues #1449, #1811, and #2042, three substrates support delivering the worker-side secret through their
 **native secret stores** instead of the literal job env:
 
+- **AWS Batch**: When the job definition injects `OSIMFLOW_TASK_PAYLOAD_SECRET`
+  via `containerProperties.secrets` (`valueFrom` pointing to Secrets Manager or
+  SSM Parameter Store), the raw secret is never placed in
+  `containerOverrides.environment`. When `--aws-batch-payload-secret-arn` is
+  omitted, `AWSBatchExecutor` auto-discovers the secret ARN from the active job
+  definition and fetches the secret value from Secrets Manager / SSM Parameter
+  Store on the submitter unless `OSIMFLOW_TASK_PAYLOAD_SECRET` is already set
+  locally (issue #2042). If a custom job definition omits
+  `containerProperties.secrets` and no `--aws-batch-payload-secret-arn` is set,
+  `AWSBatchExecutor` logs a warning and falls back to placing a locally exported
+  `OSIMFLOW_TASK_PAYLOAD_SECRET` in `containerOverrides.environment`. See
+  [AWS Batch Terraform Guide — Task-payload HMAC secret](aws-batch-terraform.md#task-payload-hmac-secret-issues-1811-2042).
 - **Kubernetes**: `KubernetesExecutor(payload_secret_ref="<secret-name>")`
   emits the `OSIMFLOW_TASK_PAYLOAD_SECRET` env entry as a `secretKeyRef`; the
   kubelet resolves it at pod admission and the raw value never appears in the
@@ -624,7 +636,7 @@ Since issue #1449, two substrates deliver the worker-side secret through their
   key. See
   [Nomad Production Guide — Vault-template secret injection](nomad-production.md#vault-template-secret-injection-issue-1449).
 
-AWS Batch, Azure Batch, Google Batch, and Docker Swarm still ship the secret
+Azure Batch, Google Batch, and Docker Swarm (as well as AWS Batch/Kubernetes/Nomad when run without their native secret-store configuration) still ship the secret
 as a **plain task env value** (documented residual — see the per-substrate
 residual threat model in the Nomad Production Guide). Even with native secret
 stores, note that anything that can read the full resolved env of a *running*

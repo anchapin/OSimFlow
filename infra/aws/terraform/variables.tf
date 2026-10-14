@@ -140,7 +140,7 @@ variable "alert_email_addresses" {
 }
 
 variable "payload_secret_arn" {
-  description = "ARN of a Secrets Manager secret or SSM parameter holding the task-payload HMAC secret (OSIMFLOW_TASK_PAYLOAD_SECRET). Injected via the job definition's containerProperties.secrets (SubmitJob cannot carry secrets) and readable by the task execution role. Pass the same ARN to --aws-batch-payload-secret-arn."
+  description = "ARN of a Secrets Manager secret or SSM parameter holding the task-payload HMAC secret (OSIMFLOW_TASK_PAYLOAD_SECRET). Injected via the job definition's containerProperties.secrets (SubmitJob has no containerOverrides.secrets) and readable by the task execution role; AWSBatchExecutor auto-discovers this ARN from the job definition when --aws-batch-payload-secret-arn is omitted (issue #2042)."
   type        = string
   default     = null
 }

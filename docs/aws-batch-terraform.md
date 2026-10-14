@@ -207,14 +207,14 @@ After running `terraform apply`, give the engineering team the following informa
 
 The engineering team needs:
 1. **The `osimflow_run_command` output** — paste it into a terminal with `osimflow` installed and a `variables.yml` file ready.
-2. **AWS credentials** — either an IAM user in the same account or an assumed role with `batch:SubmitJob`, `s3:PutObject`, and `s3:GetObject` permissions on the created bucket. On the Batch compute environment, credentials come from the IAM role automatically.
-3. **The S3 bucket name** — used by the `--archive_intermediates` flag and for post-run artifact retrieval.
+2. **AWS credentials** — a federated, role-based, or short-lived STS session identity (such as AWS IAM Identity Center / SSO, `AssumeRole`, OIDC `AssumeRoleWithWebIdentity`, `custom-process`, EC2/ECS roles, or any STS credentials with `AWS_SESSION_TOKEN`) with permissions to submit/describe Batch jobs, read/write the S3 campaign bucket, and read the task-payload HMAC secret (`secretsmanager:GetSecretValue` or `ssm:GetParameter`). Direct static IAM user access keys without a session token (`token is None`) are rejected by `AWSBatchExecutor` by default unless `--aws-batch-allow-long-lived-credentials` is passed (issue #2026). On the Batch compute environment, worker credentials come from the IAM role automatically.
+3. **The S3 bucket name** — used by the `--archive_intermediates` / `--result-storage-bucket` flags and for post-run artifact retrieval.
 
 ## Security
 
-- **No hardcoded secrets.** Credentials come from the IAM role attached to the compute environment.
-- **Least-privilege IAM.** The task role has S3 access scoped to the campaign bucket and CloudWatch Logs scoped to the Batch log group. The task-execution role uses the AWS-managed `AmazonECSTaskExecutionRolePolicy`.
-- **Long-lived credentials are ignored by default.** `AWSBatchExecutor` only uses IAM-role credentials (EC2/ECS metadata). Operators running `osimflow run --executor aws_batch` from a workstation with SSO/OIDC or env credentials can opt in with `--aws-batch-allow-long-lived-credentials` (default off; a warning is logged when enabled; not recommended for production; issue #1833).
+- **No hardcoded secrets.** Worker credentials come from the IAM role attached to the compute environment / task definition.
+- **Least-privilege IAM.** The task role has S3 access scoped to the campaign bucket and CloudWatch Logs scoped to the Batch log group. The task-execution role uses the AWS-managed `AmazonECSTaskExecutionRolePolicy` plus secret-read access for container secret injection.
+- **Submitter credential policy (issues #1833, #2026).** `AWSBatchExecutor` accepts federated, role-based, and short-lived session credentials by default: AWS IAM Identity Center (SSO), `AssumeRole`, `AssumeRoleWithWebIdentity` (OIDC), `custom-process`, EC2/ECS metadata roles (`iam-role`, `container-role`, `ec2-instance-metadata`), and any STS credentials with a session token (`AWS_SESSION_TOKEN` / `token is not None`). Direct static IAM user access keys without a session token (`token is None`) are rejected by default; `--aws-batch-allow-long-lived-credentials` is strictly the opt-in escape hatch for that static-key case (default off; a warning is logged when enabled; not recommended for production).
 - **S3 bucket** has versioning, AES256 encryption, and full public access blocking.
 - **No inbound rules** on the security group — Batch tasks are egress-only.
 
@@ -247,16 +247,22 @@ terraform destroy
 
 > **Warning:** this deletes all created resources. Set `s3_force_destroy = true` to remove the S3 bucket even if it contains objects.
 
-## Task-payload HMAC secret (issue #1811)
+## Task-payload HMAC secret (issues #1811, #2042)
 
-`SubmitJob` cannot carry secrets. Set the Terraform variable
-`payload_secret_arn` (Secrets Manager or SSM parameter ARN, optionally
-`payload_secret_kms_key_arn`) to inject `OSIMFLOW_TASK_PAYLOAD_SECRET` through
-the job definition's `containerProperties.secrets`; the **execution** role is
-granted `secretsmanager:GetSecretValue` / `ssm:GetParameter` and `kms:Decrypt`.
-Pass the same ARN as `--aws-batch-payload-secret-arn` and export the same value
-as `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator; the executor verifies the
-job definition references the ARN before submitting.
+`SubmitJob` has no `containerOverrides.secrets` field, and when the job definition injects `OSIMFLOW_TASK_PAYLOAD_SECRET` via `containerProperties.secrets` (or `--aws-batch-payload-secret-arn` is set), the raw HMAC secret is never placed in `containerOverrides.environment`:
+
+1. **Container secret injection (Terraform / Job Definition):** Set the Terraform variable `payload_secret_arn` (Secrets Manager secret ARN or SSM Parameter Store `SecureString` ARN, plus optional `payload_secret_kms_key_arn` for customer-managed KMS keys) to inject `OSIMFLOW_TASK_PAYLOAD_SECRET` into the worker container via the job definition's `containerProperties.secrets`. The **Batch execution role** uses `secretsmanager:GetSecretValue` / `ssm:GetParameter` (and `kms:Decrypt`) to inject the secret at container startup.
+2. **Auto-discovery and submitter HMAC signing (issue #2042):**
+   - When `--aws-batch-payload-secret-arn` is omitted (for example when invoked by `openstudio-bem-to-surrogate-gem`), `AWSBatchExecutor` inspects the active job definition via `batch:DescribeJobDefinitions` and auto-discovers the `valueFrom` ARN for the `OSIMFLOW_TASK_PAYLOAD_SECRET` entry in `containerProperties.secrets`. If `--aws-batch-payload-secret-arn` is explicitly passed, the executor verifies that the job definition references the matching ARN before submitting.
+   - Unless `OSIMFLOW_TASK_PAYLOAD_SECRET` is already exported in the submitter's local environment, `AWSBatchExecutor` automatically fetches the secret value from AWS Secrets Manager (`secretsmanager:GetSecretValue`, supporting optional `:json-key:version-stage:version-id` suffixes) or AWS Systems Manager Parameter Store (`ssm:GetParameter` with `WithDecryption=True`) using the submitter's AWS session, caches it in-memory on the executor instance, and uses it to HMAC-sign each submitted task payload while omitting the raw secret from `containerOverrides.environment`. (If a custom job definition omits `containerProperties.secrets` and no `--aws-batch-payload-secret-arn` is configured, `AWSBatchExecutor` logs a warning and falls back to shipping a locally exported `OSIMFLOW_TASK_PAYLOAD_SECRET` in `containerOverrides.environment`.)
+
+### IAM Permissions Breakdown
+
+| Identity | Purpose | Required IAM Permissions |
+|---|---|---|
+| **1. Submitter identity** *(workstation, CI runner, or `openstudio-bem-to-surrogate-gem` caller)* | Stages inputs to S3, inspects job definition, fetches HMAC key to sign task payloads, submits/monitors Batch jobs, and downloads results | `batch:SubmitJob`, `batch:DescribeJobs`, `batch:DescribeJobDefinitions`, `batch:TerminateJob`; S3 read/write (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`) on the campaign bucket; `secretsmanager:GetSecretValue` or `ssm:GetParameter` (plus `kms:Decrypt` if encrypted with a customer-managed KMS key) on `payload_secret_arn` |
+| **2. Batch execution role** *(`executionRoleArn` on the job definition)* | Pulls container image, writes container startup logs, and injects `OSIMFLOW_TASK_PAYLOAD_SECRET` into the container environment | ECR image pull (`AmazonECSTaskExecutionRolePolicy`), CloudWatch Logs (`logs:CreateLogStream`, `logs:PutLogEvents`), and `secretsmanager:GetSecretValue` / `ssm:GetParameter` (plus `kms:Decrypt` if customer-managed KMS key) on `payload_secret_arn` |
+| **3. Batch task role** *(`jobRoleArn` on the job definition)* | Used by the running OpenStudio worker inside the container to download staged inputs and upload simulation outputs | S3 read/write (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`) scoped to the campaign bucket and CloudWatch Logs (`logs:CreateLogStream`, `logs:PutLogEvents`) |
 
 ## Fargate (on-demand) and existing-infrastructure onboarding (issue #1808)
 
@@ -316,9 +322,9 @@ queue yourself, then pass `--aws-batch-queue` / `--aws-batch-job-definition`.
 Checklist:
 
 - **Roles:** *execution role* (ECR pull, CloudWatch Logs, `secretsmanager:GetSecretValue`
-  for the payload secret); *task/job role* (S3 get/put on the campaign bucket
+  / `ssm:GetParameter` and optional `kms:Decrypt` for the payload secret); *task/job role* (S3 get/put on the campaign bucket
   only); *submitter* (`batch:SubmitJob`, `DescribeJobs`, `TerminateJob`,
-  `DescribeJobDefinitions`, plus S3 access to stage inputs). The job definition
+  `DescribeJobDefinitions`, S3 access to stage inputs/download results, and `secretsmanager:GetSecretValue` / `ssm:GetParameter` + optional `kms:Decrypt` on `payload_secret_arn` when `OSIMFLOW_TASK_PAYLOAD_SECRET` is not set locally). The job definition
   needs `platformCapabilities: ["FARGATE"]`, `resourceRequirements`,
   `networkConfiguration.assignPublicIp`, `fargatePlatformConfiguration`, and the
   `awslogs` log configuration.
