@@ -146,6 +146,14 @@ FAILURE_CLASS_BOOKKEEPING = "bookkeeping_error"
 #: simulation is never re-run.
 BOOKKEEPING_MAX_ATTEMPTS = 3
 
+#: Canonical short-prefix ``_sample_state`` keys read by step post-loops and
+#: ``_build_sample_trace`` (issue #2023).
+_CANONICAL_STEP_STATUS_PREFIX: dict[str, str] = {
+    "APPLY_PARAMETERS": "apply",
+    "RUN_OPENSTUDIO_SIM": "sim",
+    "EXTRACT_KPIS": "extract",
+}
+
 
 class PostResultBookkeepingError(OSimFlowRuntimeError):
     """Post-result bookkeeping failed after the work function succeeded (issue #1997).
@@ -248,6 +256,10 @@ def mark_sample_failed(
     state = deps.sample_state.setdefault(sid, {})
     state[f"{step_name.lower()}_exit_code"] = 1
     state[f"{step_name.lower()}_status"] = "failed"
+    canonical_prefix = _CANONICAL_STEP_STATUS_PREFIX.get(step_name.upper())
+    if canonical_prefix is not None:
+        state[f"{canonical_prefix}_exit_code"] = 1
+        state[f"{canonical_prefix}_status"] = "failed"
     state["error_summary"] = str(error)[:500]
     state["failure_class"] = (
         FAILURE_CLASS_BOOKKEEPING
@@ -582,6 +594,10 @@ def submit_and_await_all(
                     state = deps.sample_state.setdefault(sid, {})
                     state.pop(f"{step_name.lower()}_exit_code", None)
                     state.pop(f"{step_name.lower()}_status", None)
+                    canonical_prefix = _CANONICAL_STEP_STATUS_PREFIX.get(step_name.upper())
+                    if canonical_prefix is not None:
+                        state.pop(f"{canonical_prefix}_exit_code", None)
+                        state.pop(f"{canonical_prefix}_status", None)
                     state.pop("error_summary", None)
                     state.pop("failure_class", None)
                     # Resubmit and await the new handle.
