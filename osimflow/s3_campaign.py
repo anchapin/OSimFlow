@@ -13,6 +13,7 @@ machine; ``download`` performs the KPI extraction + aggregation locally (the
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -47,6 +48,7 @@ DEFAULT_CLAIM_LEASE_S = 900.0
 CLAIM_ACQUIRED = "acquired"
 CLAIM_ALREADY_SUBMITTED = "already_submitted"
 CLAIM_IN_PROGRESS = "in_progress"
+BATCH_DESCRIBE_JOBS_LIMIT = 100
 
 
 class S3CampaignError(OSimFlowRuntimeError):
@@ -77,6 +79,13 @@ class S3Handoff:
     def from_json(cls, raw: str) -> "S3Handoff":
         data = json.loads(raw)
         known = {k: data[k] for k in cls.__dataclass_fields__ if k in data}
+        raw_job_ids = known.get("job_ids")
+        if isinstance(raw_job_ids, dict):
+            known["job_ids"] = {
+                str(k): (str(v) if v is not None else None) for k, v in raw_job_ids.items()
+            }
+        else:
+            known["job_ids"] = {}
         return cls(**known)
 
 
@@ -133,6 +142,36 @@ def _tmp_roundtrip_write(storage: ResultStorage, key: str, text: str, tmp_dir: P
     storage.upload_file(local, key)
 
 
+def _format_batch_failure_reason(job_id: str, job: dict[str, Any]) -> str:
+    """Format a single-line failure diagnostic from an AWS Batch ``describe_jobs`` entry."""
+    resolved_id = str(job.get("jobId") or job_id)
+    container = job.get("container")
+    if not isinstance(container, dict):
+        container = {}
+    attempts = job.get("attempts")
+    if not container and isinstance(attempts, list) and attempts:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict) and isinstance(last_attempt.get("container"), dict):
+            container = last_attempt["container"]
+    exit_code = container.get("exitCode")
+    status_reason = " ".join(str(job.get("statusReason") or "").split())
+    container_reason = " ".join(str(container.get("reason") or "").split())
+    header = f"AWS Batch job {resolved_id} FAILED"
+    if exit_code is not None:
+        header = f"{header} (exit_code={exit_code})"
+    reasons: list[str] = []
+    if container_reason:
+        reasons.append(container_reason)
+    if status_reason and status_reason not in container_reason:
+        if container_reason and container_reason in status_reason:
+            reasons = [status_reason]
+        else:
+            reasons.append(status_reason)
+    if reasons:
+        return f"{header}: {'; '.join(reasons)}"
+    return header
+
+
 class S3CampaignStore:
     """Read/write detached-campaign state through a :class:`ResultStorage`.
 
@@ -140,9 +179,50 @@ class S3CampaignStore:
     ``<campaign_id>/...``.
     """
 
-    def __init__(self, storage: ResultStorage, scratch: Path) -> None:
+    def __init__(
+        self,
+        storage: ResultStorage,
+        scratch: Path,
+        *,
+        batch_client: Any | None = None,
+    ) -> None:
         self.storage = storage
         self.scratch = scratch
+        self._batch_client = batch_client
+
+    def _get_batch_client(self) -> Any | None:
+        if self._batch_client is not None:
+            return self._batch_client
+        try:
+            import boto3  # noqa: PLC0415
+            from botocore.exceptions import (  # noqa: PLC0415
+                BotoCoreError,
+                ClientError,
+                NoCredentialsError,
+                NoRegionError,
+            )
+        except ImportError:
+            log.warning(
+                "boto3 is not installed; skipping AWS Batch job reconciliation",
+                exc_info=True,
+            )
+            return None
+        try:
+            region = (
+                os.environ.get("AWS_REGION")
+                or os.environ.get("AWS_DEFAULT_REGION")
+                or boto3.Session().region_name
+            )
+            self._batch_client = (
+                boto3.client("batch", region_name=region) if region else boto3.client("batch")
+            )
+            return self._batch_client
+        except (NoRegionError, NoCredentialsError, BotoCoreError, ClientError, OSError):
+            log.warning(
+                "could not initialize AWS Batch client; skipping job reconciliation",
+                exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _claim_key(campaign_id: str, generation: int) -> str:
@@ -297,12 +377,129 @@ class S3CampaignStore:
         except OSError:
             return False
 
-    def sample_states(self, record: S3Handoff) -> dict[str, str]:
-        """Terminal state per sample: ``"complete"`` or ``"failed"`` (issue #1878).
+    def _pending_batch_jobs(
+        self, record: S3Handoff, states: dict[str, str]
+    ) -> dict[str, list[str]]:
+        pending_sids = [
+            sid for sid in record.sample_ids if states.get(sid) not in {"complete", "failed"}
+        ]
+        if not pending_sids:
+            return {}
+        cid = record.campaign_id
+        handoff_jobs = record.job_ids if isinstance(record.job_ids, dict) else {}
+        fallback_jobs: dict[str, str] | None = None
+        job_to_sids: dict[str, list[str]] = {}
+        for sid in pending_sids:
+            raw_jid = handoff_jobs.get(sid)
+            jid = str(raw_jid).strip() if raw_jid is not None else ""
+            if not jid:
+                if fallback_jobs is None:
+                    try:
+                        fallback_jobs = self.recorded_jobs(cid)
+                    except (OSError, ValueError):
+                        log.warning(
+                            "could not read recorded jobs for %s during reconciliation",
+                            cid,
+                            exc_info=True,
+                        )
+                        fallback_jobs = {}
+                jid = fallback_jobs.get(sid, "").strip()
+            if jid:
+                job_to_sids.setdefault(jid, []).append(sid)
+        return job_to_sids
+
+    def _describe_batch_jobs(
+        self, campaign_id: str, job_ids: list[str]
+    ) -> dict[str, dict[str, Any]] | None:
+        client = self._get_batch_client()
+        if client is None:
+            return None
+        described_by_id: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(job_ids), BATCH_DESCRIBE_JOBS_LIMIT):
+            chunk = job_ids[i : i + BATCH_DESCRIBE_JOBS_LIMIT]
+            try:
+                response = client.describe_jobs(jobs=chunk)
+            except Exception:
+                log.warning(
+                    "describe_jobs failed while reconciling pending samples for %s",
+                    campaign_id,
+                    exc_info=True,
+                )
+                return None
+            jobs_list = response.get("jobs", []) if isinstance(response, dict) else []
+            for job in jobs_list:
+                if isinstance(job, dict) and job.get("jobId"):
+                    described_by_id[str(job["jobId"])] = job
+        return described_by_id
+
+    def _mark_batch_sample_failed(
+        self, campaign_id: str, sample_id: str, reason: str, states: dict[str, str]
+    ) -> None:
+        sample_head = f"{campaign_id}/{SIM_PREFIX}/{sample_id}/"
+        complete_key = f"{sample_head}{COMPLETE_MARKER}"
+        try:
+            sample_keys = set(self.storage.list_results(sample_head))
+        except OSError:
+            log.warning(
+                "could not re-check S3 completion marker for %s/%s",
+                campaign_id,
+                sample_id,
+                exc_info=True,
+            )
+            sample_keys = set()
+        if complete_key in sample_keys:
+            states[sample_id] = "complete"
+            return
+        failed_key = f"{sample_head}{FAILED_MARKER}"
+        try:
+            _tmp_roundtrip_write(self.storage, failed_key, f"{reason}\n", self.scratch)
+        except OSError:
+            log.warning(
+                "could not persist %s for %s/%s",
+                FAILED_MARKER,
+                campaign_id,
+                sample_id,
+                exc_info=True,
+            )
+        states[sample_id] = "failed"
+
+    def _reconcile_batch_failures(self, record: S3Handoff, states: dict[str, str]) -> None:
+        """Reconcile pending ``aws_batch`` samples against ``describe_jobs`` (issue #2058)."""
+        if record.executor != "aws_batch":
+            return
+        job_to_sids = self._pending_batch_jobs(record, states)
+        if not job_to_sids:
+            return
+        described_by_id = self._describe_batch_jobs(record.campaign_id, list(job_to_sids))
+        if described_by_id is None:
+            return
+        for jid, sids in job_to_sids.items():
+            job = described_by_id.get(jid)
+            if not job or job.get("status") != "FAILED":
+                continue
+            reason = _format_batch_failure_reason(jid, job)
+            for sid in sids:
+                self._mark_batch_sample_failed(record.campaign_id, sid, reason, states)
+
+    def sample_states(
+        self,
+        record: S3Handoff | str | None = None,
+        *,
+        campaign_id: str | None = None,
+    ) -> dict[str, str]:
+        """Terminal state per sample: ``"complete"`` or ``"failed"`` (issue #1878, #2058).
 
         A success marker wins over a failure marker, so a Batch retry that
-        eventually succeeds is reported as complete.
+        eventually succeeds is reported as complete. When *record* uses the
+        ``aws_batch`` executor, pending samples without an S3 marker are
+        reconciled against AWS Batch ``describe_jobs``.
         """
+        if isinstance(record, str):
+            record = self.read_handoff(record)
+        elif record is None:
+            if not campaign_id:
+                raise ValueError("sample_states requires either record or campaign_id")
+            record = self.read_handoff(campaign_id)
         cid = record.campaign_id
         head = f"{cid}/{SIM_PREFIX}/"
         states: dict[str, str] = {}
@@ -316,6 +513,7 @@ class S3CampaignStore:
                 states[sid] = "complete"
             elif name == FAILED_MARKER and not self._is_retrying(key):
                 states.setdefault(sid, "failed")
+        self._reconcile_batch_failures(record, states)
         return states
 
     def completed_samples(self, record: S3Handoff) -> set[str]:
@@ -383,22 +581,25 @@ class S3CampaignStore:
         fetched: list[str] = []
         for sid in sorted(done):
             sim_dir = sim_root / sid
-            local_marker = sim_dir / (
-                COMPLETE_MARKER if states[sid] == "complete" else FAILED_MARKER
-            )
+            is_complete = states[sid] == "complete"
+            local_marker = sim_dir / (COMPLETE_MARKER if is_complete else FAILED_MARKER)
             if local_marker.is_file():
                 continue
             head = f"{campaign_id}/{SIM_PREFIX}/{sid}/"
             for key in self.storage.list_results(head):
                 rel = key[len(head) :]
-                if not key.startswith(head) or not rel or rel in {COMPLETE_MARKER, FAILED_MARKER}:
+                if not key.startswith(head) or not rel or rel == COMPLETE_MARKER:
+                    continue
+                if is_complete and rel == FAILED_MARKER:
                     continue
                 if not include_artifacts and rel.startswith("run/") and rel != "run/run.log":
                     continue
                 dest = sim_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 self.storage.download_file(key, dest)
-            local_marker.touch()
+            if not local_marker.is_file():
+                local_marker.parent.mkdir(parents=True, exist_ok=True)
+                local_marker.touch()
             fetched.append(sid)
 
         csv_path = outdir / "aggregated_results.csv"

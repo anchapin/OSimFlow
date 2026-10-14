@@ -72,6 +72,21 @@ class FakeStorage(ResultStorage):
         return True
 
 
+@pytest.fixture(autouse=True)
+def _stub_default_batch_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent unmocked unit tests from making live AWS Batch calls."""
+    import boto3
+
+    real_client = boto3.client
+
+    def _fake_client(service_name: str, *args: Any, **kwargs: Any) -> Any:
+        if service_name == "batch":
+            return mock.MagicMock(describe_jobs=mock.MagicMock(return_value={"jobs": []}))
+        return real_client(service_name, *args, **kwargs)
+
+    monkeypatch.setattr(boto3, "client", _fake_client)
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> S3CampaignStore:
     return S3CampaignStore(FakeStorage(tmp_path / "bucket"), tmp_path / "scratch")
@@ -1145,3 +1160,348 @@ def test_download_out_osw_only_completed_sample_without_sql(
     assert dl_df["status_message"].tolist() == ["completed normal"]
     assert float(dl_df["reporting_179_d.total_site_energy_kbtu"].iloc[0]) == pytest.approx(45000.0)
     assert float(dl_df["reporting_179_d.building_area_sqft"].iloc[0]) == pytest.approx(10000.0)
+
+
+def test_handoff_from_json_normalizes_non_dict_job_ids() -> None:
+    """Issue #2058: S3Handoff.from_json coerces non-dict job_ids to {} and normalizes keys/values."""
+    base = {
+        "campaign_id": "camp_norm",
+        "submitted_at": 1234.5,
+        "sample_ids": ["0000", "0001"],
+    }
+    for bad_job_ids in (None, ["j0", "j1"], "not-a-dict", 42):
+        raw = json.dumps({**base, "job_ids": bad_job_ids})
+        rec = S3Handoff.from_json(raw)
+        assert rec.job_ids == {}
+
+    rec_typed = S3Handoff.from_json(json.dumps({**base, "job_ids": {"0000": 999, "0001": None}}))
+    assert rec_typed.job_ids == {"0000": "999", "0001": None}
+
+
+def test_reconcile_terminal_failed_batch_jobs_oom_and_cannot_pull(tmp_path: Path) -> None:
+    """Issue #2058: terminal FAILED Batch jobs (OOM / CannotPullContainerError) write _OSIMFLOW_FAILED and transition to failed."""
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    batch_client = mock.MagicMock()
+    batch_client.describe_jobs.return_value = {
+        "jobs": [
+            {
+                "jobId": "job-oom",
+                "status": "FAILED",
+                "statusReason": "Essential container in task exited",
+                "container": {
+                    "exitCode": 137,
+                    "reason": "OutOfMemoryError: Container killed due to memory usage",
+                },
+            },
+            {
+                "jobId": "job-pull",
+                "status": "FAILED",
+                "statusReason": "Task failed to start",
+                "container": {
+                    "reason": "CannotPullContainerError: pull image manifest has been retried 5 time(s)",
+                },
+            },
+        ]
+    }
+    storage = FakeStorage(tmp_path / "bucket")
+    store = S3CampaignStore(storage, tmp_path / "scratch", batch_client=batch_client)
+
+    samples = tmp_path / "samples.json"
+    samples.write_text(json.dumps({"samples": []}))
+    # 0002 is missing in record.job_ids so reconciliation falls back to recorded_jobs (_jobs/0002.json)
+    rec = new_handoff(
+        "camp_batch_fail",
+        ["0000", "0001", "0002"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "job-ok", "0001": "job-oom", "0002": None},
+    )
+    store.write_handoff(rec, samples)
+    store.record_job("camp_batch_fail", "0002", "job-pull", "osimflow-camp_batch_fail-0002")
+    _complete(store, "camp_batch_fail", "0000")
+
+    st = store.status("camp_batch_fail")
+    assert st["state"] == "completed"
+    assert st["total"] == 3
+    assert st["completed"] == 3
+    assert st["failed"] == ["0001", "0002"]
+    assert st["pending"] == []
+    assert batch_client.describe_jobs.call_count == 1
+    assert set(batch_client.describe_jobs.call_args.kwargs["jobs"]) == {"job-oom", "job-pull"}
+
+    # _OSIMFLOW_FAILED markers persisted to S3 with formatted Batch diagnostic details
+    m1 = (storage.root / "camp_batch_fail" / "work" / "sim" / "0001" / FAILED_MARKER).read_text()
+    assert "AWS Batch job job-oom FAILED (exit_code=137)" in m1
+    assert "OutOfMemoryError: Container killed due to memory usage" in m1
+    assert "Essential container in task exited" in m1
+
+    m2 = (storage.root / "camp_batch_fail" / "work" / "sim" / "0002" / FAILED_MARKER).read_text()
+    assert "AWS Batch job job-pull FAILED" in m2
+    assert "CannotPullContainerError" in m2
+
+    # Subsequent status call sees persisted S3 markers and does not re-query describe_jobs
+    batch_client.describe_jobs.reset_mock()
+    st2 = store.status("camp_batch_fail")
+    assert st2 == st
+    batch_client.describe_jobs.assert_not_called()
+
+
+def test_reconcile_non_terminal_batch_states_remain_pending(tmp_path: Path) -> None:
+    """Issue #2058: RUNNING / RUNNABLE (on retry) / SUBMITTED / STARTING jobs remain pending."""
+    from osimflow.s3_campaign import FAILED_MARKER, RETRYING_STATE
+
+    batch_client = mock.MagicMock()
+    batch_client.describe_jobs.return_value = {
+        "jobs": [
+            {"jobId": "j0", "status": "RUNNING"},
+            {"jobId": "j1", "status": "RUNNABLE", "statusReason": "Retrying attempt 2"},
+            {"jobId": "j2", "status": "SUBMITTED"},
+        ]
+    }
+    storage = FakeStorage(tmp_path / "bucket")
+    store = S3CampaignStore(storage, tmp_path / "scratch", batch_client=batch_client)
+    rec = new_handoff(
+        "camp_running",
+        ["0000", "0001", "0002"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "j0", "0001": "j1", "0002": "j2"},
+    )
+    store.write_handoff(rec)
+    # 0001 has a retrying _OSIMFLOW_FAILED marker from attempt 2 startup
+    retry_dir = storage.root / "camp_running" / "work" / "sim" / "0001"
+    retry_dir.mkdir(parents=True, exist_ok=True)
+    (retry_dir / FAILED_MARKER).write_text(RETRYING_STATE)
+
+    st = store.status("camp_running")
+    assert st["state"] == "running"
+    assert st["completed"] == 0
+    assert st["failed"] == []
+    assert st["pending"] == ["0000", "0001", "0002"]
+    assert not (storage.root / "camp_running" / "work" / "sim" / "0000" / FAILED_MARKER).exists()
+    assert (retry_dir / FAILED_MARKER).read_text() == RETRYING_STATE
+
+
+def test_reconcile_chunks_over_100_pending_jobs(tmp_path: Path) -> None:
+    """Issue #2058: >100 pending job IDs are queried in chunks of <= 100."""
+    sample_ids = [f"{i:04d}" for i in range(205)]
+    job_ids = {sid: f"job-{sid}" for sid in sample_ids}
+    chunk_lengths: list[int] = []
+
+    def _describe_jobs(*, jobs: list[str]) -> dict[str, Any]:
+        chunk_lengths.append(len(jobs))
+        return {
+            "jobs": [
+                {
+                    "jobId": jid,
+                    "status": "FAILED"
+                    if jid in {"job-0000", "job-0150", "job-0204"}
+                    else "RUNNING",
+                    "attempts": [
+                        {
+                            "container": {
+                                "exitCode": 137,
+                                "reason": "OutOfMemoryError: Container killed",
+                            }
+                        }
+                    ],
+                }
+                for jid in jobs
+            ]
+        }
+
+    batch_client = mock.MagicMock()
+    batch_client.describe_jobs.side_effect = _describe_jobs
+    storage = FakeStorage(tmp_path / "bucket")
+    store = S3CampaignStore(storage, tmp_path / "scratch", batch_client=batch_client)
+    rec = new_handoff(
+        "camp_205",
+        sample_ids,
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids=job_ids,
+    )
+    store.write_handoff(rec)
+
+    states = store.sample_states("camp_205")
+    assert chunk_lengths == [100, 100, 5]
+    assert states == {"0000": "failed", "0150": "failed", "0204": "failed"}
+
+
+def test_reconcile_race_guard_when_complete_marker_appears_before_failed_write(
+    tmp_path: Path,
+) -> None:
+    """Issue #2058: if _OSIMFLOW_COMPLETE appears in S3 before _OSIMFLOW_FAILED is written, sample is marked complete."""
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    storage = FakeStorage(tmp_path / "bucket")
+
+    def _describe_jobs_with_late_complete(*, jobs: list[str]) -> dict[str, Any]:
+        # Worker finishes uploading _OSIMFLOW_COMPLETE between initial S3 scan and describe_jobs response
+        _complete(store, "camp_race", "0000")
+        return {
+            "jobs": [
+                {
+                    "jobId": jobs[0],
+                    "status": "FAILED",
+                    "statusReason": "Essential container in task exited",
+                    "container": {"exitCode": 1, "reason": "Late exit after upload"},
+                }
+            ]
+        }
+
+    batch_client = mock.MagicMock()
+    batch_client.describe_jobs.side_effect = _describe_jobs_with_late_complete
+    store = S3CampaignStore(storage, tmp_path / "scratch", batch_client=batch_client)
+    rec = new_handoff(
+        "camp_race",
+        ["0000"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "job-race"},
+    )
+    store.write_handoff(rec)
+
+    states = store.sample_states(campaign_id="camp_race")
+    assert states == {"0000": "complete"}
+    assert not (storage.root / "camp_race" / "work" / "sim" / "0000" / FAILED_MARKER).exists()
+
+
+def test_reconcile_graceful_fallback_on_describe_jobs_or_boto3_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #2058: describe_jobs / boto3 initialization failures log a warning and fall back to S3-marker-only status."""
+    import boto3
+    from botocore.exceptions import NoCredentialsError, NoRegionError
+
+    storage = FakeStorage(tmp_path / "bucket")
+    rec = new_handoff(
+        "camp_err",
+        ["0000", "0001"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "j0", "0001": "j1"},
+    )
+
+    # 1. describe_jobs raises RuntimeError / ClientError -> falls back gracefully
+    failing_client = mock.MagicMock()
+    failing_client.describe_jobs.side_effect = RuntimeError("Batch API throttled")
+    store_err = S3CampaignStore(storage, tmp_path / "scratch1", batch_client=failing_client)
+    store_err.write_handoff(rec)
+    _complete(store_err, "camp_err", "0000")
+
+    st = store_err.status("camp_err")
+    assert st["state"] == "running"
+    assert st["completed"] == 1
+    assert st["failed"] == []
+    assert st["pending"] == ["0001"]
+
+    # 2. Lazy boto3.client("batch") raises NoRegionError / NoCredentialsError -> returns None and falls back
+    def _raise_no_region(*_a: Any, **_kw: Any) -> Any:
+        raise NoRegionError()
+
+    monkeypatch.setattr(boto3, "client", _raise_no_region)
+    store_lazy = S3CampaignStore(storage, tmp_path / "scratch2")
+    st_lazy = store_lazy.status("camp_err")
+    assert st_lazy["pending"] == ["0001"]
+
+    def _raise_no_creds(*_a: Any, **_kw: Any) -> Any:
+        raise NoCredentialsError()
+
+    monkeypatch.setattr(boto3, "client", _raise_no_creds)
+    store_creds = S3CampaignStore(storage, tmp_path / "scratch3")
+    assert store_creds.sample_states(rec) == {"0000": "complete"}
+
+    # 3. Non-aws_batch executor skips Batch reconciliation entirely
+    local_rec = S3Handoff(
+        campaign_id="camp_local",
+        submitted_at=1.0,
+        sample_ids=["0000"],
+        executor="local",
+        job_ids={"0000": "j0"},
+    )
+    store_err.write_handoff(local_rec)
+    failing_client.describe_jobs.reset_mock()
+    assert store_err.sample_states(local_rec) == {}
+    failing_client.describe_jobs.assert_not_called()
+
+    # 4. Calling sample_states(None) without campaign_id raises ValueError
+    with pytest.raises(ValueError, match="requires either record or campaign_id"):
+        store_err.sample_states()
+
+
+def test_download_propagates_batch_failure_reason_to_failed_simulations_and_download_data_csv(
+    tmp_path: Path,
+) -> None:
+    """Issue #2058: Batch OOM failure reason is preserved through download() into failed_simulations.csv and download_data.csv."""
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    batch_client = mock.MagicMock()
+    batch_client.describe_jobs.return_value = {
+        "jobs": [
+            {
+                "jobId": "job-oom-0001",
+                "status": "FAILED",
+                "container": {
+                    "exitCode": 137,
+                    "reason": "OutOfMemoryError: Container killed due to memory usage",
+                },
+            }
+        ]
+    }
+    storage = FakeStorage(tmp_path / "bucket")
+    store = S3CampaignStore(storage, tmp_path / "scratch", batch_client=batch_client)
+
+    samples = tmp_path / "samples.json"
+    samples.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "0000", "values": {"hvac.cop": 3.5}},
+                    {"sample_id": "0001", "values": {"hvac.cop": 2.0}},
+                ]
+            }
+        )
+    )
+    rec = new_handoff(
+        "camp_oom_dl",
+        ["0000", "0001"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "job-ok-0000", "0001": "job-oom-0001"},
+    )
+    store.write_handoff(rec, samples)
+
+    # Sample 0000 succeeds; sample 0001 died from OOM before uploading anything to S3
+    s0 = storage.root / "camp_oom_dl" / "work" / "sim" / "0000"
+    s0.mkdir(parents=True, exist_ok=True)
+    _write_sql(s0 / "eplusout.sql")
+    (s0 / COMPLETE_MARKER).write_text("")
+
+    out = tmp_path / "out_oom_dl"
+    res = store.download("camp_oom_dl", out)
+    assert res["completed"] == 2
+    assert res["failed"] == ["0001"]
+    assert sorted(res["fetched"]) == ["0000", "0001"]
+
+    expected_msg = (
+        "AWS Batch job job-oom-0001 FAILED (exit_code=137): "
+        "OutOfMemoryError: Container killed due to memory usage"
+    )
+    local_failed_marker = out / "work" / "sim" / "0001" / FAILED_MARKER
+    assert local_failed_marker.is_file()
+    assert local_failed_marker.read_text().strip() == expected_msg
+
+    failed_df = pd.read_csv(out / "failed_simulations.csv", dtype=str, keep_default_na=False)
+    assert len(failed_df) == 1
+    assert failed_df["sample_id"].iloc[0] == "0001"
+    assert failed_df["error_summary"].iloc[0] == expected_msg
+
+    dl_df = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert len(dl_df) == 2
+    assert dl_df["name"].tolist() == ["0000", "0001"]
+    assert dl_df["status"].tolist() == ["completed", "completed"]
+    assert dl_df["status_message"].tolist() == ["completed normal", "datapoint failure"]
+    assert dl_df[SIMULATION_FAILED_COL].iloc[0] == ""
+    assert dl_df[SIMULATION_FAILED_COL].iloc[1] == expected_msg
