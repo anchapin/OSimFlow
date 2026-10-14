@@ -307,6 +307,11 @@ class AlgorithmRegistry:
         """Return the sorted list of registered algorithm names."""
         return sorted(cls._registry)
 
+    @classmethod
+    def available(cls) -> list[str]:
+        """Alias for :meth:`list_available`."""
+        return cls.list_available()
+
     # ------------------------------------------------------------------
     # Entry-point plug-in discovery (issue #432)
     # ------------------------------------------------------------------

@@ -319,6 +319,52 @@ class TestLoadConfig:
         assert cfg.custom_apply_script == apply_script.resolve()
         assert cfg.custom_kpi_extractor == kpi_script.resolve()
 
+    def test_algorithm_precedence_variables_yml_when_cli_omitted(
+        self, template_pkg: Path, outdir: Path, tmp_path: Path
+    ) -> None:
+        """Issue #2057: variables.yml algorithm: is honored when CLI --algorithm is omitted."""
+        vars_path = tmp_path / "vars_fact.yml"
+        vars_path.write_text(
+            "algorithm: full_factorial\n"
+            "variables:\n"
+            "  - name: wall_r\n"
+            "    distribution: discrete\n"
+            "    values: [5, 10, 15]\n"
+            "    levels: [5, 10, 15]\n"
+        )
+        args = _base_args(vars_path, template_pkg, outdir, algorithm=None)
+        cfg = load_config(args)
+        assert cfg.algorithm == "full_factorial"
+
+    def test_algorithm_precedence_cli_overrides_variables_yml(
+        self, template_pkg: Path, outdir: Path, tmp_path: Path
+    ) -> None:
+        """Issue #2057: CLI --algorithm overrides variables.yml algorithm:."""
+        vars_path = tmp_path / "vars_fact.yml"
+        vars_path.write_text(
+            "algorithm: full_factorial\n"
+            "variables:\n"
+            "  - name: wall_r\n"
+            "    distribution: uniform\n"
+            "    min: 5.0\n"
+            "    max: 15.0\n"
+        )
+        args = _base_args(vars_path, template_pkg, outdir, algorithm="sobol")
+        cfg = load_config(args)
+        assert cfg.algorithm == "sobol"
+
+    def test_algorithm_precedence_defaults_to_lhs_when_neither_set(
+        self, template_pkg: Path, outdir: Path, tmp_path: Path
+    ) -> None:
+        """Issue #2057: defaults to 'lhs' when neither CLI --algorithm nor variables.yml sets it."""
+        vars_path = tmp_path / "vars_no_algo.yml"
+        vars_path.write_text(
+            "variables:\n  - name: wall_r\n    distribution: uniform\n    min: 5.0\n    max: 15.0\n"
+        )
+        args = _base_args(vars_path, template_pkg, outdir, algorithm=None)
+        cfg = load_config(args)
+        assert cfg.algorithm == "lhs"
+
     def test_slurm_advanced_directives(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:

@@ -34,6 +34,7 @@ stable batch -> campaign/outdir mapping.
 
 import json
 import logging
+import math
 import re
 import shutil
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from typing import Any
 
 import yaml
 
+from osimflow.algorithms import AlgorithmRegistry
 from osimflow.errors import OSimFlowError
 
 log = logging.getLogger("osimflow.importers.gem_osa")
@@ -54,7 +56,23 @@ _FILE_RE = re.compile(
     r"(?:(?:_(?P<custom>[A-Za-z0-9].*))|(?:_?(?P<batch>Batch(?P<num>\d+)(?:_(?P<name>.+))?)))?\.json$"
 )
 _BATCH_RE = re.compile(r"^Batch(?P<num>\d+)(?:_(?P<name>.+))?$")
-_NON_MEASURE_KEYS = {"algorithm_setting"}
+_NON_MEASURE_KEYS = {
+    "algorithm_setting",
+    "algorithm_settings",
+    "analysis_settings",
+    "osa_settings",
+}
+_GEM_ANALYSIS_TYPE_MAP: dict[str, str] = {
+    "": "lhs",
+    "lhs": "lhs",
+    "single_run": "lhs",
+    "repeat_run": "lhs",
+    "preflight": "lhs",
+    "doe": "full_factorial",
+    "full_factorial": "full_factorial",
+    "sobol": "sobol",
+    "morris": "morris",
+}
 
 
 class GemImportError(OSimFlowError):
@@ -145,7 +163,17 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _spec_to_variable(measure: str, argument: str, spec: Any) -> dict[str, Any]:
+def _factorial_levels_for_entry(entry: dict[str, Any], spec: Any) -> list[Any]:
+    if isinstance(spec, list) and spec and "values" not in entry:
+        return list(spec)
+    if "values" in entry:
+        return list(entry["values"])
+    return [entry["min"], entry["max"]]
+
+
+def _spec_to_variable(
+    measure: str, argument: str, spec: Any, *, full_factorial: bool = False
+) -> dict[str, Any]:
     name = f"{measure}.{argument}"
     entry: dict[str, Any] = {"name": name, "measure_argument": name}
     if isinstance(spec, dict):
@@ -166,10 +194,14 @@ def _spec_to_variable(measure: str, argument: str, spec: Any) -> dict[str, Any]:
             entry.update(distribution="categorical", values=values)
     else:
         raise GemImportError(f"{name}: unsupported parametric_space spec {spec!r}")
+    if full_factorial:
+        entry["levels"] = _factorial_levels_for_entry(entry, spec)
     return entry
 
 
-def parametric_space_to_variables(space: dict[str, Any]) -> list[dict[str, Any]]:
+def parametric_space_to_variables(
+    space: dict[str, Any], *, full_factorial: bool = False
+) -> list[dict[str, Any]]:
     """Convert a gem ``parametric_space`` mapping to ``variables.yml`` entries."""
     variables: list[dict[str, Any]] = []
     for measure, arguments in space.items():
@@ -178,38 +210,65 @@ def parametric_space_to_variables(space: dict[str, Any]) -> list[dict[str, Any]]
         if not isinstance(arguments, dict):
             raise GemImportError(f"{measure}: expected an object of argument specs")
         for argument, spec in arguments.items():
-            variables.append(_spec_to_variable(measure, argument, spec))
+            variables.append(
+                _spec_to_variable(measure, argument, spec, full_factorial=full_factorial)
+            )
     if not variables:
         raise GemImportError("parametric_space defines no variables")
     return variables
 
 
+def _merge_settings_dict(source: dict[str, Any], target: dict[str, Any]) -> None:
+    """Recursively merge non-measure setting dicts from *source* into *target*."""
+    for key in ("osa_settings", "analysis_settings", "algorithm_settings", "algorithm_setting"):
+        block = source.get(key)
+        if isinstance(block, dict):
+            for k, v in block.items():
+                if k in _NON_MEASURE_KEYS and isinstance(v, dict):
+                    _merge_settings_dict({k: v}, target)
+                elif v is not None:
+                    target[k] = v
+
+
 def _algorithm_settings(
     batch: GemBatch, space: dict[str, Any] | None, configs: dict[str, Any]
 ) -> dict[str, Any]:
-    """Merge seed / number_of_samples / sample_method (batch files win over configs.yml)."""
+    """Merge seed / number_of_samples / sample_method / analysis_type (batch files win over configs.yml)."""
     settings: dict[str, Any] = {}
-    cfg_settings = (
-        (configs.get("osa_settings") or {}).get("analysis_settings", {}).get("algorithm_settings")
-    )
-    if isinstance(cfg_settings, dict):
-        settings.update({k: v for k, v in cfg_settings.items() if v is not None})
-    cfg_type = (configs.get("osa_settings") or {}).get("analysis_settings", {}).get("analysis_type")
-    if cfg_type:
-        settings.setdefault("analysis_type", cfg_type)
+    _merge_settings_dict(configs, settings)
     if batch.osa_workflow:
-        problem = _load_json(batch.osa_workflow).get("analysis", {}).get("problem", {})
+        raw_osa = _load_json(batch.osa_workflow)
+        analysis_obj = raw_osa.get("analysis", raw_osa)
+        problem = analysis_obj.get("problem", {}) if isinstance(analysis_obj, dict) else {}
         algo = problem.get("algorithm") if isinstance(problem, dict) else None
         if isinstance(algo, dict):
             settings.update({k: v for k, v in algo.items() if k in _ALGO_KEYS and v is not None})
         if isinstance(problem, dict) and problem.get("analysis_type"):
             settings["analysis_type"] = problem["analysis_type"]
-    if space and isinstance(space.get("algorithm_setting"), dict):
-        settings.update({k: v for k, v in space["algorithm_setting"].items() if v is not None})
+    if space:
+        _merge_settings_dict(space, settings)
     return settings
 
 
-_ALGO_KEYS = {"seed", "number_of_samples", "sample_method"}
+_ALGO_KEYS = {"seed", "number_of_samples", "sample_method", "analysis_type"}
+
+
+def _resolve_gem_algorithm(analysis_type: Any) -> str:
+    """Map gem ``analysis_type`` to an OSimFlow algorithm name."""
+    if analysis_type is None:
+        return "lhs"
+    if not isinstance(analysis_type, str):
+        raise GemImportError(f"analysis_type must be a string, got {analysis_type!r}")
+    norm = analysis_type.strip().lower()
+    if norm in _GEM_ANALYSIS_TYPE_MAP:
+        return _GEM_ANALYSIS_TYPE_MAP[norm]
+    if norm in AlgorithmRegistry.available():
+        return norm
+    raise GemImportError(
+        f"unsupported gem analysis_type {analysis_type!r}; "
+        f"expected one of {sorted(set(_GEM_ANALYSIS_TYPE_MAP) - {''})} "
+        f"or a registered algorithm ({', '.join(AlgorithmRegistry.available())})"
+    )
 
 
 def _as_int(value: Any) -> int | None:
@@ -510,6 +569,25 @@ def _preserve_cleanup_sql(osw_path: Path, varied: set[str]) -> None:
         osw_path.write_text(json.dumps(osw, indent=2), encoding="utf-8")
 
 
+def _resolve_batch_n_samples(
+    settings: dict[str, Any],
+    raw_analysis_type: Any,
+    variables: list[dict[str, Any]],
+    *,
+    is_full_factorial: bool,
+) -> int | None:
+    if is_full_factorial:
+        return math.prod(len(v["levels"]) for v in variables) if variables else 0
+    n_samples = _as_int(settings.get("number_of_samples"))
+    if (
+        n_samples is None
+        and isinstance(raw_analysis_type, str)
+        and raw_analysis_type.strip().lower() == "single_run"
+    ):
+        return 1
+    return n_samples
+
+
 def _import_batch(
     batch: GemBatch,
     output_dir: Path,
@@ -522,14 +600,17 @@ def _import_batch(
             "enough; use `osimflow import-osa` for server analysis JSON)"
         )
     space = _load_json(batch.parametric_space)
-    variables = parametric_space_to_variables(space)
     settings = _algorithm_settings(batch, space, configs)
+    raw_analysis_type = settings.get("analysis_type")
+    algorithm = _resolve_gem_algorithm(raw_analysis_type)
+    is_full_factorial = algorithm == "full_factorial"
+    variables = parametric_space_to_variables(space, full_factorial=is_full_factorial)
     seed = _parse_seed(settings.get("seed"))
 
     batch_dir = output_dir / batch.batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
     variables_path = batch_dir / "variables.yml"
-    variables_doc: dict[str, Any] = {"algorithm": "lhs"}
+    variables_doc: dict[str, Any] = {"algorithm": algorithm}
     if seed is not None:
         variables_doc["seed"] = seed
     variables_doc["variables"] = variables
@@ -561,7 +642,9 @@ def _import_batch(
                 log.warning("%s: measure %r has no step in %s", batch.batch_id, measure, osw_path)
         _preserve_cleanup_sql(osw_path, varied)
 
-    n_samples = _as_int(settings.get("number_of_samples"))
+    n_samples = _resolve_batch_n_samples(
+        settings, raw_analysis_type, variables, is_full_factorial=is_full_factorial
+    )
     outdir = batch_dir / "results"
     command = ["osimflow", "run", "--input_variables", str(variables_path)]
     if package_path is not None:

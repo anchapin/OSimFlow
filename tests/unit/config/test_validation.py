@@ -397,6 +397,48 @@ class TestValidateVariablesYml:
         result = validate_variables_yml(path)
         assert len(result) == 1
 
+    def test_valid_top_level_algorithm(self, tmp_path: Path) -> None:
+        """Issue #2057: valid top-level algorithm in variables.yml passes validation."""
+        path = _write_yml(
+            tmp_path,
+            {
+                "algorithm": "full_factorial",
+                "variables": [
+                    {"name": "x", "distribution": "discrete", "values": [1, 2], "levels": [1, 2]}
+                ],
+            },
+        )
+        result = validate_variables_yml(path)
+        assert len(result) == 1
+
+    def test_unknown_top_level_algorithm_rejected(self, tmp_path: Path) -> None:
+        """Issue #2057: unknown top-level algorithm in variables.yml raises ValidationError."""
+        path = _write_yml(
+            tmp_path,
+            {
+                "algorithm": "not_a_real_algorithm",
+                "variables": [{"name": "x", "distribution": "uniform", "min": 0, "max": 1}],
+            },
+        )
+        with pytest.raises(
+            ValidationError, match="Unknown algorithm 'not_a_real_algorithm'"
+        ) as exc_info:
+            validate_variables_yml(path)
+        assert exc_info.value.field == "algorithm"
+
+    def test_empty_top_level_algorithm_rejected(self, tmp_path: Path) -> None:
+        """Issue #2057: empty/non-string top-level algorithm in variables.yml raises ValidationError."""
+        path = _write_yml(
+            tmp_path,
+            {
+                "algorithm": "   ",
+                "variables": [{"name": "x", "distribution": "uniform", "min": 0, "max": 1}],
+            },
+        )
+        with pytest.raises(ValidationError, match="must be a non-empty string") as exc_info:
+            validate_variables_yml(path)
+        assert exc_info.value.field == "algorithm"
+
 
 # ======================================================================
 # Template package validation

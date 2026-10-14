@@ -46,6 +46,27 @@ log = logging.getLogger("osimflow.algorithms.factorial")
 # ======================================================================
 
 
+def _resolve_var_levels(var_def: dict[str, Any], var_name: str) -> list[Any]:
+    """Return a non-empty list of factorial levels for *var_def*."""
+    levels = var_def.get("levels")
+    if levels is None:
+        values = var_def.get("values")
+        if isinstance(values, list) and len(values) > 0:
+            levels = values
+        elif var_def.get("min") is not None and var_def.get("max") is not None:
+            levels = [var_def["min"], var_def["max"]]
+        else:
+            raise ValueError(
+                f"FullFactorialAlgorithm requires a 'levels' key for variable "
+                f"'{var_name}'. Got keys: {sorted(var_def.keys())}"
+            )
+    if not isinstance(levels, list) or len(levels) == 0:
+        raise ValueError(
+            f"'levels' for variable '{var_name}' must be a non-empty list, got {levels!r}"
+        )
+    return list(levels)
+
+
 def _fullfact_samples(
     var_defs: list[dict[str, Any]],
     n_samples: int,
@@ -81,7 +102,6 @@ def _fullfact_samples(
     for var_def in var_defs:
         var_name = var_def["name"]
         var_names.append(var_name)
-        levels = var_def.get("levels")
         discrete_dist = var_def.get("discrete_distribution")
         pmf: dict[Any, float] | None = None
         if discrete_dist is not None and isinstance(discrete_dist, dict):
@@ -91,17 +111,8 @@ def _fullfact_samples(
             level_lists.append(list(pmf.keys()))
             discrete_pmf_vars.append(pmf)
         else:
-            if levels is None:
-                raise ValueError(
-                    f"FullFactorialAlgorithm requires a 'levels' key for variable "
-                    f"'{var_name}'. Got keys: {sorted(var_def.keys())}"
-                )
-            if not isinstance(levels, list) or len(levels) == 0:
-                raise ValueError(
-                    f"'levels' for variable '{var_name}' must be a non-empty list, got {levels!r}"
-                )
             has_pmf.append(False)
-            level_lists.append(list(levels))
+            level_lists.append(_resolve_var_levels(var_def, var_name))
             discrete_pmf_vars.append(None)
 
     has_any_pmf = any(has_pmf)

@@ -381,7 +381,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument("--log_level", default="INFO")
     run.add_argument(
         "--algorithm",
-        default="lhs",
+        default=None,
         help=(
             "Sampling algorithm to use (default: lhs). "
             "Available algorithms are registered in AlgorithmRegistry."
