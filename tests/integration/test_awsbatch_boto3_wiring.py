@@ -28,6 +28,11 @@ from osimflow.executors import AWSBatchExecutor
 from tests.integration._aws_patch import patch_boto3_client
 
 
+@pytest.fixture(autouse=True)
+def _payload_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
+
+
 # ---------------------------------------------------------------------------
 # Lazy import: boto3 is heavy and not installed in the minimal local
 # environment. The executor must NOT import boto3 at import time; it

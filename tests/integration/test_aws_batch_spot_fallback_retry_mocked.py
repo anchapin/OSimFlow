@@ -31,6 +31,11 @@ _OD_JOB_DEF = "osimflow-test-ondemand-job-def"
 _SPOT_REASON = "Host EC2 (instance i-0abc) terminated. Spot interruption"
 
 
+@pytest.fixture(autouse=True)
+def _payload_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
+
+
 def _add_on_demand_route(batch: Any) -> None:
     ce_arn = batch.describe_compute_environments()["computeEnvironments"][0][
         "computeEnvironmentArn"

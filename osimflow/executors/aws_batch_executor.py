@@ -41,8 +41,11 @@ from osimflow.executors.transport import (
 )
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SECRET_FILE_ENV,
+    TASK_PAYLOAD_SIG_ENV,
     build_signature_env,
     build_transport_signature_env,
+    resolve_payload_secret,
 )
 
 log = logging.getLogger("osimflow.executors")
@@ -724,30 +727,19 @@ class AWSBatchExecutor(BaseExecutor):
         if container is not None:
             resolved = container
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
+        signing_secret: str | None = None
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
-            # Issue #1445/#1633: when a shared secret is configured, sign
-            # the exact payload bytes and propagate secret + signature so
-            # the remote_runner verifies before decoding/executing (same
-            # contract as the Nomad / Azure / Google / DockerSwarm
-            # paths). No-op in legacy unsigned mode. When a
-            # ``payload_secret_arn`` is configured (issue #1633) the
-            # signature ships alone — the raw secret is delivered
-            # via the job definition's ``containerProperties.secrets`` so it never
-            # appears in the job spec (readable via DescribeJobs).
+            # Issue #1445/#1633/#2025: osimflow.remote_runner is fail-closed
+            # (issue #1205) and rejects unsigned task payloads at container
+            # startup. Require a resolvable signing secret on the orchestrator
+            # so AWSBatchExecutor never silently submits an unsigned payload.
+            # When ``payload_secret_arn`` is configured (issue #1633) the
+            # signature ships alone — the raw secret is delivered via the job
+            # definition's ``containerProperties.secrets`` so it never appears
+            # in containerOverrides.environment (readable via DescribeJobs).
             payload_secret_arn = getattr(self, "payload_secret_arn", None)
-            if payload_secret_arn and not os.environ.get(TASK_PAYLOAD_SECRET_ENV):
-                log.warning(
-                    "aws-batch-payload-secret-arn=%r is configured but no "
-                    "%s is set on the orchestrator, so the payload cannot "
-                    "be signed; submitting unsigned (legacy mode). Set %s "
-                    "on the orchestrator — and the same value in the "
-                    "referenced secret — to enable HMAC verification "
-                    "(issue #1633).",
-                    payload_secret_arn,
-                    TASK_PAYLOAD_SECRET_ENV,
-                    TASK_PAYLOAD_SECRET_ENV,
-                )
+            signing_secret = self._resolve_signing_secret()
             if not payload_secret_arn and TASK_PAYLOAD_SECRET_ENV in os.environ:
                 # Issue #1633: without a job-definition secret the
                 # shared secret ships as a literal env value serialized
@@ -770,7 +762,10 @@ class AWSBatchExecutor(BaseExecutor):
                     "value": value,
                 }
                 for key, value in build_signature_env(
-                    task_payload, include_secret=payload_secret_arn is None
+                    task_payload,
+                    secret=signing_secret,
+                    include_secret=payload_secret_arn is None,
+                    require_secret=True,
                 ).items()
             )
         if transport is not None:
@@ -787,12 +782,57 @@ class AWSBatchExecutor(BaseExecutor):
                 )
             # Issue #1549: second HMAC over the canonical result-transport
             # settings (see ``build_transport_signature_env``).
-            for _key, _value in build_transport_signature_env(transport).items():
+            for _key, _value in build_transport_signature_env(
+                transport, secret=signing_secret
+            ).items():
                 env.append({"name": _key, "value": _value})
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
+
+    def _resolve_signing_secret(self) -> str:
+        """Return the non-empty HMAC secret for signing ``OSIMFLOW_TASK_PAYLOAD``.
+
+        ``osimflow.remote_runner`` is fail-closed (issue #1205) and rejects
+        any task payload when ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is absent in
+        the worker container.  Resolving and validating the secret locally
+        before staging inputs or calling ``batch:SubmitJob`` eliminates the
+        silent unsigned submission trap where Batch jobs launch only to fail
+        immediately at container startup (issue #2025).
+        """
+        secret = resolve_payload_secret()
+        if secret:
+            return secret
+        cached = getattr(self, "_resolved_payload_secret", None)
+        if isinstance(cached, str) and cached:
+            return cached
+        payload_secret_arn = getattr(self, "payload_secret_arn", None)
+        secrets_client = getattr(self, "_secrets_client", None)
+        if payload_secret_arn and secrets_client is not None:
+            resp = secrets_client.get_secret_value(SecretId=payload_secret_arn)
+            fetched = str(resp.get("SecretString") or "").strip()
+            if fetched:
+                self._resolved_payload_secret = fetched
+                return fetched
+        if payload_secret_arn:
+            raise RuntimeError(
+                f"--aws-batch-payload-secret-arn={payload_secret_arn!r} is configured, "
+                f"but {TASK_PAYLOAD_SECRET_ENV} is not set on the orchestrator — "
+                f"cannot compute {TASK_PAYLOAD_SIG_ENV}. Refusing to submit an "
+                "unsigned AWS Batch task payload that osimflow.remote_runner will "
+                f"reject at container startup. Export {TASK_PAYLOAD_SECRET_ENV} "
+                f"(or {TASK_PAYLOAD_SECRET_FILE_ENV}) on the orchestrator with the "
+                "same secret value stored in the ARN (issue #1633, #2025)."
+            )
+        raise RuntimeError(
+            f"{TASK_PAYLOAD_SECRET_ENV} is not configured — refusing to submit an "
+            "unsigned AWS Batch task payload that osimflow.remote_runner will reject "
+            f"at container startup. Export {TASK_PAYLOAD_SECRET_ENV} (or "
+            f"{TASK_PAYLOAD_SECRET_FILE_ENV}) on the orchestrator, and for production "
+            "pass --aws-batch-payload-secret-arn <arn> with a job definition that "
+            "injects it via containerProperties.secrets (issue #1205, #2025)."
+        )
 
     def _validate_job_definition_secret(self, job_definition: str) -> None:
         """Fail before submission unless the job definition injects the secret.
@@ -1326,6 +1366,9 @@ class AWSBatchExecutor(BaseExecutor):
         # work function in container-local storage.
         step_name = self._infer_step_name(name)
         self.validate_work_fn(step_name, fn)
+        # Issue #2025: fail fast before staging inputs or submitting any
+        # AWS Batch job when no signing secret is configured.
+        self._resolve_signing_secret()
         # Issue #1809: the Batch container shares no filesystem with the
         # controller — stage every Path in S3 and ship references instead.
         work_kwargs: dict[str, Any] = (

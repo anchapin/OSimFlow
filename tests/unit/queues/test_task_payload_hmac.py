@@ -8,12 +8,15 @@ Covers the shared signing/verification helpers in
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from osimflow import remote_runner
 from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_ENV,
+    TASK_PAYLOAD_HMAC_ENV,
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SECRET_FILE_ENV,
     TASK_PAYLOAD_SIG_ENV,
@@ -142,6 +145,25 @@ class TestBuildSignatureEnv:
     def test_include_secret_false_empty_in_legacy_unsigned_mode(self) -> None:
         assert build_signature_env(VALID_PAYLOAD, include_secret=False) == {}
 
+    def test_require_secret_raises_when_missing(self) -> None:
+        """Issue #2025: executors invoking remote_runner must not fall back to {}."""
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            build_signature_env(VALID_PAYLOAD, require_secret=True)
+
+    def test_require_secret_raises_when_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, "")
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            build_signature_env(VALID_PAYLOAD, require_secret=True)
+
+    def test_resolves_secret_from_secret_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret_file = tmp_path / "payload_secret"
+        secret_file.write_text(f"{SECRET}\n", encoding="utf-8")
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
+        sig_env = build_signature_env(VALID_PAYLOAD, include_secret=False, require_secret=True)
+        assert sig_env == {TASK_PAYLOAD_SIG_ENV: sign_task_payload(VALID_PAYLOAD, SECRET)}
+
 
 class TestRemoteRunnerVerification:
     def test_valid_signature_decodes_and_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,3 +226,160 @@ class TestRemoteRunnerVerification:
         assert executed == []
         stderr = capsys.readouterr().err
         assert "verification failed" in stderr
+
+
+class TestAwsBatchToRemoteRunnerAlignment:
+    """Issue #2025: end-to-end alignment between AWSBatchExecutor and remote_runner."""
+
+    AWS_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:osimflow-hmac-AbCdEf"
+
+    def test_submit_fails_fast_before_submit_job_when_secret_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing secret fails locally before staging inputs or calling submit_job."""
+        from unittest.mock import MagicMock
+
+        from osimflow.executors import AWSBatchExecutor
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor()
+        client = MagicMock()
+        ex._client = client  # noqa: SLF001
+
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            ex.submit(lambda: "ok", name="sim_0001")
+        client.submit_job.assert_not_called()
+
+        ex_with_arn = AWSBatchExecutor(payload_secret_arn=self.AWS_SECRET_ARN)
+        ex_with_arn._client = client  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="aws-batch-payload-secret-arn"):
+            ex_with_arn.submit(lambda: "ok", name="sim_0001")
+        client.submit_job.assert_not_called()
+
+    def test_end_to_end_build_environment_to_remote_runner_main(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Convert AWSBatchExecutor._build_environment(...) output into an env map,
+        register a harmless step, invoke remote_runner.main(), and verify all 4 cases:
+        1. valid signature executes once;
+        2. altered payload or altered signature fails;
+        3. missing secret fails before remote job submission;
+        4. payload_secret_arn mode emits OSIMFLOW_TASK_PAYLOAD_SIG (TASK_PAYLOAD_HMAC_ENV)
+           and no literal OSIMFLOW_TASK_PAYLOAD_SECRET override.
+        """
+        import sys
+        from unittest.mock import MagicMock
+
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.remote_runner import StepFunctionRegistry
+
+        monkeypatch.setattr(sys, "argv", ["osimflow.remote_runner"])
+        executed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def _harmless_step(*args: object, **kwargs: object) -> dict[str, object]:
+            executed.append((args, kwargs))
+            return {"status": "ran", "args": list(args)}
+
+        monkeypatch.setitem(StepFunctionRegistry._registry, "harmless_2025", _harmless_step)  # noqa: SLF001
+        payload_str = json.dumps(
+            {
+                "schema_version": 1,
+                "name": "harmless_0001",
+                "step": "harmless_2025",
+                "args": ["sample-0001"],
+                "kwargs": {"flag": True},
+            }
+        )
+
+        # (3) Missing secret fails before remote job submission.
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex_unsigned = AWSBatchExecutor()
+        mock_batch = MagicMock()
+        ex_unsigned._client = mock_batch  # noqa: SLF001
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            ex_unsigned._build_environment(  # noqa: SLF001
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                task_payload=payload_str,
+            )
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            ex_unsigned.submit(_harmless_step, "sample-0001", name="sim_0001")
+        mock_batch.submit_job.assert_not_called()
+        assert executed == []
+
+        # (1) Valid signature executes once in default (literal-secret) mode.
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+        ex_default = AWSBatchExecutor()
+        env_entries = ex_default._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=payload_str,
+        )
+        env_map = {entry["name"]: entry["value"] for entry in env_entries}
+        assert env_map[TASK_PAYLOAD_ENV] == payload_str
+        assert env_map[TASK_PAYLOAD_HMAC_ENV] == sign_task_payload(payload_str, SECRET)
+        assert env_map[TASK_PAYLOAD_SECRET_ENV] == SECRET
+
+        for key in (TASK_PAYLOAD_ENV, TASK_PAYLOAD_SIG_ENV, TASK_PAYLOAD_SECRET_ENV):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in env_map.items():
+            monkeypatch.setenv(key, value)
+
+        rc = remote_runner.main()
+        assert rc == 0
+        assert len(executed) == 1
+        assert executed[0] == (("sample-0001",), {"flag": True})
+        capsys.readouterr()
+
+        # (2a) Altered payload fails without executing the step.
+        executed.clear()
+        tampered_payload = json.dumps(
+            {
+                "schema_version": 1,
+                "name": "harmless_0001",
+                "step": "harmless_2025",
+                "args": ["tampered-sample"],
+                "kwargs": {"flag": True},
+            }
+        )
+        monkeypatch.setenv(TASK_PAYLOAD_ENV, tampered_payload)
+        rc_tampered_payload = remote_runner.main()
+        assert rc_tampered_payload == 1
+        assert executed == []
+        assert "verification failed" in capsys.readouterr().err
+
+        # (2b) Altered signature fails without executing the step.
+        monkeypatch.setenv(TASK_PAYLOAD_ENV, payload_str)
+        monkeypatch.setenv(TASK_PAYLOAD_SIG_ENV, "0" * 64)
+        rc_tampered_sig = remote_runner.main()
+        assert rc_tampered_sig == 1
+        assert executed == []
+        assert "verification failed" in capsys.readouterr().err
+
+        # (4) payload_secret_arn mode emits OSIMFLOW_TASK_PAYLOAD_SIG
+        # (TASK_PAYLOAD_HMAC_ENV) and no literal OSIMFLOW_TASK_PAYLOAD_SECRET
+        # override, and executes once when the container receives the secret
+        # from containerProperties.secrets.
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+        ex_arn = AWSBatchExecutor(payload_secret_arn=self.AWS_SECRET_ARN)
+        arn_env_entries = ex_arn._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=payload_str,
+        )
+        arn_env_map = {entry["name"]: entry["value"] for entry in arn_env_entries}
+        assert TASK_PAYLOAD_HMAC_ENV in arn_env_map
+        assert arn_env_map[TASK_PAYLOAD_HMAC_ENV] == sign_task_payload(payload_str, SECRET)
+        assert TASK_PAYLOAD_SECRET_ENV not in arn_env_map
+
+        for key in (TASK_PAYLOAD_ENV, TASK_PAYLOAD_SIG_ENV, TASK_PAYLOAD_SECRET_ENV):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in arn_env_map.items():
+            monkeypatch.setenv(key, value)
+        # Simulate AWS Batch injecting the secret from containerProperties.secrets:
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+
+        rc_arn = remote_runner.main()
+        assert rc_arn == 0
+        assert len(executed) == 1
+        assert executed[0] == (("sample-0001",), {"flag": True})

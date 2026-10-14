@@ -210,7 +210,8 @@ class TestSubmitJobWithRetry:
 # ---------------------------------------------------------------------------
 class TestSubmitJobRateLimiting:
     @pytest.fixture
-    def executor(self) -> AWSBatchExecutor:
+    def executor(self, monkeypatch: pytest.MonkeyPatch) -> AWSBatchExecutor:
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
         executor = AWSBatchExecutor(
             job_queue="test-queue",
             job_definition="test-def",

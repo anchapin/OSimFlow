@@ -40,6 +40,11 @@ _QUEUE_NAME = "osimflow-test-queue"
 _JOB_DEF_NAME = "osimflow-test-job-def"
 
 
+@pytest.fixture(autouse=True)
+def _payload_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
+
+
 def _setup_batch_infra(client: object) -> tuple[str, str]:
     """Create the minimal Batch infra (compute env + queue + job def).
 

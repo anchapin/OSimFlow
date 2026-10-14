@@ -47,6 +47,7 @@ def _make_mock_aws_executor():
     ex._submit_limiter = MagicMock()
     ex._spot_price_cache = MagicMock()
     ex._retry_config = MagicMock()
+    ex._resolved_payload_secret = "test-hmac-secret"
     return ex
 
 
