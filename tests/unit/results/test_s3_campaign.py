@@ -729,3 +729,154 @@ def test_detach_s3_aws_batch_stages_external_epw_and_hits_apply_cache(
             assert campaign._sample_state[sid]["apply_status"] == "cached"
 
     assert result["status"] == "detached"
+
+
+def _failed_sample_remote(store: S3CampaignStore, cid: str, sid: str, err_msg: str) -> None:
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    root: Path = store.storage.root  # type: ignore[attr-defined]
+    d = root / cid / "work" / "sim" / sid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "eplusout.err").write_text(f"Program Version,EnergyPlus\n   ** Severe  ** {err_msg}\n")
+    (d / "out.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "measure_dir_name": "hvac",
+                        "result": {"step_result": "Fail", "step_errors": [err_msg]},
+                    }
+                ]
+            }
+        )
+    )
+    (d / FAILED_MARKER).write_text("RuntimeError: simulation failed\n")
+
+
+def test_download_mixed_incremental_and_stale_kpi_for_failed_sample(
+    store: S3CampaignStore, tmp_path: Path
+) -> None:
+    """Issue #2041: mixed success/failure + incremental download + stale kpi_<failed>.json ignored."""
+    samples = tmp_path / "samples.json"
+    samples.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "0000", "values": {"hvac.cop": 3.5, "envelope.wall_r": 12.0}},
+                    {"sample_id": "0001", "values": {"hvac.cop": 2.0, "envelope.wall_r": 9.0}},
+                ]
+            }
+        )
+    )
+    rec = new_handoff(
+        "camp_mix",
+        ["0000", "0001"],
+        openstudio_version="3.10.0",
+        kpis=None,
+        job_ids={"0000": "j0", "0001": "j1"},
+    )
+    store.write_handoff(rec, samples)
+
+    out = tmp_path / "out_mix"
+
+    # 1. Empty (0 completed) download with --allow-partial writes download_data.csv with canonical header
+    res0 = store.download("camp_mix", out, allow_partial=True)
+    assert res0["completed"] == 0
+    assert res0["server_csv"] == out / "download_data.csv"
+    df0 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert df0.empty
+    assert list(df0.columns) == [
+        "name",
+        "_id",
+        "status",
+        "status_message",
+        "hvac.cop",
+        "envelope.wall_r",
+        SIMULATION_FAILED_COL,
+    ]
+
+    # 2. Sample 0001 fails first; partial download records it once as datapoint failure
+    _failed_sample_remote(store, "camp_mix", "0001", "Plant loop convergence failure")
+    # Pre-seed a stale kpi_0001.json on disk to ensure incremental download ignores it
+    kpi_dir = out / "kpis"
+    kpi_dir.mkdir(parents=True, exist_ok=True)
+    (kpi_dir / "kpi_0001.json").write_text(
+        json.dumps({"sample_id": "0001", "error": "eplusout.sql_missing"})
+    )
+
+    res1 = store.download("camp_mix", out, allow_partial=True)
+    assert res1["failed"] == ["0001"]
+    assert res1["server_csv"] == out / "download_data.csv"
+    df1 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert len(df1) == 1
+    assert df1["name"].tolist() == ["0001"]
+    assert df1["status"].tolist() == ["completed"]
+    assert df1["status_message"].tolist() == ["datapoint failure"]
+    assert "error" not in df1.columns
+    assert "Plant loop convergence failure" in df1[SIMULATION_FAILED_COL].iloc[0]
+
+    # 3. Sample 0000 succeeds; incremental download produces 1 normal row + 1 failure row (no duplicates)
+    root: Path = store.storage.root  # type: ignore[attr-defined]
+    s0 = root / "camp_mix" / "work" / "sim" / "0000"
+    s0.mkdir(parents=True, exist_ok=True)
+    _write_sql(s0 / "eplusout.sql")
+    (s0 / COMPLETE_MARKER).write_text("")
+
+    res2 = store.download("camp_mix", out)
+    assert res2["fetched"] == ["0000"]
+    df2 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert len(df2) == 2
+    assert df2["name"].tolist() == ["0000", "0001"]
+    assert df2["status_message"].tolist() == ["completed normal", "datapoint failure"]
+    assert "error" not in df2.columns
+    assert df2[SIMULATION_FAILED_COL].iloc[0] == ""
+    assert "Plant loop convergence failure" in df2[SIMULATION_FAILED_COL].iloc[1]
+
+    agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
+    assert agg_df["sample_id"].tolist() == ["0000"]
+
+
+def test_download_all_failed_campaign_writes_canonical_download_data_csv(
+    store: S3CampaignStore, tmp_path: Path
+) -> None:
+    """Issue #2041: all-failed campaign writes download_data.csv with canonical columns and no error KPI column."""
+    samples = tmp_path / "samples.json"
+    samples.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "0000", "values": {"hvac.cop": 3.5}},
+                    {"sample_id": "0001", "values": {"hvac.cop": 2.0}},
+                ]
+            }
+        )
+    )
+    rec = new_handoff(
+        "camp_fail",
+        ["0000", "0001"],
+        openstudio_version="3.10.0",
+        kpis=None,
+        job_ids={"0000": "j0", "0001": "j1"},
+    )
+    store.write_handoff(rec, samples)
+    _failed_sample_remote(store, "camp_fail", "0000", "Severe failure 0")
+    _failed_sample_remote(store, "camp_fail", "0001", "Severe failure 1")
+
+    out = tmp_path / "out_fail"
+    res = store.download("camp_fail", out)
+    assert res["failed"] == ["0000", "0001"]
+    assert res["server_csv"] == out / "download_data.csv"
+
+    df = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert list(df.columns) == [
+        "name",
+        "_id",
+        "status",
+        "status_message",
+        "hvac.cop",
+        SIMULATION_FAILED_COL,
+    ]
+    assert df["name"].tolist() == ["0000", "0001"]
+    assert df["status_message"].tolist() == ["datapoint failure", "datapoint failure"]
+    assert "Severe failure 0" in df[SIMULATION_FAILED_COL].iloc[0]
+    assert "Severe failure 1" in df[SIMULATION_FAILED_COL].iloc[1]

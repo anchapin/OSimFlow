@@ -79,15 +79,30 @@ def build_server_csv_frame(campaign_dir: Path) -> pd.DataFrame:
     """Return the server-layout DataFrame for one campaign directory."""
     ok = _read_csv(campaign_dir / "aggregated_results.csv")
     failed = _read_csv(campaign_dir / "failed_simulations.csv")
-    if ok.empty and failed.empty:
-        return pd.DataFrame()
-
     variables, sample_values = _load_samples(campaign_dir)
-    outputs = [
-        c
-        for c in ok.columns
-        if c not in _DROPPED_COLUMNS and c not in variables and c != SIMULATION_FAILED_COL
-    ]
+    if ok.empty and failed.empty:
+        columns = [*IDENTITY_COLUMNS, *variables, SIMULATION_FAILED_COL]
+        df = pd.DataFrame(columns=columns)
+        df.attrs["variables"] = list(variables)
+        return df
+
+    failed_ids: set[str] = (
+        {str(sid) for sid in failed["sample_id"].tolist()}
+        if not failed.empty and "sample_id" in failed.columns
+        else set()
+    )
+    if not ok.empty and "sample_id" in ok.columns and failed_ids:
+        ok = ok[~ok["sample_id"].astype(str).isin(failed_ids)]
+
+    outputs = (
+        [
+            c
+            for c in ok.columns
+            if c not in _DROPPED_COLUMNS and c not in variables and c != SIMULATION_FAILED_COL
+        ]
+        if not ok.empty
+        else []
+    )
 
     rows: list[dict[str, Any]] = []
     for rec in ok.to_dict(orient="records"):
