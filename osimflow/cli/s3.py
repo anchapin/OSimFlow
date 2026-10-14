@@ -45,8 +45,8 @@ def _cmd_s3(args: argparse.Namespace, action: str) -> int:
     from osimflow.s3_campaign import S3CampaignError  # noqa: PLC0415
 
     with tempfile.TemporaryDirectory(prefix="osimflow-s3-") as tmp:
-        store = _s3_store(args, Path(tmp))
         try:
+            store = _s3_store(args, Path(tmp))
             if action == "list":
                 rows = [
                     {
@@ -69,7 +69,7 @@ def _cmd_s3(args: argparse.Namespace, action: str) -> int:
                 f"{len(result['fetched'])} new, {len(result['failed'])} failed -> {dest}"
             )
             return 0
-        except S3CampaignError as exc:
+        except (S3CampaignError, OSError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
