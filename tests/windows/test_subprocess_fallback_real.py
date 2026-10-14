@@ -1,29 +1,28 @@
-"""Real (non-mocked) coverage for the non-POSIX kill fallback (issue #2010).
+"""Real (non-mocked) coverage for the non-POSIX kill fallback (issues #2010, #2021).
 
 ``_signal_process_tree`` falls back to ``Popen.terminate()`` / ``kill()`` on
 the direct child only when process groups are unavailable (Windows). Grand-
 children are NOT killed on that path. These tests use real child processes;
-the ``windows-subprocess`` CI workflow runs them on ``windows-latest``.
+the ``windows-subprocess`` CI workflow installs ``osimflow`` and runs them on
+``windows-latest``.
 """
 
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-# Loaded by path: ``import osimflow`` is not importable on Windows yet
-# (``osimflow.byos`` imports the POSIX-only ``resource`` module), and
-# ``_subprocess_utils`` itself only needs the stdlib.
-_SRC = Path(__file__).resolve().parents[2] / "osimflow" / "_subprocess_utils.py"
-_spec = importlib.util.spec_from_file_location("_subprocess_utils_under_test", _SRC)
-assert _spec is not None and _spec.loader is not None
-su = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = su
-_spec.loader.exec_module(su)
+import osimflow
+import osimflow._subprocess_utils as su
 
 _SLEEPER = [sys.executable, "-c", "import time; time.sleep(60)"]
+
+
+def test_import_osimflow() -> None:
+    """``import osimflow`` succeeds cleanly on Windows (issues #2015, #2021)."""
+    assert hasattr(osimflow, "Campaign")
+    assert hasattr(su, "run_subprocess")
 
 
 @pytest.fixture
