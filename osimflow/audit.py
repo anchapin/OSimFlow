@@ -31,10 +31,15 @@ The following field names are redacted before logging:
 
 from __future__ import annotations
 
+import getpass
 import json
 import logging
 import os
-import pwd
+
+try:
+    import pwd
+except ImportError:  # Windows: POSIX-only module
+    pwd = None  # type: ignore[assignment]
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -195,7 +200,7 @@ def cli_actor() -> str:
     Returns ``cli:<username>`` or ``cli:root`` if username cannot be determined.
     """
     try:
-        username = pwd.getpwuid(os.getuid()).pw_name
+        username = getpass.getuser() if pwd is None else pwd.getpwuid(os.getuid()).pw_name
     except (KeyError, OSError):
         username = "root"
     if username == "root" and "_CONDA_DEFAULT_ENV" in os.environ:

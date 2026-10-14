@@ -8,7 +8,11 @@ Provides:
 from __future__ import annotations
 
 import asyncio
-import fcntl
+
+try:
+    import fcntl
+except ImportError:  # Windows: POSIX-only module
+    fcntl = None  # type: ignore[assignment]
 import json
 import logging
 import os

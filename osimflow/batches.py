@@ -22,7 +22,11 @@ flag, ``false``/``null`` omits it, lists expand to repeated values.
 """
 
 import argparse
-import fcntl
+
+try:
+    import fcntl
+except ImportError:  # Windows: POSIX-only module
+    fcntl = None  # type: ignore[assignment]
 import json
 import logging
 import re
@@ -152,7 +156,8 @@ def submit_lock(root: Path, timeout_s: float = 3600.0, poll_s: float = 0.5) -> I
         deadline = time.monotonic() + timeout_s
         while True:
             try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
@@ -163,7 +168,8 @@ def submit_lock(root: Path, timeout_s: float = 3600.0, poll_s: float = 0.5) -> I
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def run_batches(

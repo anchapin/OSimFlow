@@ -30,7 +30,11 @@ import inspect
 import json
 import logging
 import os
-import resource
+
+try:
+    import resource
+except ImportError:  # Windows: POSIX-only module
+    resource = None  # type: ignore[assignment]
 import subprocess
 import sys
 import tempfile
@@ -652,7 +656,9 @@ def _run_byos_subprocess(
         json.dump(payload, tmp)
         tmp_path = tmp.name
 
-    if resource_limits:
+    if resource_limits and resource is None:
+        log.warning("BYOS rlimits are unsupported on this platform (no `resource` module)")
+    elif resource_limits:
         for name, value in resource_limits.items():
             try:
                 limit_constant = getattr(resource, name)
