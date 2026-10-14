@@ -313,6 +313,12 @@ class TestProbeResourceLimits:
 class TestMacOSRssWatchdog:
     """Issue #2011: RSS watchdog replaces RLIMIT_AS on macOS probes."""
 
+    @pytest.fixture(autouse=True)
+    def _darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setattr(mr.sys, "platform", "darwin")
+
     def test_darwin_uses_watchdog(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unittest import mock
 
