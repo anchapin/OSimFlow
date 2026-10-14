@@ -457,3 +457,77 @@ def test_discover_batches_supports_custom_suffixes_default_and_collisions(
         GemImportError, match="duplicate parametric_space files for batch 'Batch2_two'"
     ):
         discover_batches(proj)
+
+
+def test_import_forces_server_directory_cleanup_sql_false_unless_varied(tmp_path: Path) -> None:
+    """Issue #2051: ServerDirectoryCleanup.sql is forced to False/'false' unless varied."""
+    # Case 1: pre-populated workflow.osw without measure_space.json (bool True -> False)
+    proj1 = tmp_path / "proj1"
+    proj1.mkdir()
+    (proj1 / "parametric_space_Batch1.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    pkg1 = tmp_path / "pkg1"
+    pkg1.mkdir()
+    (pkg1 / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"measure_dir_name": "bar", "arguments": {"x": 0}},
+                    {
+                        "measure_dir_name": "ServerDirectoryCleanup",
+                        "arguments": {"sql": True, "eso": True},
+                    },
+                ]
+            }
+        )
+    )
+    out1 = tmp_path / "out1"
+    import_gem_project(proj1, out1, template_package=pkg1)
+    osw1 = json.loads((out1 / "Batch1/template/workflow.osw").read_text())
+    assert osw1["steps"][1]["arguments"]["sql"] is False
+    assert osw1["steps"][1]["arguments"]["eso"] is True
+
+    # Case 2: measure_space_reporting sets sql: "true" on string-typed OSW (string "true" -> "false")
+    proj2 = tmp_path / "proj2"
+    proj2.mkdir()
+    (proj2 / "parametric_space_Batch1.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj2 / "measure_space_Batch1.json").write_text(
+        json.dumps(
+            {
+                "measure_space": {"bar": {"x": "1"}},
+                "measure_space_reporting": {
+                    "ServerDirectoryCleanup": {"sql": "true", "eso": "true", "__SKIP__": "false"}
+                },
+            }
+        )
+    )
+    pkg2 = tmp_path / "pkg2"
+    pkg2.mkdir()
+    (pkg2 / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"measure_dir_name": "bar", "arguments": {"x": 0}},
+                    {
+                        "measure_dir_name": "ServerDirectoryCleanup",
+                        "arguments": {"sql": "true", "eso": "false"},
+                    },
+                ]
+            }
+        )
+    )
+    out2 = tmp_path / "out2"
+    import_gem_project(proj2, out2, template_package=pkg2)
+    osw2 = json.loads((out2 / "Batch1/template/workflow.osw").read_text())
+    assert osw2["steps"][1]["arguments"]["sql"] == "false"
+    assert osw2["steps"][1]["arguments"]["eso"] == "true"
+
+    # Case 3: ServerDirectoryCleanup.sql explicitly varied in parametric_space -> preserved
+    proj3 = tmp_path / "proj3"
+    proj3.mkdir()
+    (proj3 / "parametric_space_Batch1.json").write_text(
+        json.dumps({"ServerDirectoryCleanup": {"sql": [True, False]}})
+    )
+    out3 = tmp_path / "out3"
+    import_gem_project(proj3, out3, template_package=pkg1)
+    osw3 = json.loads((out3 / "Batch1/template/workflow.osw").read_text())
+    assert osw3["steps"][1]["arguments"]["sql"] is True

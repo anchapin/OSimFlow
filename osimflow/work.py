@@ -82,7 +82,7 @@ from osimflow._work_stub import (  # noqa: F401
 from osimflow.apply_params import OSMAttributeError  # noqa: F401
 from osimflow.errors import OSimFlowRuntimeError  # noqa: F401
 from osimflow.json_utils import safe_json_dumps
-from osimflow.osw_results import OUT_OSW_NAME, RUN_LOG_NAME  # noqa: F401
+from osimflow.osw_results import OUT_OSW_NAME, RUN_LOG_NAME, has_valid_osw_completion  # noqa: F401
 from osimflow.storage import ResultStorage
 from osimflow.version_detection import (
     VersionDetectionError,
@@ -894,7 +894,15 @@ def _run_real_openstudio(
         sim_out=sim_out,
         sample_id=sample_id,
     ):
-        _raise_missing_sql(modified_sim_package, sample_id)
+        if has_valid_osw_completion(sim_out / OUT_OSW_NAME):
+            log.warning(
+                "openstudio.cli exited 0 without eplusout.sql for sample=%s, "
+                "but %s completed with Success and measure step values",
+                sample_id,
+                sim_out / OUT_OSW_NAME,
+            )
+        else:
+            _raise_missing_sql(modified_sim_package, sample_id)
 
     register_values = _parse_register_values(stdout_path)
     if register_values is not None:

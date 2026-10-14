@@ -32,7 +32,12 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from osimflow.osw_results import MEASURE_RESULTS_TOKEN, OUT_OSW_NAME, parse_out_osw
+from osimflow.osw_results import (
+    MEASURE_RESULTS_TOKEN,
+    OUT_OSW_NAME,
+    has_valid_osw_completion,
+    parse_out_osw,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("extract_kpis")
@@ -492,7 +497,12 @@ _CRITICAL_KPI_KEYS: list[str] = [
 ]
 
 
-def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None) -> dict[str, Any]:
+def validate_kpis(
+    kpis: dict[str, Any],
+    thresholds: dict[str, Any] | None = None,
+    *,
+    osw_only_valid: bool = False,
+) -> dict[str, Any]:
     """Run plausibility checks on extracted KPIs.
 
     Parameters
@@ -506,6 +516,10 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
         default.  Thresholds can also be supplied via the
         ``quality_thresholds`` section of ``variables.yml`` — the Campaign
         forwards that section through the ``--quality_thresholds`` CLI flag.
+    osw_only_valid:
+        When ``True``, ``eplusout.sql`` was unavailable (e.g. deleted by
+        ``ServerDirectoryCleanup``) but ``out.osw`` passed strict completion
+        validation.  Skips SQL-critical KPI checks and records a warning.
 
     Returns
     -------
@@ -519,10 +533,15 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
     warnings: list[str] = []
     failures: list[str] = []
 
-    # --- 1. Missing critical KPIs -------------------------------------------
-    for key in _CRITICAL_KPI_KEYS:
-        if key not in kpis or kpis[key] is None:
-            failures.append(f"Missing critical KPI: {key}")
+    if osw_only_valid:
+        warnings.append(
+            "SQL-derived quality checks skipped: eplusout.sql unavailable (validated out.osw completion)"
+        )
+    else:
+        # --- 1. Missing critical KPIs -------------------------------------------
+        for key in _CRITICAL_KPI_KEYS:
+            if key not in kpis or kpis[key] is None:
+                failures.append(f"Missing critical KPI: {key}")
 
     # --- 2. EUI range check --------------------------------------------------
     eui = kpis.get("eui_kwh_m2_yr")
@@ -717,6 +736,8 @@ def run_extract_kpis(
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sql_path = simulation_dir / "eplusout.sql"
+    osw_path = simulation_dir / OUT_OSW_NAME
+    osw_only_valid = False
 
     extracted_kpis: dict[str, Any] = {}
 
@@ -755,6 +776,15 @@ def run_extract_kpis(
             msg = f"Custom extractor returned {type(custom_kpis)}, expected dict."
             log.error(msg)
             raise RuntimeError(msg)
+    elif not sql_path.is_file() and has_valid_osw_completion(osw_path):
+        osw_only_valid = True
+        extracted_kpis.update(_extract_simulation_summary(simulation_dir))
+        if kpis is None:
+            _merge_osw_kpis(
+                extracted_kpis,
+                parse_out_osw(osw_path),
+                sample_id=sample_id,
+            )
     else:
         extracted_kpis = extract_kpis_from_sql(sql_path)
         # Issue #1964: a corrupt/failed extraction must fail the sample rather
@@ -770,7 +800,7 @@ def run_extract_kpis(
         if kpis is None:
             _merge_osw_kpis(
                 extracted_kpis,
-                parse_out_osw(simulation_dir / OUT_OSW_NAME),
+                parse_out_osw(osw_path),
                 sample_id=sample_id,
             )
 
@@ -783,7 +813,7 @@ def run_extract_kpis(
         if MEASURE_RESULTS_TOKEN in kpis or patterns:
             merged_osw_keys = _merge_osw_kpis(
                 extracted_kpis,
-                parse_out_osw(simulation_dir / OUT_OSW_NAME),
+                parse_out_osw(osw_path),
                 sample_id=sample_id,
             )
         _desired = set(kpis)
@@ -795,7 +825,11 @@ def run_extract_kpis(
             or (k in merged_osw_keys and (all_osw or any(fnmatchcase(k, p) for p in patterns)))
         }
 
-    quality = validate_kpis(extracted_kpis, thresholds=quality_thresholds)
+    quality = validate_kpis(
+        extracted_kpis,
+        thresholds=quality_thresholds,
+        osw_only_valid=osw_only_valid,
+    )
 
     for w in quality["warnings"]:
         log.warning("Quality warning for sample %s: %s", sample_id, w)
