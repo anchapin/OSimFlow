@@ -73,6 +73,32 @@ def parse_out_osw(path: Path) -> dict[str, Any]:
     return values
 
 
+def has_osw_or_marker_failure(sim_dir: Path) -> bool:
+    """Return ``True`` when *sim_dir* has a non-retrying ``_OSIMFLOW_FAILED``
+    marker or an ``out.osw`` reporting workflow/step failure (issue #2059)."""
+    failed_marker = sim_dir / FAILED_MARKER_NAME
+    if failed_marker.is_file():
+        try:
+            content = failed_marker.read_text(encoding="utf-8", errors="replace").strip().lower()
+        except OSError:
+            content = ""
+        if content != RETRYING_STATE:
+            return True
+
+    osw = _load_osw(sim_dir / OUT_OSW_NAME)
+    if osw is None:
+        return False
+    if str(osw.get("completed_status") or "").strip().lower() == "fail":
+        return True
+    steps = osw.get("steps")
+    return isinstance(steps, list) and any(
+        isinstance(step, dict)
+        and isinstance(step.get("result"), dict)
+        and str(step["result"].get("step_result") or "").strip().lower() == "fail"
+        for step in steps
+    )
+
+
 def has_valid_osw_completion(osw_path: Path) -> bool:
     """Return ``True`` when *osw_path* proves a clean, value-bearing ``out.osw`` run.
 
