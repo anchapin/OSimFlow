@@ -360,5 +360,106 @@ class TestMacOSRssWatchdog:
 
         from osimflow import measure_resolver as mr
 
-        with mock.patch.object(mr.subprocess, "run", side_effect=OSError):
+        with (
+            mock.patch.object(mr, "_psutil_tree_rss", return_value=None),
+            mock.patch.object(mr.subprocess, "run", side_effect=OSError),
+        ):
             assert mr._rss_bytes(1) is None
+
+    def test_ps_tree_rss_sums_descendants(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        table = "10 1 100\n11 10 200\n12 11 300\n13 1 999\nbad line\n"
+        fake = mock.Mock(stdout=table)
+        with mock.patch.object(mr.subprocess, "run", return_value=fake) as run:
+            assert mr._ps_tree_rss(10) == 600 * 1024
+            assert mr._ps_tree_rss(99) is None
+        assert run.call_args.args[0][:2] == ["ps", "-A"]
+
+    def test_ps_tree_rss_subprocess_failure(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with mock.patch.object(mr.subprocess, "run", side_effect=OSError):
+            assert mr._ps_tree_rss(1) is None
+
+    def test_rss_bytes_prefers_psutil_then_ps(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with (
+            mock.patch.object(mr, "_psutil_tree_rss", return_value=5),
+            mock.patch.object(mr, "_ps_tree_rss") as ps,
+        ):
+            assert mr._rss_bytes(1) == 5
+            ps.assert_not_called()
+        with (
+            mock.patch.object(mr, "_psutil_tree_rss", return_value=None),
+            mock.patch.object(mr, "_ps_tree_rss", return_value=7),
+        ):
+            assert mr._rss_bytes(1) == 7
+
+    def test_psutil_tree_rss_missing_returns_none(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with mock.patch.object(mr.importlib, "import_module", side_effect=ImportError):
+            assert mr._psutil_tree_rss(1) is None
+
+    def test_psutil_tree_rss_sums_children(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        class _Err(Exception):
+            pass
+
+        def _proc(rss: int | None) -> mock.Mock:
+            m = mock.Mock()
+            if rss is None:
+                m.memory_info.side_effect = _Err
+            else:
+                m.memory_info.return_value = SimpleNamespace(rss=rss)
+            return m
+
+        root = _proc(10)
+        root.children.return_value = [_proc(20), _proc(None), _proc(30)]
+        fake = SimpleNamespace(Error=_Err, Process=mock.Mock(return_value=root))
+        with mock.patch.object(mr.importlib, "import_module", return_value=fake):
+            assert mr._psutil_tree_rss(1) == 60
+            fake.Process.side_effect = _Err
+            assert mr._psutil_tree_rss(1) is None
+
+    @pytest.mark.skipif(os.name != "posix", reason="uses ps")
+    def test_ps_tree_rss_counts_grandchild(self) -> None:
+        import subprocess
+        import sys
+        import time
+
+        from osimflow import measure_resolver as mr
+
+        code = (
+            "import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c',"
+            "'x=bytearray(60*2**20);import time;time.sleep(20)']);"
+            "time.sleep(20)"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", code])
+        try:
+            deadline = time.monotonic() + 10
+            rss = 0
+            while time.monotonic() < deadline:
+                rss = mr._ps_tree_rss(proc.pid) or 0
+                if rss > 60 * 2**20:
+                    break
+                time.sleep(0.2)
+            assert rss > 60 * 2**20
+        finally:
+            proc.kill()
+            proc.wait()
