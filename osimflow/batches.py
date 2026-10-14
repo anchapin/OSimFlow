@@ -1,6 +1,6 @@
 """Sequential multi-batch driver (issue #1874).
 
-Mirrors openstudio-server's ``rake execute_sequential``: a manifest lists N
+A general multi-batch sequential campaign driver: a manifest lists N
 named batches; each runs as its own ``osimflow run`` campaign, in order, under
 an exclusive submit lock so concurrent drivers never collide. Each campaign
 lands in ``<root>/Batch<id>_<name>`` (stable, so ``osimflow status|download
