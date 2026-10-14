@@ -183,8 +183,10 @@ def test_download_reports_failed_sample_without_allow_partial(
         new_handoff(CAMPAIGN, ["0000"], openstudio_version="3.10.0", kpis=None, job_ids={})
     )
     status = store.status(CAMPAIGN)
-    assert status["state"] == "completed"
+    assert status["state"] == "failed"
+    assert status["succeeded"] == 0
     assert status["failed"] == ["0000"]
+    assert status["failed_count"] == 1
     out = tmp / "dl"
     result = store.download(CAMPAIGN, out)
     assert result["failed"] == ["0000"]

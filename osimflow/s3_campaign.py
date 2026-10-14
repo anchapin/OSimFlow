@@ -526,13 +526,27 @@ class S3CampaignStore:
         states = self.sample_states(record)
         done = set(states)
         total = len(record.sample_ids)
+        failed = sorted(sid for sid, st in states.items() if st == "failed")
+        succeeded = len(done) - len(failed)
+        if not (total and len(done) == total):
+            state = "running"
+        elif not failed:
+            state = "completed"
+        elif succeeded == 0:
+            state = "failed"
+        else:
+            state = "completed_with_failures"
         return {
             "campaign_id": campaign_id,
             "total": total,
+            # ``completed`` counts every finished sample (succeeded + failed).
             "completed": len(done),
-            "failed": sorted(sid for sid, st in states.items() if st == "failed"),
+            "succeeded": succeeded,
+            "failed": failed,
+            "failed_count": len(failed),
             "pending": sorted(set(record.sample_ids) - done),
-            "state": "completed" if total and len(done) == total else "running",
+            # running | completed | completed_with_failures | failed
+            "state": state,
             "submitted_at": record.submitted_at,
         }
 

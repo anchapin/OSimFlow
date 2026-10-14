@@ -907,6 +907,11 @@ osimflow status   --from-s3 --result-storage-bucket my-bucket ./campaign-001
 osimflow download --from-s3 --result-storage-bucket my-bucket ./campaign-001
 ```
 
+`status --from-s3` prints JSON with `total`, `completed` (all finished samples),
+`succeeded`, `failed` (sample ids), `failed_count`, `pending` and `state`:
+`running`, `completed` (all succeeded), `completed_with_failures` (some failed)
+or `failed` (every sample failed).
+
 The campaign id is the `--outdir` name. Re-running the same submit is a no-op
 once `<id>/_handoff.json` exists. Workers mark each finished sample with an
 empty `_OSIMFLOW_COMPLETE` object. `download` fetches only completed samples

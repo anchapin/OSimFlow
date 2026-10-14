@@ -137,8 +137,42 @@ def test_status_and_list(store: S3CampaignStore, tmp_path: Path) -> None:
     _complete(store, "camp1", "0001")
     st = store.status("camp1")
     assert st["state"] == "completed" and st["pending"] == []
+    assert st["succeeded"] == 2 and st["failed"] == [] and st["failed_count"] == 0
     assert [r.campaign_id for r in store.list_campaigns("camp")] == ["camp1"]
     assert len(store.list_campaigns()) == 2
+
+
+def _fail(store: S3CampaignStore, cid: str, sid: str) -> None:
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    d = store.storage.root / cid / "work" / "sim" / sid  # type: ignore[attr-defined]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / FAILED_MARKER).write_text("boom")
+
+
+def test_status_partial_failure(store: S3CampaignStore, tmp_path: Path) -> None:
+    _submit(store, tmp_path, "camp1")
+    _complete(store, "camp1", "0000")
+    _fail(store, "camp1", "0001")
+    st = store.status("camp1")
+    assert st["state"] == "completed_with_failures"
+    assert (st["completed"], st["succeeded"], st["failed"], st["failed_count"]) == (
+        2,
+        1,
+        ["0001"],
+        1,
+    )
+
+
+def test_status_all_failed(store: S3CampaignStore, tmp_path: Path) -> None:
+    _submit(store, tmp_path, "camp1")
+    _fail(store, "camp1", "0000")
+    st = store.status("camp1")
+    assert st["state"] == "running" and st["pending"] == ["0001"]
+    assert (st["completed"], st["succeeded"], st["failed_count"]) == (1, 0, 1)
+    _fail(store, "camp1", "0001")
+    st = store.status("camp1")
+    assert st["state"] == "failed" and st["succeeded"] == 0 and st["completed"] == 2
 
 
 def test_download_requires_complete_unless_partial(store: S3CampaignStore, tmp_path: Path) -> None:
@@ -1224,9 +1258,11 @@ def test_reconcile_terminal_failed_batch_jobs_oom_and_cannot_pull(tmp_path: Path
     _complete(store, "camp_batch_fail", "0000")
 
     st = store.status("camp_batch_fail")
-    assert st["state"] == "completed"
+    assert st["state"] == "completed_with_failures"
     assert st["total"] == 3
     assert st["completed"] == 3
+    assert st["succeeded"] == 1
+    assert st["failed_count"] == 2
     assert st["failed"] == ["0001", "0002"]
     assert st["pending"] == []
     assert batch_client.describe_jobs.call_count == 1
