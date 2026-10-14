@@ -445,7 +445,7 @@ class TestAwsBatchSecretDelivery:
     def test_secret_ref_resolves_via_secrets_client_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Issue #2025: when _secrets_client is provided, ARN resolves secret for signing."""
+        """Issue #2025 / #2042: when _secrets_client is provided, ARN resolves secret for signing."""
         from osimflow.executors import AWSBatchExecutor
         from osimflow.task_payload_hmac import (
             TASK_PAYLOAD_SECRET_ENV,
@@ -455,8 +455,9 @@ class TestAwsBatchSecretDelivery:
 
         monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
         ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
+        secret_val = "arn-fetched-secret-" + "x" * 32
         secrets_client = MagicMock()
-        secrets_client.get_secret_value.return_value = {"SecretString": "arn-fetched-secret\n"}
+        secrets_client.get_secret_value.return_value = {"SecretString": f"{secret_val}\n"}
         ex._secrets_client = secrets_client  # type: ignore[attr-defined]  # noqa: SLF001
         env = ex._build_environment(  # noqa: SLF001
             container="nrel/openstudio:3.11.0",
@@ -464,10 +465,439 @@ class TestAwsBatchSecretDelivery:
             task_payload=TASK_PAYLOAD,
         )
         env_map = _parse_env_list(env)
-        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(
-            TASK_PAYLOAD, "arn-fetched-secret"
-        )
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, secret_val)
         assert TASK_PAYLOAD_SECRET_ENV not in env_map
+
+    def test_autodiscovers_secret_arn_from_job_def_and_fetches_secretsmanager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: auto-discovers secret ARN from highest active job def revision and fetches from Secrets Manager."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import (
+            TASK_PAYLOAD_SECRET_ENV,
+            TASK_PAYLOAD_SIG_ENV,
+            sign_task_payload,
+        )
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor(job_definition="osimflow-openstudio-job-def")
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 1,
+                    "status": "ACTIVE",
+                    "containerProperties": {"secrets": []},
+                },
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 3,
+                    "status": "ACTIVE",
+                    "containerProperties": {
+                        "secrets": [
+                            {
+                                "name": TASK_PAYLOAD_SECRET_ENV,
+                                "valueFrom": AWS_SECRET_ARN,
+                            }
+                        ]
+                    },
+                },
+            ]
+        }
+        secret_val = "sm-secret-value-at-least-32-bytes-long!"
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = {"SecretString": f"{secret_val}\r\n"}
+        ex._client = batch_client  # noqa: SLF001
+        ex._secrets_client = secrets_client  # noqa: SLF001
+
+        env1 = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env2 = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env_map = _parse_env_list(env1)
+        assert ex.payload_secret_arn == AWS_SECRET_ARN
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, secret_val)
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
+        assert _parse_env_list(env2)[TASK_PAYLOAD_SIG_ENV] == env_map[TASK_PAYLOAD_SIG_ENV]
+        # Cached on executor instance across submissions
+        batch_client.describe_job_definitions.assert_called_once_with(
+            jobDefinitionName="osimflow-openstudio-job-def", status="ACTIVE"
+        )
+        secrets_client.get_secret_value.assert_called_once_with(SecretId=AWS_SECRET_ARN)
+
+    def test_autodiscovers_ssm_parameter_arn_and_fetches_with_decryption(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: auto-discovers SSM parameter ARN (with region inferred from ARN) and fetches WithDecryption=True."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import (
+            TASK_PAYLOAD_SECRET_ENV,
+            TASK_PAYLOAD_SIG_ENV,
+            sign_task_payload,
+        )
+
+        ssm_arn = "arn:aws:ssm:us-west-2:123456789012:parameter/osimflow/task_payload_secret"
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor(
+            job_definition="arn:aws:batch:us-west-2:123456789012:job-definition/my-jd:4"
+        )
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "my-jd",
+                    "revision": 4,
+                    "status": "ACTIVE",
+                    "containerProperties": {
+                        "secrets": [
+                            {
+                                "name": TASK_PAYLOAD_SECRET_ENV,
+                                "valueFrom": ssm_arn,
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        secret_val = "ssm-secret-value-at-least-32-bytes-long!"
+        ssm_client = MagicMock()
+        ssm_client.get_parameter.return_value = {"Parameter": {"Value": f"{secret_val}\n"}}
+        ex._client = batch_client  # noqa: SLF001
+        ex._ssm_client = ssm_client  # noqa: SLF001
+
+        env = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env_map = _parse_env_list(env)
+        assert ex.payload_secret_arn == ssm_arn
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, secret_val)
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
+        batch_client.describe_job_definitions.assert_called_once_with(
+            jobDefinitions=["arn:aws:batch:us-west-2:123456789012:job-definition/my-jd:4"]
+        )
+        ssm_client.get_parameter.assert_called_once_with(Name=ssm_arn, WithDecryption=True)
+
+    def test_autodiscovery_omits_plaintext_secret_even_when_local_env_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: if OSIMFLOW_TASK_PAYLOAD_SECRET is set locally AND job def has secrets entry, never leak plaintext in containerOverrides.environment."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import (
+            TASK_PAYLOAD_SECRET_ENV,
+            TASK_PAYLOAD_SIG_ENV,
+            sign_task_payload,
+        )
+
+        local_secret = "local-secret-at-least-32-bytes-long-12345"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, local_secret)
+        ex = AWSBatchExecutor(job_definition="osimflow-openstudio-job-def")
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 2,
+                    "status": "ACTIVE",
+                    "containerProperties": {
+                        "secrets": [
+                            {
+                                "name": TASK_PAYLOAD_SECRET_ENV,
+                                "valueFrom": AWS_SECRET_ARN,
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        ex._client = batch_client  # noqa: SLF001
+
+        env = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env_map = _parse_env_list(env)
+        assert ex.payload_secret_arn == AWS_SECRET_ARN
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, local_secret)
+
+    def test_describe_job_definitions_failure_fails_closed_against_plaintext_downgrade(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: describe_job_definitions failure raises RuntimeError instead of silently downgrading local secret to containerOverrides.environment."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, "local-secret-at-least-32-bytes-long-12345")
+        ex = AWSBatchExecutor(job_definition="osimflow-openstudio-job-def")
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.side_effect = RuntimeError("AccessDeniedException")
+        ex._client = batch_client  # noqa: SLF001
+
+        with pytest.raises(RuntimeError, match="batch:DescribeJobDefinitions"):
+            ex._build_environment(  # noqa: SLF001
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                task_payload=TASK_PAYLOAD,
+            )
+
+    @pytest.mark.parametrize(
+        ("secret_payload", "match_pattern"),
+        [
+            ({"SecretBinary": b"binary-secret-value-at-least-32-bytes"}, "SecretBinary"),
+            ({"SecretString": "   \n"}, "empty or whitespace-only"),
+            ({"SecretString": "too-short-secret\n"}, "at least 32 UTF-8 bytes"),
+        ],
+    )
+    def test_fetched_secret_validation_rejects_binary_empty_or_short(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        secret_payload: dict[str, Any],
+        match_pattern: str,
+    ) -> None:
+        """Issue #2042: SecretBinary, empty/whitespace, and <32-byte secrets raise ValueError."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = secret_payload
+        ex._secrets_client = secrets_client  # noqa: SLF001
+
+        with pytest.raises(ValueError, match=match_pattern):
+            ex._resolve_signing_secret()  # noqa: SLF001
+
+    def test_arn_region_inferred_when_constructing_secrets_and_ssm_clients(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: region is parsed from the ARN when building Secrets Manager / SSM clients."""
+        from osimflow.executors import AWSBatchExecutor
+
+        ex = AWSBatchExecutor(region_name="us-east-1")
+        captured_calls: list[tuple[str, str | None]] = []
+
+        def fake_make_client(service: str, *, region_name: str | None = None) -> Any:
+            captured_calls.append((service, region_name))
+            mock_c = MagicMock()
+            if service == "secretsmanager":
+                mock_c.get_secret_value.return_value = {"SecretString": "a" * 32}
+            else:
+                mock_c.get_parameter.return_value = {"Parameter": {"Value": "b" * 32}}
+            return mock_c
+
+        monkeypatch.setattr(ex, "_make_client", fake_make_client)
+        sm_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:osimflow/hmac-AbCdEf"
+        ssm_arn = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/osimflow/hmac"
+
+        assert ex._fetch_secret_from_arn(sm_arn) == "a" * 32  # noqa: SLF001
+        assert ex._fetch_secret_from_arn(ssm_arn) == "b" * 32  # noqa: SLF001
+        assert captured_calls == [
+            ("secretsmanager", "eu-west-1"),
+            ("ssm", "ap-northeast-1"),
+        ]
+
+    def test_secretsmanager_selector_json_key_version_stage_and_version_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: ECS/Batch valueFrom selector arn:...:secret:name-xxx:json-key:version-stage:version-id is parsed and extracted."""
+        import json as _json
+
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import (
+            TASK_PAYLOAD_SECRET_ENV,
+            TASK_PAYLOAD_SIG_ENV,
+            sign_task_payload,
+        )
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        base_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:osimflow/hmac-AbCdEf"
+        full_value_from = f"{base_arn}:hmac_key:AWSCURRENT:ver-uuid-1234"
+        ex = AWSBatchExecutor(job_definition="osimflow-openstudio-job-def")
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 5,
+                    "status": "ACTIVE",
+                    "containerProperties": {
+                        "secrets": [
+                            {
+                                "name": TASK_PAYLOAD_SECRET_ENV,
+                                "valueFrom": full_value_from,
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        extracted_secret = "json-extracted-secret-at-least-32-bytes!"
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = {
+            "SecretString": _json.dumps({"hmac_key": extracted_secret, "other": "val"})
+        }
+        ex._client = batch_client  # noqa: SLF001
+        ex._secrets_client = secrets_client  # noqa: SLF001
+
+        env = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env_map = _parse_env_list(env)
+        assert ex.payload_secret_arn == full_value_from
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, extracted_secret)
+        secrets_client.get_secret_value.assert_called_once_with(
+            SecretId=base_arn,
+            VersionStage="AWSCURRENT",
+            VersionId="ver-uuid-1234",
+        )
+
+    @pytest.mark.parametrize(
+        ("arn", "secret_string", "match_pattern"),
+        [
+            (
+                "arn:aws:s3:::my-bucket/secret",
+                "a" * 32,
+                "Unsupported ARN service",
+            ),
+            (
+                f"{AWS_SECRET_ARN}:hmac_key",
+                "not-valid-json",
+                "not valid JSON",
+            ),
+            (
+                f"{AWS_SECRET_ARN}:missing_key",
+                '{"other_key": "' + "a" * 32 + '"}',
+                "does not contain key",
+            ),
+            (
+                f"{AWS_SECRET_ARN}:null_key",
+                '{"null_key": null}',
+                "is null",
+            ),
+        ],
+    )
+    def test_fetch_secret_from_arn_error_branches(
+        self,
+        arn: str,
+        secret_string: str,
+        match_pattern: str,
+    ) -> None:
+        """Issue #2042: unsupported ARN service and malformed/missing JSON selector keys raise ValueError."""
+        from osimflow.executors import AWSBatchExecutor
+
+        ex = AWSBatchExecutor(payload_secret_arn=arn)
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = {"SecretString": secret_string}
+        ex._secrets_client = secrets_client  # noqa: SLF001
+
+        with pytest.raises(ValueError, match=match_pattern):
+            ex._fetch_secret_from_arn(arn)  # noqa: SLF001
+
+    def test_fetch_secret_from_arn_missing_secret_string_and_ssm_missing_value(
+        self,
+    ) -> None:
+        """Issue #2042: missing SecretString or missing SSM Parameter.Value raise clear errors."""
+        from osimflow.executors import AWSBatchExecutor
+
+        ex = AWSBatchExecutor()
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = {}
+        ex._secrets_client = secrets_client  # noqa: SLF001
+        with pytest.raises(ValueError, match="returned no SecretString"):
+            ex._fetch_secret_from_arn(AWS_SECRET_ARN)  # noqa: SLF001
+
+        ssm_arn = "arn:aws:ssm:us-east-1:123456789012:parameter/osimflow/hmac"
+        ssm_client = MagicMock()
+        ssm_client.get_parameter.return_value = {"Parameter": {}}
+        ex._ssm_client = ssm_client  # noqa: SLF001
+        with pytest.raises(RuntimeError, match=r"returned no Parameter\.Value"):
+            ex._fetch_secret_from_arn(ssm_arn)  # noqa: SLF001
+
+    def test_autodiscovery_handles_empty_or_unconfigured_job_definitions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2042: job definition without secrets entry caches None and leaves payload_secret_arn unset."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, "local-secret-at-least-32-bytes-long-12345")
+        ex = AWSBatchExecutor(job_definition="osimflow-openstudio-job-def")
+        batch_client = MagicMock()
+        batch_client.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "osimflow-openstudio-job-def",
+                    "revision": 1,
+                    "status": "ACTIVE",
+                    "containerProperties": {"secrets": [{"name": "OTHER", "valueFrom": "arn:x"}]},
+                }
+            ]
+        }
+        ex._client = batch_client  # noqa: SLF001
+        assert ex._resolve_effective_payload_secret_arn() is None  # noqa: SLF001
+        # Second call hits cache without re-querying
+        assert ex._resolve_effective_payload_secret_arn() is None  # noqa: SLF001
+        batch_client.describe_job_definitions.assert_called_once()
+
+        # Empty jobDefinitions list
+        ex2 = AWSBatchExecutor(job_definition="missing-jd")
+        batch_client2 = MagicMock()
+        batch_client2.describe_job_definitions.return_value = {"jobDefinitions": []}
+        ex2._client = batch_client2  # noqa: SLF001
+        assert ex2._resolve_effective_payload_secret_arn() is None  # noqa: SLF001
+
+        # Job definition ARN infers region when _client is None
+        ex3 = AWSBatchExecutor(
+            job_definition="arn:aws:batch:eu-central-1:123456789012:job-definition/my-jd:1"
+        )
+        regions_seen: list[str | None] = []
+        batch_client3 = MagicMock()
+        batch_client3.describe_job_definitions.return_value = {
+            "jobDefinitions": [
+                {
+                    "jobDefinitionName": "my-jd",
+                    "revision": 1,
+                    "status": "ACTIVE",
+                    "containerProperties": {
+                        "secrets": [
+                            {"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": "   "},
+                            {"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": AWS_SECRET_ARN},
+                        ]
+                    },
+                }
+            ]
+        }
+
+        def fake_make_batch(service: str, *, region_name: str | None = None) -> Any:
+            regions_seen.append(region_name)
+            return batch_client3
+
+        monkeypatch.setattr(ex3, "_make_client", fake_make_batch)
+        assert ex3._resolve_effective_payload_secret_arn() == AWS_SECRET_ARN  # noqa: SLF001
+        assert regions_seen == ["eu-central-1"]
+        # Second call with payload_secret_arn unset hits cache with discovered value
+        ex3.payload_secret_arn = None
+        assert ex3._resolve_effective_payload_secret_arn() == AWS_SECRET_ARN  # noqa: SLF001
+
+        # Bare secret name (not an ARN) falls back to secretsmanager without ARN region
+        ex4 = AWSBatchExecutor()
+        secrets_client4 = MagicMock()
+        secrets_client4.get_secret_value.return_value = {"SecretString": "c" * 32}
+        ex4._secrets_client = secrets_client4  # noqa: SLF001
+        assert ex4._fetch_secret_from_arn("osimflow/hmac-secret") == "c" * 32  # noqa: SLF001
+        secrets_client4.get_secret_value.assert_called_once_with(SecretId="osimflow/hmac-secret")
 
 
 class TestAzureBatchSecretDelivery:
