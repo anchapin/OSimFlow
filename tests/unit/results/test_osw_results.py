@@ -1,9 +1,14 @@
 """Unit tests for osimflow.osw_results and its KPI/aggregation wiring (issue #1871)."""
 
 import json
+import logging
+import sqlite3
 from pathlib import Path
 
+import pytest
+
 from osimflow import work
+from osimflow._work_scripts import extract_kpis as extract_kpis_mod
 from osimflow._work_scripts.aggregate_results import extract_failure
 from osimflow._work_scripts.extract_kpis import run_extract_kpis
 from osimflow.osw_results import (
@@ -83,17 +88,148 @@ def test_failure_message_prefers_run_log(tmp_path: Path) -> None:
     assert "zone too small" in (failure_message(tmp_path) or "")
 
 
+def _write_minimal_eplusout_sql(sql_path: Path) -> None:
+    conn = sqlite3.connect(str(sql_path))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE TabularDataWithStrings (
+            ReportName TEXT,
+            ReportForString TEXT,
+            TableName TEXT,
+            RowName TEXT,
+            ColumnName TEXT,
+            Units TEXT,
+            Value TEXT
+        )
+        """
+    )
+    cur.executemany(
+        "INSERT INTO TabularDataWithStrings VALUES (?,?,?,?,?,?,?)",
+        [
+            (
+                "AnnualBuildingUtilityPerformanceSummary",
+                "Entire Facility",
+                "Site and Source Energy",
+                "Total Site Energy",
+                "Energy Per Total Building Area",
+                "MJ/m2",
+                "360.0",
+            ),
+            (
+                "AnnualBuildingUtilityPerformanceSummary",
+                "Entire Facility",
+                "Site and Source Energy",
+                "Total Site Energy",
+                "Total Energy",
+                "MJ",
+                "36000.0",
+            ),
+        ],
+    )
+    cur.execute("CREATE TABLE Zones (ZoneIndex INTEGER, Floor_Area REAL)")
+    cur.execute("INSERT INTO Zones VALUES (0, 100.0)")
+    conn.commit()
+    conn.close()
+
+
 def test_extract_kpis_opt_in(tmp_path: Path) -> None:
     (tmp_path / "out.osw").write_text(json.dumps(OK_OSW))
     out = tmp_path / "k.json"
+    # Default (kpis=None, custom_kpi_extractor=None) includes out.osw step values (issue #2028).
     run_extract_kpis(tmp_path, "0001", out)
-    assert not any("." in k for k in json.loads(out.read_text())["kpis"])
+    default_kpis = json.loads(out.read_text())["kpis"]
+    assert default_kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
+    assert default_kpis["reporting_179_d.label"] == "x"
+
+    # Explicit SQL-only allow-list excludes unrequested out.osw step values.
+    run_extract_kpis(tmp_path, "0001", out, kpis=["eui_kwh_m2_yr"])
+    assert json.loads(out.read_text())["kpis"] == {}
+
+    # Explicit glob allow-list filters out.osw step values.
     run_extract_kpis(tmp_path, "0001", out, kpis=["reporting_179_d.out_*"])
     assert json.loads(out.read_text())["kpis"] == {
         "reporting_179_d.out_total_electricity_179_d_gj": 12.5
     }
+
+    # Explicit measure_results token includes all out.osw step values.
     run_extract_kpis(tmp_path, "0001", out, kpis=["measure_results"])
-    assert "reporting_179_d.label" in json.loads(out.read_text())["kpis"]
+    assert json.loads(out.read_text())["kpis"] == {
+        "reporting_179_d.out_total_electricity_179_d_gj": 12.5,
+        "reporting_179_d.label": "x",
+    }
+
+
+def test_extract_kpis_default_with_sql_and_out_osw(tmp_path: Path) -> None:
+    _write_minimal_eplusout_sql(tmp_path / "eplusout.sql")
+    (tmp_path / "out.osw").write_text(json.dumps(OK_OSW))
+    out = tmp_path / "k.json"
+    run_extract_kpis(tmp_path, "0001", out)
+    payload = json.loads(out.read_text())
+    kpis = payload["kpis"]
+    assert kpis["eui_kwh_m2_yr"] == 100.0
+    assert kpis["total_site_energy_kwh"] == 10000.0
+    assert kpis["floor_area_m2"] == 100.0
+    assert kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
+    assert kpis["reporting_179_d.label"] == "x"
+    assert payload["quality"]["valid"] is True
+
+
+def test_extract_kpis_collision_precedence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _write_minimal_eplusout_sql(tmp_path / "eplusout.sql")
+    (tmp_path / "out.osw").write_text(json.dumps(OK_OSW))
+    monkeypatch.setattr(
+        extract_kpis_mod,
+        "parse_out_osw",
+        lambda _p: {
+            "eui_kwh_m2_yr": 999.0,
+            "sample_id": "hijacked",
+            "openstudio_version": "0.0.0",
+            "units": "bad",
+            "quality": "bad",
+            "reporting_179_d.out_total_electricity_179_d_gj": 12.5,
+        },
+    )
+    out = tmp_path / "k.json"
+    with caplog.at_level(logging.WARNING, logger="extract_kpis"):
+        run_extract_kpis(tmp_path, "0001", out, openstudio_version="3.10.0")
+    payload = json.loads(out.read_text())
+    kpis = payload["kpis"]
+    assert kpis["eui_kwh_m2_yr"] == 100.0
+    assert kpis["reporting_179_d.out_total_electricity_179_d_gj"] == 12.5
+    for reserved in ("sample_id", "openstudio_version", "units", "quality"):
+        assert reserved not in kpis
+    assert payload["sample_id"] == "0001"
+    assert payload["openstudio_version"] == "3.10.0"
+    assert any("collides with built-in KPI or metadata key" in r.message for r in caplog.records)
+
+
+def test_extract_kpis_custom_extractor_preserves_schema(tmp_path: Path) -> None:
+    (tmp_path / "out.osw").write_text(json.dumps(OK_OSW))
+    extractor = tmp_path / "custom_ext.py"
+    extractor.write_text(
+        "def extract_kpis(ctx):\n    return {'custom_eui': 77.7}\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "k.json"
+    run_extract_kpis(tmp_path, "0001", out, custom_kpi_extractor=extractor)
+    assert json.loads(out.read_text())["kpis"] == {"custom_eui": 77.7}
+
+    run_extract_kpis(
+        tmp_path,
+        "0001",
+        out,
+        custom_kpi_extractor=extractor,
+        kpis=["custom_eui", "reporting_179_d.label"],
+    )
+    assert json.loads(out.read_text())["kpis"] == {
+        "custom_eui": 77.7,
+        "reporting_179_d.label": "x",
+    }
 
 
 def test_failed_simulations_uses_measure_message(tmp_path: Path) -> None:

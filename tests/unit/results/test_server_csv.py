@@ -1,10 +1,13 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
+from osimflow._work_scripts.extract_kpis import run_extract_kpis
 from osimflow.results_query import export_results_cli
 from osimflow.server_csv import SIMULATION_FAILED_COL, build_server_csv_frame
+from osimflow.work import aggregate_results
 
 REFERENCE = Path(__file__).parent.parent.parent / "fixtures" / "server_download_data_reference.csv"
 
@@ -108,3 +111,115 @@ def test_multi_campaign_column_order(tmp_path: Path) -> None:
     cols = list(pd.read_csv(out).columns)
     assert cols.index("new.var") < cols.index("reporting_179_d.out_eui")
     assert cols[-1] == SIMULATION_FAILED_COL
+
+
+def test_end_to_end_extract_kpis_to_server_csv(tmp_path: Path) -> None:
+    camp = tmp_path / "camp_e2e"
+    sim0 = camp / "work" / "sim" / "s000"
+    sim1 = camp / "work" / "sim" / "s001"
+    kpi_dir = camp / "kpis"
+    sim0.mkdir(parents=True)
+    sim1.mkdir(parents=True)
+
+    samples_json = camp / "samples.json"
+    samples_json.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "s000", "values": {"hvac.cop": 3.5, "envelope.wall_r": 12.0}},
+                    {"sample_id": "s001", "values": {"hvac.cop": 2.0, "envelope.wall_r": 9.0}},
+                ]
+            }
+        )
+    )
+
+    conn = sqlite3.connect(str(sim0 / "eplusout.sql"))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE TabularDataWithStrings (
+            ReportName TEXT,
+            ReportForString TEXT,
+            TableName TEXT,
+            RowName TEXT,
+            ColumnName TEXT,
+            Units TEXT,
+            Value TEXT
+        )
+        """
+    )
+    cur.executemany(
+        "INSERT INTO TabularDataWithStrings VALUES (?,?,?,?,?,?,?)",
+        [
+            (
+                "AnnualBuildingUtilityPerformanceSummary",
+                "Entire Facility",
+                "Site and Source Energy",
+                "Total Site Energy",
+                "Energy Per Total Building Area",
+                "MJ/m2",
+                "360.0",
+            ),
+            (
+                "AnnualBuildingUtilityPerformanceSummary",
+                "Entire Facility",
+                "Site and Source Energy",
+                "Total Site Energy",
+                "Total Energy",
+                "MJ",
+                "36000.0",
+            ),
+        ],
+    )
+    cur.execute("CREATE TABLE Zones (ZoneIndex INTEGER, Floor_Area REAL)")
+    cur.execute("INSERT INTO Zones VALUES (0, 100.0)")
+    conn.commit()
+    conn.close()
+
+    (sim0 / "out.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "measure_dir_name": "reporting_179_d",
+                        "result": {
+                            "step_result": "Success",
+                            "step_values": [
+                                {"name": "out_eui", "value": 55.2},
+                                {"name": "out_total_electricity_179_d_gj", "value": 12.5},
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    (sim1 / "out.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "measure_dir_name": "hvac",
+                        "result": {
+                            "step_result": "Fail",
+                            "step_errors": ["bad argument"],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    kpi_file = run_extract_kpis(sim0, "s000", kpi_dir / "kpi_s000.json")
+    aggregate_results([kpi_file], [sim0, sim1], camp, samples_json=samples_json)
+    df = build_server_csv_frame(camp)
+
+    cols = list(df.columns)
+    assert cols[:4] == ["name", "_id", "status", "status_message"]
+    assert cols[4:6] == ["hvac.cop", "envelope.wall_r"]
+    assert "reporting_179_d.out_eui" in cols
+    assert "reporting_179_d.out_total_electricity_179_d_gj" in cols
+    assert "eui_kwh_m2_yr" in cols
+    assert cols.index("envelope.wall_r") < cols.index("reporting_179_d.out_eui")
+    assert cols[-1] == SIMULATION_FAILED_COL
+    assert df[SIMULATION_FAILED_COL].tolist() == ["", "hvac: bad argument"]

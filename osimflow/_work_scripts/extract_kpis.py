@@ -651,6 +651,28 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
 
 
 _FATAL_EXTRACTION_ERRORS = frozenset({"corrupt_database", "extraction_failed"})
+_RESERVED_KPI_KEYS = frozenset({"sample_id", "openstudio_version", "units", "quality"})
+
+
+def _merge_osw_kpis(
+    extracted_kpis: dict[str, Any],
+    osw_values: dict[str, Any],
+    *,
+    sample_id: str,
+) -> set[str]:
+    """Merge *osw_values* into *extracted_kpis* without clobbering built-in or metadata keys."""
+    merged_keys: set[str] = set()
+    for key, value in osw_values.items():
+        if key in extracted_kpis or key in _RESERVED_KPI_KEYS:
+            log.warning(
+                "Ignoring out.osw key %r for sample %s: collides with built-in KPI or metadata key",
+                key,
+                sample_id,
+            )
+            continue
+        extracted_kpis[key] = value
+        merged_keys.add(key)
+    return merged_keys
 
 
 def run_extract_kpis(
@@ -679,7 +701,9 @@ def run_extract_kpis(
             in the KPI JSON for traceability.
         kpis: Optional list of KPI names to extract (issue #1082).  When
             provided, only the named KPIs are included in the output JSON.
-            When ``None`` (default), all available KPIs are extracted.
+            When ``None`` (default), all available SQL KPIs and ``out.osw``
+            measure-reported step values (when using the built-in extractor)
+            are extracted (issue #2028).
 
     Returns:
         The *out_path* the JSON was written to.
@@ -743,23 +767,32 @@ def run_extract_kpis(
             log.error(msg)
             raise RuntimeError(msg)
         extracted_kpis.update(_extract_simulation_summary(simulation_dir))
+        if kpis is None:
+            _merge_osw_kpis(
+                extracted_kpis,
+                parse_out_osw(simulation_dir / OUT_OSW_NAME),
+                sample_id=sample_id,
+            )
 
     # Issue #1082: filter to user-requested KPIs when --kpis is set.
     if kpis is not None:
         # Issue #1871: dotted names / globs (``reporting_179_d.*``) or the
         # ``measure_results`` token opt in to out.osw measure-reported values.
         patterns = [k for k in kpis if "." in k]
-        osw_values: dict[str, Any] = {}
+        merged_osw_keys: set[str] = set()
         if MEASURE_RESULTS_TOKEN in kpis or patterns:
-            osw_values = parse_out_osw(simulation_dir / OUT_OSW_NAME)
-            extracted_kpis.update(osw_values)
+            merged_osw_keys = _merge_osw_kpis(
+                extracted_kpis,
+                parse_out_osw(simulation_dir / OUT_OSW_NAME),
+                sample_id=sample_id,
+            )
         _desired = set(kpis)
         all_osw = MEASURE_RESULTS_TOKEN in _desired
         extracted_kpis = {
             k: v
             for k, v in extracted_kpis.items()
             if k in _desired
-            or (k in osw_values and (all_osw or any(fnmatchcase(k, p) for p in patterns)))
+            or (k in merged_osw_keys and (all_osw or any(fnmatchcase(k, p) for p in patterns)))
         }
 
     quality = validate_kpis(extracted_kpis, thresholds=quality_thresholds)
