@@ -9,21 +9,45 @@ submit helpers and ``warm_cache``, moved verbatim out of
 """
 
 import hashlib
+import inspect
 import logging
 import sys
 from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from ..algorithms import BaseAlgorithm
+from ..apply_params import (
+    EPW_FILE_KEY,
+    OpenStudioBindingsMissingError,
+    _build_mappings_without_osm_bindings,
+)
 from ..cache import CacheKey
 from ..config import CampaignConfig
 from ..executors import Handle
 from ..observability.monitoring import RunTrace, WorkerRecoveryManager
 from ..s3_campaign import S3CampaignStore, SubmitClaim
+from ..work import _PENDING_OSM_PARAMS_FILE, _apply_parameters_with_osm_deferral
 from .dag import SampleDict, SimResult
 from .fanout import BookkeepingOnce
 from .types import SampleSpec
+
+
+def _parameterized_package_content_digest(
+    pkg: Path,
+    base_digest_fn: Callable[[Path], str],
+) -> str:
+    """Compute the parameterized package digest including any deferred ``.osm`` mutations."""
+    base = base_digest_fn(pkg)
+    pending_file = pkg / _PENDING_OSM_PARAMS_FILE
+    if not pending_file.is_file():
+        return base
+    h = hashlib.sha256()
+    h.update(base.encode())
+    h.update(b":")
+    h.update(pending_file.read_bytes())
+    return h.hexdigest()
 
 
 def kpi_content_digests(kpi_files: list[Path]) -> list[str]:
@@ -498,11 +522,23 @@ class CampaignStepsMixin:
         # against the template before submitting any work. Collect the
         # union of parameter names across all samples so a single bad
         # variable in any sample blocks the entire step.
+        epw_var_names = {
+            str(v["name"]) for v in variable_defs if v.get("target") == "epw_file" and "name" in v
+        }
         all_param_keys: dict[str, None] = {}
         for s in samples:
-            all_param_keys.update(dict.fromkeys(s["values"].keys()))
+            for k in s["values"]:
+                if k not in epw_var_names and k != EPW_FILE_KEY:
+                    all_param_keys[k] = None
+        mappings: dict[str, Any] = {}
         if all_param_keys:
-            mappings = _c._build_mappings(self.cfg.template_sim_package)
+            try:
+                mappings = _c._build_mappings(self.cfg.template_sim_package)
+            except OpenStudioBindingsMissingError:
+                mappings = _build_mappings_without_osm_bindings(
+                    self.cfg.template_sim_package,
+                    all_param_keys,
+                )
             _c.preflight_check(all_param_keys, mappings)
             _c.log.info(
                 "pre-flight check passed: %d parameter(s) validated against %s",
@@ -618,49 +654,46 @@ class CampaignStepsMixin:
                 ctx["resolved_params"] = self._stage_external_epw(
                     ctx["resolved_params"], template_pkg, apply_out_dir
                 )
-                # The BYOS contract (osimflow.byos_contract._BYOS_CONTRACT
-                # — issue #1061) specifies ``apply_parameters(template,
-                # parameters, sample_id, out)``. The orchestrator
-                # previously forwarded only the per-sample output dir
-                # and the resolved parameter dict, which silently
-                # satisfied the legacy 2-arg default but diverged from
-                # the documented 4-arg contract — and caused the
-                # subprocess validation (PR #1058) to reject any
-                # user-supplied BYOS apply script. Forward all four
-                # positional args so the contract and the default
-                # implement the same shape.
-                # APPLY_PARAMETERS must propagate --max-sample-retries for
-                # uniform retry semantics: RUN_OPENSTUDIO_SIM and EXTRACT_KPIS
-                # both forward ``max_retries=self.cfg.max_sample_retries`` so
-                # transient ``_apply_osm_mutations`` failures (file locks,
-                # partial .osm writes) are retried instead of failing the
-                # sample outright.  ``max_retries<=0`` disables retry.  See
-                # issue #1394.  Documented in docs/user-guide.md
-                # §"--max-sample-retries: which DAG steps honor it".
-                # Issue #1679: the historical ``if self.task_queue is
-                # not None: ... else: self.executor.submit(...)`` branch
-                # is collapsed into ``_dispatch_step_work`` — same
-                # semantics, single source of truth for the dispatch
-                # contract.
-                handle = self._dispatch_step_work(
-                    fn=self.apply_fn,
-                    task_args=(template_pkg, ctx["resolved_params"], sid, apply_out_dir),
-                    task_kwargs={
-                        "max_retries": self.cfg.max_sample_retries,
-                    },
-                    exec_args=(template_pkg, ctx["resolved_params"], sid, apply_out_dir),
-                    exec_kwargs={
-                        "name": f"apply_{sid}",
-                        "cpus": 1,
-                        "memory_mb": 2048,
-                        "time_min": 5,
-                        "container": self._python_container_image,
-                        "container_digest": self._python_container_digest,
-                        "result_hint": apply_out_dir,
-                        "max_retries": self.cfg.max_sample_retries,
-                        "transport": self._result_transport_config,
-                    },
-                )
+                exec_params: dict[str, Any] = dict(ctx["resolved_params"])
+                if self.apply_fn is _c.default_apply_parameters and epw_var_names:
+                    for epw_var in epw_var_names:
+                        if epw_var not in mappings:
+                            exec_params.pop(epw_var, None)
+                if self.cfg.detach_s3:
+                    handle = self._run_local_apply_handle(
+                        template_pkg,
+                        exec_params,
+                        sid,
+                        apply_out_dir,
+                    )
+                else:
+                    if self.executor.name == "aws_batch":
+                        apply_container = self._os_digest_ref or _c.CONTAINER_OS.format(
+                            version=self.cfg.openstudio_version
+                        )
+                        apply_container_digest = self._os_container_digest
+                    else:
+                        apply_container = self._python_container_image
+                        apply_container_digest = self._python_container_digest
+                    handle = self._dispatch_step_work(
+                        fn=self.apply_fn,
+                        task_args=(template_pkg, exec_params, sid, apply_out_dir),
+                        task_kwargs={
+                            "max_retries": self.cfg.max_sample_retries,
+                        },
+                        exec_args=(template_pkg, exec_params, sid, apply_out_dir),
+                        exec_kwargs={
+                            "name": f"apply_{sid}",
+                            "cpus": 1,
+                            "memory_mb": 2048,
+                            "time_min": 5,
+                            "container": apply_container,
+                            "container_digest": apply_container_digest,
+                            "result_hint": apply_out_dir,
+                            "max_retries": self.cfg.max_sample_retries,
+                            "transport": self._result_transport_config,
+                        },
+                    )
 
                 # Build the on-success callback (captures per-sample context).
                 key = ctx["key"]
@@ -751,6 +784,60 @@ class CampaignStepsMixin:
             "APPLY_PARAMETERS", _c.time.time() - t0, generation=generation
         )
         return out
+
+    def _run_local_apply_handle(
+        self,
+        template_pkg: Path,
+        resolved_params: dict[str, Any],
+        sid: str,
+        apply_out_dir: Path,
+    ) -> Handle:
+        """Execute ``APPLY_PARAMETERS`` locally on the submit host (issue #2024).
+
+        Avoids dispatching synchronous ``scientific_python_image`` jobs to
+        ``AWSBatchExecutor`` during ``--detach-s3`` or OSW-only ``aws_batch``
+        runs while preserving the ``Handle`` / ``_submit_and_await_all``
+        bookkeeping contract.
+        """
+        fut: Future[Any] = Future()
+        try:
+            if self.apply_fn is _c.default_apply_parameters:
+                result = _apply_parameters_with_osm_deferral(
+                    template_pkg,
+                    resolved_params,
+                    sid,
+                    apply_out_dir,
+                    max_retries=self.cfg.max_sample_retries,
+                )
+            else:
+                sig = inspect.signature(self.apply_fn)
+                accepts_max_retries = "max_retries" in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+                if accepts_max_retries:
+                    result = self.apply_fn(
+                        template_pkg,
+                        resolved_params,
+                        sid,
+                        apply_out_dir,
+                        max_retries=self.cfg.max_sample_retries,
+                    )
+                else:
+                    result = self.apply_fn(
+                        template_pkg,
+                        resolved_params,
+                        sid,
+                        apply_out_dir,
+                    )
+        except Exception as exc:  # noqa: BLE001 - captured onto Future so _submit_and_await_all records per-sample failure identically
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
+        return Handle(
+            job_id=f"local-apply-{sid}",
+            _future=fut,
+            worker_id="local",
+        )
 
     def _build_run_sim_submit_kwargs(
         self,
@@ -845,7 +932,10 @@ class CampaignStepsMixin:
                     # Content of the parameterized package (issue #1869): the
                     # path is stable across re-runs, so changed variable
                     # values must still miss the cache.
-                    "package_content": _c._package_content_digest(_c.Path(str(mod_pkg))),
+                    "package_content": _parameterized_package_content_digest(
+                        _c.Path(str(mod_pkg)),
+                        _c._package_content_digest,
+                    ),
                     # Hash the log paths into the cache key so a user
                     # who moves the outdir gets a fresh run (paths
                     # change → cache miss → re-run).

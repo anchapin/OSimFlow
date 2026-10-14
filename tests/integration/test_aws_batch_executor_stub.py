@@ -394,6 +394,22 @@ def test_three_sample_campaign_via_aws_batch_stub_produces_artifacts(
         )
 
     # --- containerOverrides + environment plumbed into submit_job -------
+    # Issue #2024: apply_<sid> jobs on AWSBatchExecutor must use the
+    # OpenStudio container image, never scientific_python_image.
+    apply_calls = [c for c in submit_calls if str(c.get("jobName", "")).startswith("apply_")]
+    assert apply_calls, "no apply submit_job calls captured"
+    for call in apply_calls:
+        overrides = call.get("containerOverrides", {})
+        env = overrides.get("environment", []) if isinstance(overrides, dict) else []
+        env_dict = {e["name"]: e["value"] for e in env}
+        container_ref = str(env_dict.get("OSIMFLOW_CONTAINER", ""))
+        assert "nrel/openstudio" in container_ref, (
+            f"apply job should use nrel/openstudio container, got {container_ref!r}"
+        )
+        assert "scientific_python_image" not in container_ref, (
+            f"apply job must not use scientific_python_image, got {container_ref!r}"
+        )
+
     # At least one of the sim submissions must carry the
     # OSIMFLOW_OS_VERSION env var (the per-sample openstudio_version
     # is passed as a Batch env var by the AWSBatchExecutor).

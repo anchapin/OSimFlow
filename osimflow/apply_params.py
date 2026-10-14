@@ -317,6 +317,48 @@ def resolve_template_file(template: Path) -> Path:
     raise ValueError(f"Template directory {template} contains neither workflow.osw nor model.osm")
 
 
+_KNOWN_SIMPLE_OSM_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        "lighting_power_density",
+        "people_per_floor_area",
+        "cooling_setpoint",
+        "heating_setpoint",
+    }
+)
+
+_KNOWN_OSM_OBJECT_TYPES: frozenset[str] = frozenset(
+    {
+        "SpaceType",
+        "ThermalZone",
+        "Lights",
+        "People",
+        "Construction",
+        "BuildingStory",
+    }
+)
+
+
+def _infer_osm_attribute_mapping(name: str) -> MappedParameter | None:
+    """Infer an ``attribute`` mapping for *name* when OpenStudio bindings are absent."""
+    if "." not in name:
+        if name in _KNOWN_SIMPLE_OSM_ATTRIBUTES:
+            return MappedParameter(name=name, kind="attribute", default=None)
+        return None
+    try:
+        dotted = parse_dotted_name(name)
+    except OSMAttributeError:
+        return None
+    if dotted.object_type in _KNOWN_OSM_OBJECT_TYPES and dotted.object_name and dotted.attribute:
+        return MappedParameter(
+            name=name,
+            kind="attribute",
+            default=None,
+            object_type=dotted.object_type,
+            object_name=dotted.object_name,
+        )
+    return None
+
+
 def _build_mappings(template: Path) -> dict[str, MappedParameter]:
     """Build the union of all parameter mappings in a template.
 
@@ -339,6 +381,42 @@ def _build_mappings(template: Path) -> dict[str, MappedParameter]:
     if template_type == "osm":
         return parse_osm_attributes(template)
     return parse_osw_arguments(template)
+
+
+def _build_mappings_without_osm_bindings(
+    template: Path,
+    param_keys: Any,
+) -> dict[str, MappedParameter]:
+    """Build pre-flight mappings when local OpenStudio bindings are absent (issue #2024).
+
+    Parses ``workflow.osw`` directly and recognises valid ``.osm``
+    attribute variable names when ``model.osm`` is present without
+    requiring ``import openstudio`` on the submit host. Unknown names
+    are left out so :func:`preflight_check` still raises
+    :class:`UnmappedParameterError`.
+    """
+    mappings: dict[str, MappedParameter] = {}
+    has_osm = False
+    if template.is_dir():
+        osw_path, osm_path = _require_dir_template_files(template)
+        if osw_path is not None:
+            mappings.update(parse_osw_arguments(osw_path))
+        has_osm = osm_path is not None
+    else:
+        template_type = detect_template_type(template)
+        if template_type == "osw":
+            mappings.update(parse_osw_arguments(template))
+        else:
+            has_osm = True
+
+    if has_osm:
+        for key in param_keys:
+            if key in mappings:
+                continue
+            inferred = _infer_osm_attribute_mapping(str(key))
+            if inferred is not None:
+                mappings[str(key)] = inferred
+    return mappings
 
 
 def _select_template_file(template: Path) -> Path:
