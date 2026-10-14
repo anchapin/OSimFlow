@@ -39,17 +39,26 @@ class AWSBatchConfig:
     payload_secret_arn
         ARN of an AWS Secrets Manager secret or SSM Parameter Store
         parameter holding the task-payload HMAC secret. When set, the
-        secret is injected by the job definition's
-        ``containerProperties.secrets`` (SubmitJob has no
-        ``containerOverrides.secrets``; issue #1811). The executor
-        validates before submission that the job definition maps
-        ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to this ARN. The job's
-        *execution* role needs ``secretsmanager:GetSecretValue`` or
-        ``ssm:GetParameter`` + ``kms:Decrypt`` on it.
+        executor validates before submission that the job definition's
+        ``containerProperties.secrets`` maps
+        ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to this ARN (SubmitJob has no
+        ``containerOverrides.secrets``; issue #1811). When omitted, the
+        executor auto-discovers the ARN from the active job definition's
+        ``containerProperties.secrets`` and fetches the secret value
+        from Secrets Manager / SSM Parameter Store on the submitter
+        unless ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is already set locally
+        (issue #2042). Both the job's *execution* role and the submitter
+        identity need ``secretsmanager:GetSecretValue`` or
+        ``ssm:GetParameter`` (+ ``kms:Decrypt`` if customer-managed KMS
+        key) on it.
     allow_long_lived_credentials
-        Opt in to env / shared-file / SSO credentials instead of only
-        IAM-role credentials (issue #1833). Default off; not recommended
-        for production.
+        Opt-in escape hatch allowing direct static IAM user access keys
+        without a session token (``token is None``). Federated,
+        role-based, and short-lived session credentials (SSO,
+        ``AssumeRole``, ``AssumeRoleWithWebIdentity``,
+        ``custom-process``, EC2/ECS roles, and STS session tokens) are
+        accepted by default (issues #1833, #2026). Default off; not
+        recommended for production.
     """
 
     max_spot_price_usd: float | None = None
@@ -169,16 +178,17 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
         help=(
             "ARN of an AWS Secrets Manager secret (or SSM Parameter Store "
             "parameter) holding the task-payload HMAC secret "
-            "(key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, "
-            "the job definition must inject it via containerProperties.secrets "
-            "(validated via describe_job_definitions before submission; "
-            "SubmitJob has no containerOverrides.secrets) so the raw "
-            "secret never appears in the job spec where it is readable via "
-            "DescribeJobs (issues #1633/#1811). "
-            "The job's EXECUTION role needs secretsmanager:GetSecretValue (or "
-            "ssm:GetParameter + kms:Decrypt) on the ARN. Requires "
-            "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the "
-            "same value for signing. See docs/secret-management.md."
+            "(key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). The job "
+            "definition injects it via containerProperties.secrets "
+            "(SubmitJob has no containerOverrides.secrets) so the raw "
+            "secret is omitted from containerOverrides.environment and "
+            "DescribeJobs output (issues #1633/#1811). When omitted, "
+            "AWSBatchExecutor auto-discovers the ARN from the active job "
+            "definition via DescribeJobDefinitions and fetches the secret "
+            "value from Secrets Manager / SSM Parameter Store on the "
+            "submitter unless OSIMFLOW_TASK_PAYLOAD_SECRET is already set "
+            "locally (issue #2042). See docs/aws-batch-terraform.md and "
+            "docs/secret-management.md."
         ),
     )
     parser_group.add_argument(
@@ -186,11 +196,14 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Allow the AWS Batch executor to use long-lived / workstation "
-            "credentials (AWS_ACCESS_KEY_ID, shared credentials file, SSO "
-            "or OIDC env credentials) instead of only IAM-role credentials "
-            "from the EC2/ECS metadata service (issue #1833). Default off; "
-            "a warning is logged when enabled. Not recommended for production."
+            "Opt-in escape hatch allowing the AWS Batch executor to accept "
+            "direct static IAM user access keys without a session token "
+            "(token is None). Federated, role-based, and short-lived "
+            "session credentials (SSO, AssumeRole, "
+            "AssumeRoleWithWebIdentity, custom-process, EC2/ECS metadata "
+            "roles, and STS credentials with AWS_SESSION_TOKEN) are "
+            "accepted by default (issues #1833/#2026). Default off; a "
+            "warning is logged when enabled. Not recommended for production."
         ),
     )
 
