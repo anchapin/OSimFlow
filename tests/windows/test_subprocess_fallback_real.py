@@ -6,13 +6,22 @@ children are NOT killed on that path. These tests use real child processes;
 the ``windows-subprocess`` CI workflow runs them on ``windows-latest``.
 """
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from osimflow import _subprocess_utils as su
+# Loaded by path: ``import osimflow`` is not importable on Windows yet
+# (``osimflow.byos`` imports the POSIX-only ``resource`` module), and
+# ``_subprocess_utils`` itself only needs the stdlib.
+_SRC = Path(__file__).resolve().parents[2] / "osimflow" / "_subprocess_utils.py"
+_spec = importlib.util.spec_from_file_location("_subprocess_utils_under_test", _SRC)
+assert _spec is not None and _spec.loader is not None
+su = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = su
+_spec.loader.exec_module(su)
 
 _SLEEPER = [sys.executable, "-c", "import time; time.sleep(60)"]
 

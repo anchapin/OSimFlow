@@ -11,7 +11,7 @@ on:
   pull_request:
     paths:
       - "osimflow/_subprocess_utils.py"
-      - "tests/unit/work/test_subprocess_utils_fallback.py"
+      - "tests/windows/test_subprocess_fallback_real.py"
       - ".github/workflows/windows-subprocess.yml"
   push:
     branches: [main]
@@ -42,10 +42,10 @@ jobs:
         shell: bash
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
+          uv pip install --python .venv/Scripts/python.exe pytest
 
       - name: Run fallback tests
         shell: bash
         run: |
           .venv/Scripts/python.exe -m pytest -o addopts="" -p no:cacheprovider \
-            tests/unit/work/test_subprocess_utils_fallback.py -v
+            tests/windows/test_subprocess_fallback_real.py -v
