@@ -948,7 +948,8 @@ def _check_cross_measure_conflicts(
         if plain_entries and dotted_entries:
             dotted_keys = sorted({dk for dk, _, _ in dotted_entries})
             measures = sorted(
-                {m for _, m, _ in plain_entries if m is not None} | {m for _, m, _ in dotted_entries}
+                {m for _, m, _ in plain_entries if m is not None}
+                | {m for _, m, _ in dotted_entries}
             )
             conflicts.append(
                 f"  {plain_arg!r} specified as both unqualified {plain_arg!r} and "
