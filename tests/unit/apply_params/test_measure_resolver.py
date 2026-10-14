@@ -246,6 +246,7 @@ class TestDependencyProbesAreSandboxed:
         from osimflow import measure_resolver as mr
 
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "shh")
+        monkeypatch.setattr(mr.sys, "platform", "linux")
         with mock.patch.object(mr.subprocess, "run") as run:
             run.return_value.returncode = 0
             assert mr._check_ruby_gem("json") is True
@@ -259,6 +260,12 @@ class TestDependencyProbesAreSandboxed:
 
 class TestProbeResourceLimits:
     """Issue #1996: probe subprocesses run with a timeout and rlimits."""
+
+    @pytest.fixture(autouse=True)
+    def _non_darwin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setattr(mr.sys, "platform", "linux")
 
     def test_probe_passes_timeout_and_preexec(self) -> None:
         import os
@@ -301,3 +308,57 @@ class TestProbeResourceLimits:
         cpu, fsize = map(int, out.stdout.split())
         assert cpu <= mr._PROBE_CPU_LIMIT_S
         assert fsize <= mr._PROBE_FILE_SIZE_LIMIT_BYTES
+
+
+class TestMacOSRssWatchdog:
+    """Issue #2011: RSS watchdog replaces RLIMIT_AS on macOS probes."""
+
+    def test_darwin_uses_watchdog(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setattr(mr.sys, "platform", "darwin")
+        with mock.patch.object(mr, "_run_probe_with_rss_watchdog", return_value=True) as wd:
+            assert mr._run_probe(["x"]) is True
+        wd.assert_called_once_with(["x"])
+
+    def test_watchdog_success(self) -> None:
+        import sys
+
+        from osimflow import measure_resolver as mr
+
+        assert mr._run_probe_with_rss_watchdog([sys.executable, "-c", "pass"])
+        assert not mr._run_probe_with_rss_watchdog([sys.executable, "-c", "raise SystemExit(1)"])
+
+    @pytest.mark.skipif(os.name != "posix", reason="uses ps")
+    def test_watchdog_kills_over_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setattr(mr, "_PROBE_MEMORY_LIMIT_BYTES", 1)
+        monkeypatch.setattr(mr, "_PROBE_WATCHDOG_INTERVAL_S", 0.01)
+        assert not mr._run_probe_with_rss_watchdog(
+            [sys.executable, "-c", "import time; time.sleep(20)"]
+        )
+
+    @pytest.mark.skipif(os.name != "posix", reason="uses ps")
+    def test_watchdog_kills_on_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from osimflow import measure_resolver as mr
+
+        monkeypatch.setattr(mr, "_PROBE_TIMEOUT_S", 0.3)
+        monkeypatch.setattr(mr, "_PROBE_WATCHDOG_INTERVAL_S", 0.01)
+        assert not mr._run_probe_with_rss_watchdog(
+            [sys.executable, "-c", "import time; time.sleep(20)"]
+        )
+
+    def test_rss_bytes_handles_failure(self) -> None:
+        from unittest import mock
+
+        from osimflow import measure_resolver as mr
+
+        with mock.patch.object(mr.subprocess, "run", side_effect=OSError):
+            assert mr._rss_bytes(1) is None
