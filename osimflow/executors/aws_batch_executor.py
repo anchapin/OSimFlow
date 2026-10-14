@@ -1056,6 +1056,8 @@ class AWSBatchExecutor(BaseExecutor):
         target = (job_definition or getattr(self, "job_definition", "") or "").strip()
         if not target or not expected_image:
             return
+        if self.resolve_job_definition_image(target) is None:
+            return
         self._validate_job_definition_image(target, expected_image)
 
     def _validate_job_definition_image(self, job_definition: str, expected_image: str) -> None:

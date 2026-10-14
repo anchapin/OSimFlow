@@ -48,6 +48,7 @@ class CampaignArtifactWriter:
         self,
         executor_name: str,
         shard_label: str | None,
+        container_digest: str | None = None,
     ) -> None:
         """Write ``campaign_meta.json`` to outdir at campaign start.
 
@@ -97,6 +98,8 @@ class CampaignArtifactWriter:
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "osimflow_version": _osimflow_version(),
         }
+        if container_digest is not None:
+            meta["container_digest"] = container_digest
         out_path = self._cfg.outdir / "campaign_meta.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(meta, indent=2, default=str))
@@ -108,6 +111,7 @@ class CampaignArtifactWriter:
         cache_stats: Any,
         latest_samples_file: Path,
         shard_label: str | None,
+        container_digest: str | None = None,
     ) -> None:
         """Write ``provenance.json`` to outdir at campaign completion.
 
@@ -155,6 +159,8 @@ class CampaignArtifactWriter:
             "cache_stats": cache_stats,
             "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
+        if container_digest is not None:
+            provenance["container_digest"] = container_digest
         out_path = self._cfg.outdir / "provenance.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         safe_json_dumps(provenance, out_path, default=str, indent=2)

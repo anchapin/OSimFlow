@@ -1450,42 +1450,27 @@ class Campaign(
         """
         if self.executor.name != "aws_batch":
             return
-        os_label = CONTAINER_OS.format(version=self.cfg.openstudio_version)
-        resolve_image_fn = getattr(self.executor, "resolve_job_definition_image", None)
-        validate_digest_fn = getattr(self.executor, "validate_job_definition_digest", None)
         if self.cfg.container_digest:
-            if (
-                callable(resolve_image_fn)
-                and callable(validate_digest_fn)
-                and resolve_image_fn() is not None
-            ):
-                validate_digest_fn(self.cfg.container_digest)
+            getattr(self.executor, "validate_job_definition_digest", lambda _d: None)(
+                self.cfg.container_digest
+            )
             return
         if self._os_digest_ref is None:
-            job_def_digest_ref = self._discover_aws_batch_digest(os_label)
-            if job_def_digest_ref is not None:
+            os_label = CONTAINER_OS.format(version=self.cfg.openstudio_version)
+            if self._discover_aws_batch_digest(os_label) is not None:
                 self._os_digest_ref = digest_pinned_image_ref(
                     os_label,
                     self._os_container_digest,
                 )
                 self.trace.config_summary["container_digest"] = self._os_digest_ref
 
-    def _record_digest_in_json_file(self, path: Path) -> None:
-        """Record ``container_digest`` in a JSON manifest file on disk (issue #2027)."""
-        if self._os_digest_ref is None or not path.is_file():
-            return
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict) and payload.get("container_digest") != self._os_digest_ref:
-                payload["container_digest"] = self._os_digest_ref
-                path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001 - best-effort manifest enrichment
-            log.debug("could not record container_digest in %s: %s", path, exc)
-
     def _write_campaign_meta(self) -> None:
         """Write ``campaign_meta.json`` to outdir at campaign start."""
-        self._artifacts.write_campaign_meta(self.executor.name, self._shard_label())
-        self._record_digest_in_json_file(self.cfg.outdir / "campaign_meta.json")
+        self._artifacts.write_campaign_meta(
+            self.executor.name,
+            self._shard_label(),
+            container_digest=self._os_digest_ref,
+        )
 
     def _write_provenance(self) -> None:
         """Write ``provenance.json`` to outdir at campaign completion."""
@@ -1494,8 +1479,8 @@ class Campaign(
             cache_stats=self.cache.stats(),
             latest_samples_file=self._latest_samples_file,
             shard_label=self._shard_label(),
+            container_digest=self._os_digest_ref,
         )
-        self._record_digest_in_json_file(self.cfg.outdir / "provenance.json")
 
     def _write_artifact_manifest(self) -> None:
         """Write ``artifact_manifest.json`` to outdir after aggregation."""

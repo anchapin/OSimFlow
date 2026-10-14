@@ -466,7 +466,7 @@ class TestAwsBatchJobDefinitionDigestResolution:
             "nomad",
         }
         assert CONTAINER_SUBSTRATE_EXECUTORS == expected
-        for name in sorted(expected - {"aws_batch"}):
+        for name in sorted(expected):
             stub = _NamedStubExecutor()
             stub.name = name
             with patch(
@@ -479,3 +479,73 @@ class TestAwsBatchJobDefinitionDigestResolution:
                 )
                 with pytest.raises(RuntimeError, match="requires a digest-pinned container image"):
                     campaign.run()
+
+    def test_late_attached_batch_client_resolves_digest_at_run_time_and_cosign_uses_job_def_digest(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Handles late-attached Batch client at run() time and cosign verification against job-def digest."""
+        pinned_job_def_image = (
+            f"123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow:3.11.0@sha256:{HEX}"
+        )
+        ex, fake_client = self._make_batch_executor(pinned_job_def_image)
+        # First return empty jobDefinitions during Campaign.__init__ so
+        # resolve_job_definition_image() returns None, then return the
+        # digest-pinned job definition when Campaign.run() calls
+        # _resolve_aws_batch_container_digest().
+        fake_client.describe_job_definitions.side_effect = [
+            {"jobDefinitions": []},
+            {
+                "jobDefinitions": [
+                    {
+                        "revision": 1,
+                        "containerProperties": {"image": pinned_job_def_image},
+                    }
+                ]
+            },
+        ]
+        expected_digest_ref = f"123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow@sha256:{HEX}"
+        with patch(
+            "osimflow.cache._resolve_image_digest",
+            side_effect=ImageDigestUnavailableError("docker unavailable"),
+        ):
+            campaign = Campaign(
+                self._cfg(
+                    variables_yml,
+                    template_pkg,
+                    outdir,
+                    container_digest=None,
+                    dry_run=True,
+                ),
+                ex,
+            )
+            assert campaign._os_digest_ref is None
+            campaign._resolve_aws_batch_container_digest()
+            assert campaign._os_digest_ref == expected_digest_ref
+            assert campaign.trace.config_summary["container_digest"] == expected_digest_ref
+
+        # Also verify _verify_cosign_or_raise uses resolved_image_ref when
+        # --require-cosign-identity is set without --container-digest.
+        cfg_cosign = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=template_pkg,
+            n_samples=1,
+            outdir=outdir / "cosign",
+            openstudio_version="3.11.0",
+            container_digest=None,
+            require_cosign_identity="https://github.com/NREL/OpenStudio/*",
+            dry_run=True,
+        )
+        with (
+            patch(
+                "osimflow.cache._resolve_image_digest",
+                side_effect=ImageDigestUnavailableError("docker unavailable"),
+            ),
+            patch("osimflow.campaign.verify_image_signature") as mock_verify,
+        ):
+            ex2, _ = self._make_batch_executor(pinned_job_def_image)
+            Campaign(cfg_cosign, ex2)
+            mock_verify.assert_called_once()
+            assert mock_verify.call_args.args[0] == expected_digest_ref
