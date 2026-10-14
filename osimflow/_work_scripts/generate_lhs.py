@@ -264,6 +264,20 @@ def _resolve_conditional(
     return _apply_distribution(u, sub_dist, sub_dist_spec)
 
 
+def _resolve_seed(config: dict[str, Any] | None) -> int:
+    """Resolve and validate top-level ``seed`` from ``variables.yml`` (default 0)."""
+    if not isinstance(config, dict):
+        return 0
+    raw_seed = config.get("seed")
+    if raw_seed is None:
+        return 0
+    if isinstance(raw_seed, bool):
+        raise ValueError(f"variables.yml 'seed' must be an integer, got boolean {raw_seed!r}")
+    if isinstance(raw_seed, int):
+        return int(raw_seed)
+    raise ValueError(f"variables.yml 'seed' must be an integer, got {raw_seed!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variables_yml", required=True, type=Path)
@@ -279,7 +293,8 @@ def main() -> int:
 
     with args.variables_yml.open() as f:
         config = yaml.safe_load(f)
-    variables = config.get("variables", [])
+    seed = _resolve_seed(config if isinstance(config, dict) else None)
+    variables = config.get("variables", []) if isinstance(config, dict) else []
     if not variables:
         for i in range(args.n_samples):
             param_file = args.out.parent / f"{i + 1:04d}.params.json"
@@ -302,7 +317,7 @@ def main() -> int:
     ordered = _validate_dependency_graph(variables)
     var_index: dict[str, int] = {v["name"]: i for i, v in enumerate(variables)}
 
-    sampler = scipy.stats.qmc.LatinHypercube(d=d, seed=0)
+    sampler = scipy.stats.qmc.LatinHypercube(d=d, seed=seed)
     lhs_samples = sampler.random(n=args.n_samples)
 
     samples = []
@@ -312,7 +327,7 @@ def main() -> int:
             name = v["name"]
             j = var_index[name]
             u = lhs_samples[i, j]
-            dist = v.get("distribution")
+            dist = str(v.get("distribution") or "")
 
             if dist == "conditional":
                 values[name] = _resolve_conditional(u, v, values)

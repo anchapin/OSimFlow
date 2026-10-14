@@ -165,7 +165,7 @@ def _algorithm_settings(
         (configs.get("osa_settings") or {}).get("analysis_settings", {}).get("algorithm_settings")
     )
     if isinstance(cfg_settings, dict):
-        settings.update(cfg_settings)
+        settings.update({k: v for k, v in cfg_settings.items() if v is not None})
     cfg_type = (configs.get("osa_settings") or {}).get("analysis_settings", {}).get("analysis_type")
     if cfg_type:
         settings.setdefault("analysis_type", cfg_type)
@@ -177,7 +177,7 @@ def _algorithm_settings(
         if isinstance(problem, dict) and problem.get("analysis_type"):
             settings["analysis_type"] = problem["analysis_type"]
     if space and isinstance(space.get("algorithm_setting"), dict):
-        settings.update(space["algorithm_setting"])
+        settings.update({k: v for k, v in space["algorithm_setting"].items() if v is not None})
     return settings
 
 
@@ -191,6 +191,17 @@ def _as_int(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _parse_seed(value: Any) -> int | None:
+    """Validate and return an integer sampling seed, or ``None`` when unset."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"seed must be an integer, got boolean {value!r}")
+    if isinstance(value, int):
+        return int(value)
+    raise ValueError(f"seed must be an integer, got {value!r}")
 
 
 def _coerce_like(existing: Any, value: Any) -> Any:
@@ -262,12 +273,17 @@ def _import_batch(
     space = _load_json(batch.parametric_space)
     variables = parametric_space_to_variables(space)
     settings = _algorithm_settings(batch, space, configs)
+    seed = _parse_seed(settings.get("seed"))
 
     batch_dir = output_dir / batch.batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
     variables_path = batch_dir / "variables.yml"
+    variables_doc: dict[str, Any] = {"algorithm": "lhs"}
+    if seed is not None:
+        variables_doc["seed"] = seed
+    variables_doc["variables"] = variables
     variables_path.write_text(
-        yaml.safe_dump({"algorithm": "lhs", "variables": variables}, sort_keys=False),
+        yaml.safe_dump(variables_doc, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -308,7 +324,7 @@ def _import_batch(
         "template_package": str(package_path) if package_path else None,
         "outdir": str(outdir),
         "n_samples": n_samples,
-        "seed": _as_int(settings.get("seed")),
+        "seed": seed,
         "sample_method": settings.get("sample_method"),
         "analysis_type": settings.get("analysis_type"),
         "n_variables": len(variables),
