@@ -970,6 +970,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
 
     # Parse objective and constraints sections (issue #282).
     yml_algorithm: str | None = None
+    yml_prebuilt_workflow: bool = False
     try:
         with variables_yml.open() as f:
             yml_data = yaml.safe_load(f)
@@ -979,6 +980,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
                 raw_algo = raw_algo.get("type")
             if isinstance(raw_algo, str) and raw_algo.strip():
                 yml_algorithm = raw_algo.strip()
+            if yml_data.get("prebuilt_workflow") is True:
+                yml_prebuilt_workflow = True
         objective, constraints = _parse_objective_and_constraints(
             yml_data if isinstance(yml_data, dict) else {}
         )
@@ -1087,7 +1090,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             else 600.0
         ),
         skip_preflight=bool(args.get("skip_preflight", False)),
-        prebuilt_workflow=bool(args.get("prebuilt_workflow", False)),
+        prebuilt_workflow=bool(args.get("prebuilt_workflow", False)) or yml_prebuilt_workflow,
         max_generations=int(str(args.get("max_generations", 1))),
         aws_batch_max_spot_price_usd=(
             float(str(args["aws_batch_max_spot_price_usd"]))

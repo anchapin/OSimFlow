@@ -642,3 +642,115 @@ def test_gem_import_single_run_sobol_morris_and_non_measure_keys(tmp_path: Path)
     assert b3["n_samples"] == 8
     v3 = yaml.safe_load(Path(b3["variables_yml"]).read_text())
     assert v3["algorithm"] == "morris"
+
+
+def test_gem_import_empty_and_metadata_only_parametric_space(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #2056: fixed-parameter gem batches with empty/metadata-only parametric_space import and run end-to-end."""
+    from osimflow.server_csv import build_server_csv_frame
+
+    # Direct calls to parametric_space_to_variables({}) still reject empty by default.
+    with pytest.raises(GemImportError, match="parametric_space defines no variables"):
+        parametric_space_to_variables({})
+    assert parametric_space_to_variables({}, allow_empty=True) == []
+
+    proj = tmp_path / "proj_fixed"
+    proj.mkdir()
+    # Batch1: completely empty {}
+    (proj / "parametric_space_Batch1_empty.json").write_text(json.dumps({}))
+    (proj / "measure_space_Batch1_empty.json").write_text(
+        json.dumps({"measure_space": {"bar": {"flag": "true", "n": "7", "floor_area": "2500"}}})
+    )
+    # Batch2: metadata-only with number_of_samples: 1
+    (proj / "parametric_space_Batch2_meta1.json").write_text(
+        json.dumps({"algorithm_setting": {"number_of_samples": 1, "seed": 42}})
+    )
+    # Batch3: metadata-only with number_of_samples: 3
+    (proj / "parametric_space_Batch3_meta3.json").write_text(
+        json.dumps({"algorithm_setting": {"number_of_samples": 3}})
+    )
+
+    pkg = _package(tmp_path)
+    out = tmp_path / "out_fixed"
+    manifest = import_gem_project(proj, out, template_package=pkg)
+
+    b1 = manifest["batches"]["Batch1_empty"]
+    assert b1["n_samples"] == 1
+    assert b1["n_variables"] == 0
+    assert "--prebuilt-workflow" in b1["command"]
+    assert b1["command"][b1["command"].index("--n_samples") + 1] == "1"
+    v1 = yaml.safe_load(Path(b1["variables_yml"]).read_text())
+    assert v1["variables"] == []
+    assert v1["prebuilt_workflow"] is True
+    osw1 = json.loads((Path(b1["template_package"]) / "workflow.osw").read_text())
+    assert osw1["steps"][0]["arguments"] == {"flag": True, "n": 7, "floor_area": 2500}
+
+    b2 = manifest["batches"]["Batch2_meta1"]
+    assert b2["n_samples"] == 1
+    assert b2["seed"] == 42
+    assert "--prebuilt-workflow" in b2["command"]
+    v2 = yaml.safe_load(Path(b2["variables_yml"]).read_text())
+    assert v2["variables"] == []
+    assert v2["prebuilt_workflow"] is True
+    assert v2["seed"] == 42
+
+    b3 = manifest["batches"]["Batch3_meta3"]
+    assert b3["n_samples"] == 3
+    assert "--prebuilt-workflow" in b3["command"]
+    v3 = yaml.safe_load(Path(b3["variables_yml"]).read_text())
+    assert v3["variables"] == []
+    assert v3["prebuilt_workflow"] is True
+
+    # Run `osimflow run` exactly as AwsBatch#submit_batch invokes it (WITHOUT --prebuilt-workflow on CLI)
+    monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+    rc1 = main(
+        [
+            "run",
+            "--executor",
+            "local",
+            "--input_variables",
+            b1["variables_yml"],
+            "--template_sim_package",
+            b1["template_package"],
+            "--outdir",
+            b1["outdir"],
+            "--n_samples",
+            "1",
+            "--openstudio_version",
+            "3.10.0",
+        ]
+    )
+    assert rc1 == 0
+    b1_out = Path(b1["outdir"])
+    assert (b1_out / "work" / "apply" / "0001" / "workflow.osw").is_file()
+    assert (b1_out / "aggregated_results.csv").is_file()
+    df1 = build_server_csv_frame(b1_out)
+    assert len(df1) == 1
+    assert list(df1["_id"]) == ["0001"]
+    assert list(df1["status"]) == ["completed"]
+
+    # Run Batch3 with --n_samples 3 (without --prebuilt-workflow on CLI) to verify multi-sample synthesis
+    rc3 = main(
+        [
+            "run",
+            "--executor",
+            "local",
+            "--input_variables",
+            b3["variables_yml"],
+            "--template_sim_package",
+            b3["template_package"],
+            "--outdir",
+            b3["outdir"],
+            "--n_samples",
+            "3",
+            "--openstudio_version",
+            "3.10.0",
+        ]
+    )
+    assert rc3 == 0
+    b3_out = Path(b3["outdir"])
+    for sid in ("0001", "0002", "0003"):
+        assert (b3_out / "work" / "apply" / sid / "workflow.osw").is_file()
+    df3 = build_server_csv_frame(b3_out)
+    assert list(df3["_id"]) == ["0001", "0002", "0003"]

@@ -200,7 +200,10 @@ def _spec_to_variable(
 
 
 def parametric_space_to_variables(
-    space: dict[str, Any], *, full_factorial: bool = False
+    space: dict[str, Any],
+    *,
+    full_factorial: bool = False,
+    allow_empty: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert a gem ``parametric_space`` mapping to ``variables.yml`` entries."""
     variables: list[dict[str, Any]] = []
@@ -213,7 +216,7 @@ def parametric_space_to_variables(
             variables.append(
                 _spec_to_variable(measure, argument, spec, full_factorial=full_factorial)
             )
-    if not variables:
+    if not variables and not allow_empty:
         raise GemImportError("parametric_space defines no variables")
     return variables
 
@@ -576,6 +579,8 @@ def _resolve_batch_n_samples(
     *,
     is_full_factorial: bool,
 ) -> int | None:
+    if not variables:
+        return _as_int(settings.get("number_of_samples")) or 1
     if is_full_factorial:
         return math.prod(len(v["levels"]) for v in variables) if variables else 0
     n_samples = _as_int(settings.get("number_of_samples"))
@@ -586,6 +591,36 @@ def _resolve_batch_n_samples(
     ):
         return 1
     return n_samples
+
+
+def _stage_batch_template(
+    batch: GemBatch,
+    batch_dir: Path,
+    template_package: Path | None,
+    varied: set[str],
+) -> tuple[Path | None, list[str]]:
+    if template_package is None:
+        return None, []
+    package_path = batch_dir / "template"
+    if package_path.exists():
+        shutil.rmtree(package_path)
+    shutil.copytree(template_package, package_path)
+    osw_path = package_path / "workflow.osw"
+    if osw_path.is_file():
+        _normalize_osw_paths(package_path, source_package_path=template_package)
+    unmatched: list[str] = []
+    if batch.measure_space is not None and osw_path.is_file():
+        raw = _load_json(batch.measure_space)
+        static = dict(raw.get("measure_space", raw))
+        reporting = raw.get("measure_space_reporting")
+        if isinstance(reporting, dict):
+            for measure, arguments in reporting.items():
+                static.setdefault(measure, arguments)
+        unmatched = _overlay_measure_space(osw_path, static, varied)
+        for measure in unmatched:
+            log.warning("%s: measure %r has no step in %s", batch.batch_id, measure, osw_path)
+    _preserve_cleanup_sql(osw_path, varied)
+    return package_path, unmatched
 
 
 def _import_batch(
@@ -604,7 +639,9 @@ def _import_batch(
     raw_analysis_type = settings.get("analysis_type")
     algorithm = _resolve_gem_algorithm(raw_analysis_type)
     is_full_factorial = algorithm == "full_factorial"
-    variables = parametric_space_to_variables(space, full_factorial=is_full_factorial)
+    variables = parametric_space_to_variables(
+        space, full_factorial=is_full_factorial, allow_empty=True
+    )
     seed = _parse_seed(settings.get("seed"))
 
     batch_dir = output_dir / batch.batch_id
@@ -613,34 +650,16 @@ def _import_batch(
     variables_doc: dict[str, Any] = {"algorithm": algorithm}
     if seed is not None:
         variables_doc["seed"] = seed
+    if not variables:
+        variables_doc["prebuilt_workflow"] = True
     variables_doc["variables"] = variables
     variables_path.write_text(
         yaml.safe_dump(variables_doc, sort_keys=False),
         encoding="utf-8",
     )
 
-    unmatched: list[str] = []
-    package_path: Path | None = None
     varied = {str(v["name"]) for v in variables}
-    if template_package is not None:
-        package_path = batch_dir / "template"
-        if package_path.exists():
-            shutil.rmtree(package_path)
-        shutil.copytree(template_package, package_path)
-        osw_path = package_path / "workflow.osw"
-        if osw_path.is_file():
-            _normalize_osw_paths(package_path, source_package_path=template_package)
-        if batch.measure_space is not None and osw_path.is_file():
-            raw = _load_json(batch.measure_space)
-            static = dict(raw.get("measure_space", raw))
-            reporting = raw.get("measure_space_reporting")
-            if isinstance(reporting, dict):
-                for measure, arguments in reporting.items():
-                    static.setdefault(measure, arguments)
-            unmatched = _overlay_measure_space(osw_path, static, varied)
-            for measure in unmatched:
-                log.warning("%s: measure %r has no step in %s", batch.batch_id, measure, osw_path)
-        _preserve_cleanup_sql(osw_path, varied)
+    package_path, unmatched = _stage_batch_template(batch, batch_dir, template_package, varied)
 
     n_samples = _resolve_batch_n_samples(
         settings, raw_analysis_type, variables, is_full_factorial=is_full_factorial
@@ -652,6 +671,8 @@ def _import_batch(
     command += ["--outdir", str(outdir)]
     if n_samples is not None:
         command += ["--n_samples", str(n_samples)]
+    if not variables:
+        command.append("--prebuilt-workflow")
     return {
         "batch_id": batch.batch_id,
         "batch_number": batch.number,

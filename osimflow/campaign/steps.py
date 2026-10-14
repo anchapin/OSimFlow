@@ -194,8 +194,8 @@ class CampaignStepsMixin:
             _c.log.warning("Cache entry %s is corrupted; treating as cache-miss", key)
 
         out_dir = self.cfg.work_dir / algo.name()
-        if self.cfg.prebuilt_workflow:
-            # Issue #1812: one empty-valued sample per prebuilt package run,
+        if self.cfg.prebuilt_workflow or variables.get("prebuilt_workflow") is True:
+            # Issue #1812 / #2056: one empty-valued sample per prebuilt package run,
             # with stable zero-padded IDs; no sampler is involved.
             out_dir.mkdir(parents=True, exist_ok=True)
             result_path = out_dir / "samples.json"
@@ -204,7 +204,7 @@ class CampaignStepsMixin:
                     {
                         "samples": [
                             {"sample_id": f"{i + 1:04d}", "values": {}}
-                            for i in range(self.cfg.n_samples)
+                            for i in range(max(1, self.cfg.n_samples))
                         ]
                     },
                     indent=2,

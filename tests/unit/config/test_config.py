@@ -365,6 +365,26 @@ class TestLoadConfig:
         cfg = load_config(args)
         assert cfg.algorithm == "lhs"
 
+    def test_prebuilt_workflow_in_variables_yml_allows_empty_variables(
+        self, template_pkg: Path, outdir: Path, tmp_path: Path
+    ) -> None:
+        """Issue #2056: prebuilt_workflow: true in variables.yml enables prebuilt_workflow and allows variables: []."""
+        vars_path = tmp_path / "vars_prebuilt.yml"
+        vars_path.write_text("algorithm: lhs\nprebuilt_workflow: true\nvariables: []\n")
+        args = _base_args(vars_path, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.prebuilt_workflow is True
+
+    def test_invalid_prebuilt_workflow_type_in_variables_yml_rejected(
+        self, template_pkg: Path, outdir: Path, tmp_path: Path
+    ) -> None:
+        """Issue #2056: non-boolean prebuilt_workflow in variables.yml raises ValidationError."""
+        vars_path = tmp_path / "vars_bad_prebuilt.yml"
+        vars_path.write_text("algorithm: lhs\nprebuilt_workflow: 'yes'\nvariables: []\n")
+        args = _base_args(vars_path, template_pkg, outdir)
+        with pytest.raises(ValidationError, match="prebuilt_workflow.*must be a boolean"):
+            load_config(args)
+
     def test_slurm_advanced_directives(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:

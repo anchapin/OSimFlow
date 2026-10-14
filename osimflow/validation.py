@@ -212,6 +212,12 @@ def validate_variables_yml(path: Path, *, allow_empty: bool = False) -> list[dic
 
     _validate_variables_yml_algorithm(data)
 
+    if "prebuilt_workflow" in data and not isinstance(data["prebuilt_workflow"], bool):
+        raise ValidationError(
+            "'prebuilt_workflow' in variables.yml must be a boolean",
+            field="prebuilt_workflow",
+        )
+
     if "variables" not in data:
         raise ValidationError(
             "variables.yml missing required 'variables' key",
@@ -225,7 +231,7 @@ def validate_variables_yml(path: Path, *, allow_empty: bool = False) -> list[dic
             field="variables",
         )
 
-    if len(variables) == 0 and allow_empty:
+    if len(variables) == 0 and (allow_empty or data.get("prebuilt_workflow") is True):
         return []
 
     if len(variables) == 0:
