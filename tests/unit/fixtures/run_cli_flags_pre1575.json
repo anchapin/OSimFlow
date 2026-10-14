@@ -80,7 +80,7 @@
     "const": "True",
     "default": "False",
     "dest": "aws_batch_allow_long_lived_credentials",
-    "help": "Allow the AWS Batch executor to use long-lived / workstation credentials (AWS_ACCESS_KEY_ID, shared credentials file, SSO or OIDC env credentials) instead of only IAM-role credentials from the EC2/ECS metadata service (issue #1833). Default off; a warning is logged when enabled. Not recommended for production.",
+    "help": "Opt-in escape hatch allowing the AWS Batch executor to accept direct static IAM user access keys without a session token (token is None). Federated, role-based, and short-lived session credentials (SSO, AssumeRole, AssumeRoleWithWebIdentity, custom-process, EC2/ECS metadata roles, and STS credentials with AWS_SESSION_TOKEN) are accepted by default (issues #1833/#2026). Default off; a warning is logged when enabled. Not recommended for production.",
     "metavar": null,
     "nargs": "0",
     "option_strings": [
@@ -215,7 +215,7 @@
     "const": null,
     "default": null,
     "dest": "aws_batch_payload_secret_arn",
-    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, the job definition must inject it via containerProperties.secrets (validated via describe_job_definitions before submission; SubmitJob has no containerOverrides.secrets) so the raw secret never appears in the job spec where it is readable via DescribeJobs (issues #1633/#1811). The job's EXECUTION role needs secretsmanager:GetSecretValue (or ssm:GetParameter + kms:Decrypt) on the ARN. Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
+    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). The job definition injects it via containerProperties.secrets (SubmitJob has no containerOverrides.secrets) so the raw secret is omitted from containerOverrides.environment and DescribeJobs output (issues #1633/#1811). When omitted, AWSBatchExecutor auto-discovers the ARN from the active job definition via DescribeJobDefinitions and fetches the secret value from Secrets Manager / SSM Parameter Store on the submitter unless OSIMFLOW_TASK_PAYLOAD_SECRET is already set locally (issue #2042). See docs/aws-batch-terraform.md and docs/secret-management.md.",
     "metavar": null,
     "nargs": null,
     "option_strings": [
@@ -897,19 +897,19 @@
     "type": null
   },
   "--detach-s3": {
+    "action": "_StoreTrueAction",
+    "choices": null,
+    "const": "True",
+    "default": "False",
     "dest": "detach_s3",
+    "help": "AWS Batch only: submit the jobs, write a handoff record + samples.json to the --result-storage-bucket S3 bucket and exit without waiting (issue #1873). Check progress with `osimflow status --from-s3` and fetch results with `osimflow download --from-s3`. Re-running with the same --outdir name is a no-op once the handoff exists.",
+    "metavar": null,
+    "nargs": "0",
     "option_strings": [
       "--detach-s3"
     ],
-    "default": "False",
-    "type": null,
-    "choices": null,
-    "action": "_StoreTrueAction",
-    "nargs": "0",
-    "const": "True",
-    "metavar": null,
-    "help": "AWS Batch only: submit the jobs, write a handoff record + samples.json to the --result-storage-bucket S3 bucket and exit without waiting (issue #1873). Check progress with `osimflow status --from-s3` and fetch results with `osimflow download --from-s3`. Re-running with the same --outdir name is a no-op once the handoff exists.",
-    "required": false
+    "required": false,
+    "type": null
   },
   "--docker-swarm-image": {
     "action": "_StoreAction",
