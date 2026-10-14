@@ -406,26 +406,66 @@ class TestPreflightAmbiguous:
 
 
 # ---------------------------------------------------------------------------
-# Pre-flight: cross-measure conflict detection (issue #431)
+# Pre-flight: cross-measure conflict detection (issues #431, #2065)
 # ---------------------------------------------------------------------------
 class TestPreflightCrossMeasureConflict:
-    """CrossMeasureConflictError fires when the same arg is set for multiple measures."""
+    """CrossMeasureConflictError fires on colliding targets while allowing distinct OSW steps."""
 
-    def test_both_dotted_names_raises(self, tmp_path: Path) -> None:
-        """Specifying both dotted names for the same argument raises."""
+    def test_distinct_osw_steps_dotted_names_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2065: disambiguated <MeasureA>.<arg> and <MeasureB>.<arg> on distinct OSW steps pass."""
+        monkeypatch.delenv("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT", raising=False)
         osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
         mappings = parse_osw_arguments(osw)
-        with pytest.raises(
-            CrossMeasureConflictError,
-            match="heating_setpoint.*SetThermostatSchedule.*SetEnvelopePerformance",
-        ):
-            preflight_check(
-                {
-                    "SetThermostatSchedule.heating_setpoint": 19.0,
-                    "SetEnvelopePerformance.heating_setpoint": 21.0,
-                },
-                mappings,
-            )
+        preflight_check(
+            {
+                "SetThermostatSchedule.heating_setpoint": 19.0,
+                "SetEnvelopePerformance.heating_setpoint": 21.0,
+            },
+            mappings,
+        )
+
+    def test_distinct_osw_steps_skip_pass_and_mutate_independently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2065: <MeasureA>.__SKIP__ and <MeasureB>.__SKIP__ pass preflight and mutate independently."""
+        from osimflow.apply_params import _mutate_osw
+        from osimflow.work import default_apply_parameters
+
+        monkeypatch.delenv("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT", raising=False)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        osw = _write_osw(pkg, TWO_MEASURE_OSW)
+        (pkg / "model.osm").write_text(json.dumps({"attributes": {}}))
+        mappings = parse_osw_arguments(osw)
+        params = {
+            "SetThermostatSchedule.__SKIP__": "TRUE",
+            "SetEnvelopePerformance.__SKIP__": "FALSE",
+            "SetThermostatSchedule.heating_setpoint": 19.5,
+            "SetEnvelopePerformance.heating_setpoint": 17.5,
+        }
+        preflight_check(params, mappings)
+
+        # Direct _mutate_osw verification
+        direct_osw = tmp_path / "direct_workflow.osw"
+        shutil.copy2(osw, direct_osw)
+        _mutate_osw(direct_osw, dict(params), mappings)
+        direct_mutated = json.loads(direct_osw.read_text())
+        assert direct_mutated["steps"][0]["arguments"]["__SKIP__"] is True
+        assert direct_mutated["steps"][0]["arguments"]["heating_setpoint"] == 19.5
+        assert direct_mutated["steps"][1]["arguments"]["__SKIP__"] is False
+        assert direct_mutated["steps"][1]["arguments"]["heating_setpoint"] == 17.5
+
+        sample_out = tmp_path / "sample_0001"
+        shutil.copytree(pkg, sample_out)
+        default_apply_parameters(pkg, dict(params), "0001", sample_out)
+
+        mutated = json.loads((sample_out / "workflow.osw").read_text())
+        assert mutated["steps"][0]["arguments"]["__SKIP__"] is True
+        assert mutated["steps"][0]["arguments"]["heating_setpoint"] == 19.5
+        assert mutated["steps"][1]["arguments"]["__SKIP__"] is False
+        assert mutated["steps"][1]["arguments"]["heating_setpoint"] == 17.5
 
     def test_single_dotted_name_no_conflict(self, tmp_path: Path) -> None:
         """Specifying only one dotted name (even if arg exists in other measure) passes."""
@@ -448,10 +488,38 @@ class TestPreflightCrossMeasureConflict:
         with pytest.raises(AmbiguousParameterError, match="heating_setpoint"):
             preflight_check({"heating_setpoint": 19.0}, mappings)
 
-    def test_three_measure_all_specified(self, tmp_path: Path) -> None:
-        """When all three measures share an arg, specifying two dotted forms raises."""
-        osw = _write_osw(tmp_path, THREE_MEASURE_OSW)
+    def test_unqualified_plus_qualified_same_arg_raises_conflict(self, tmp_path: Path) -> None:
+        """Combining unqualified `wwr` with `SetEnvelopePerformance.wwr` raises CrossMeasureConflictError."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
         mappings = parse_osw_arguments(osw)
+        with pytest.raises(
+            CrossMeasureConflictError,
+            match=r"wwr.*SetEnvelopePerformance\.wwr",
+        ):
+            preflight_check(
+                {
+                    "wwr": 0.4,
+                    "SetEnvelopePerformance.wwr": 0.5,
+                },
+                mappings,
+            )
+
+    def test_dotted_without_step_isolation_raises(self) -> None:
+        """When dotted mappings lack isolated step_index, specifying both raises CrossMeasureConflictError."""
+        mappings = {
+            "MeasureA.shared": MappedParameter(
+                name="shared",
+                kind="measure_argument",
+                step_index=None,
+                measure_name="MeasureA",
+            ),
+            "MeasureB.shared": MappedParameter(
+                name="shared",
+                kind="measure_argument",
+                step_index=None,
+                measure_name="MeasureB",
+            ),
+        }
         with pytest.raises(
             CrossMeasureConflictError,
             match="shared.*MeasureA.*MeasureB",
@@ -474,8 +542,8 @@ class TestPreflightCrossMeasureConflict:
         ):
             preflight_check(
                 {
-                    "SetThermostatSchedule.heating_setpoint": 19.0,
-                    "SetEnvelopePerformance.heating_setpoint": 21.0,
+                    "wwr": 0.4,
+                    "SetEnvelopePerformance.wwr": 0.5,
                 },
                 mappings,
             )
@@ -497,8 +565,8 @@ class TestPreflightCrossMeasureConflict:
     # -- OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT escape hatch (issue #1638) --
 
     _CONFLICTING_PARAMS = {
-        "SetThermostatSchedule.heating_setpoint": 19.0,
-        "SetEnvelopePerformance.heating_setpoint": 21.0,
+        "wwr": 0.4,
+        "SetEnvelopePerformance.wwr": 0.5,
     }
 
     def test_env_bypass_downgrades_to_warning(
@@ -512,7 +580,7 @@ class TestPreflightCrossMeasureConflict:
         with caplog.at_level(logging.WARNING, logger="osimflow.apply_params"):
             preflight_check(self._CONFLICTING_PARAMS, mappings)  # should NOT raise
         assert "OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT" in caplog.text
-        assert "heating_setpoint" in caplog.text
+        assert "wwr" in caplog.text
 
     def test_env_bypass_empty_value_still_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -521,7 +589,7 @@ class TestPreflightCrossMeasureConflict:
         osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
         mappings = parse_osw_arguments(osw)
         monkeypatch.setenv("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT", "")
-        with pytest.raises(CrossMeasureConflictError, match="heating_setpoint"):
+        with pytest.raises(CrossMeasureConflictError, match="wwr"):
             preflight_check(self._CONFLICTING_PARAMS, mappings)
 
     def test_env_bypass_unset_still_raises(
@@ -531,7 +599,7 @@ class TestPreflightCrossMeasureConflict:
         osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
         mappings = parse_osw_arguments(osw)
         monkeypatch.delenv("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT", raising=False)
-        with pytest.raises(CrossMeasureConflictError, match="heating_setpoint"):
+        with pytest.raises(CrossMeasureConflictError, match="wwr"):
             preflight_check(self._CONFLICTING_PARAMS, mappings)
 
 
