@@ -210,11 +210,32 @@ class TestFullFactorialGenerateSamples:
         algo = FullFactorialAlgorithm()
         variables: dict[str, Any] = {
             "variables": [
-                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+                {"name": "x", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
             ]
         }
         with pytest.raises(ValueError, match="requires a 'levels' key"):
             algo.generate_samples(variables, n_samples=3, seed=None, outdir=tmp_path)
+
+    def test_fallback_to_values_and_min_max(self, tmp_path: Path) -> None:
+        """Issue #2057: FullFactorialAlgorithm falls back to values or [min, max] when levels is absent."""
+        algo = FullFactorialAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "cat_var", "distribution": "categorical", "values": ["A", "B", "C"]},
+                {"name": "disc_var", "distribution": "discrete", "values": [10, 20]},
+                {"name": "unif_var", "distribution": "uniform", "min": 1.5, "max": 2.5},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=12, seed=None, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 12
+        combos = {
+            (s["values"]["cat_var"], s["values"]["disc_var"], s["values"]["unif_var"])
+            for s in data["samples"]
+        }
+        assert len(combos) == 12
+        assert ("A", 10, 1.5) in combos
+        assert ("C", 20, 2.5) in combos
 
     def test_empty_levels_raises(self, tmp_path: Path) -> None:
         algo = FullFactorialAlgorithm()

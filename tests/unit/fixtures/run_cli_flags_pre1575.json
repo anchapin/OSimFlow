@@ -33,7 +33,7 @@
     "action": "_StoreAction",
     "choices": null,
     "const": null,
-    "default": "lhs",
+    "default": null,
     "dest": "algorithm",
     "help": "Sampling algorithm to use (default: lhs). Available algorithms are registered in AlgorithmRegistry.",
     "metavar": null,

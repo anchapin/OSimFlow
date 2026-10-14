@@ -153,6 +153,29 @@ def validate_path_within(
 # ======================================================================
 
 
+def _validate_variables_yml_algorithm(data: dict[str, Any]) -> None:
+    """Validate optional top-level ``algorithm`` in ``variables.yml``."""
+    if "algorithm" not in data:
+        return
+    raw_algo = data["algorithm"]
+    if isinstance(raw_algo, dict):
+        raw_algo = raw_algo.get("type")
+    if not isinstance(raw_algo, str) or not raw_algo.strip():
+        raise ValidationError(
+            "'algorithm' in variables.yml must be a non-empty string",
+            field="algorithm",
+        )
+    algo_name = raw_algo.strip()
+    from osimflow.algorithms import AlgorithmRegistry  # noqa: PLC0415
+
+    available = AlgorithmRegistry.available()
+    if algo_name not in available:
+        raise ValidationError(
+            f"Unknown algorithm '{algo_name}' in variables.yml (available: {', '.join(available)})",
+            field="algorithm",
+        )
+
+
 def validate_variables_yml(path: Path, *, allow_empty: bool = False) -> list[dict[str, Any]]:
     """Load and validate a ``variables.yml`` file.
 
@@ -186,6 +209,8 @@ def validate_variables_yml(path: Path, *, allow_empty: bool = False) -> list[dic
             f"variables.yml must be a mapping, got {type(data).__name__}",
             field="variables",
         )
+
+    _validate_variables_yml_algorithm(data)
 
     if "variables" not in data:
         raise ValidationError(

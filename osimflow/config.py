@@ -969,9 +969,16 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     baseline = _parse_baseline(variables_yml)
 
     # Parse objective and constraints sections (issue #282).
+    yml_algorithm: str | None = None
     try:
         with variables_yml.open() as f:
             yml_data = yaml.safe_load(f)
+        if isinstance(yml_data, dict):
+            raw_algo = yml_data.get("algorithm")
+            if isinstance(raw_algo, dict):
+                raw_algo = raw_algo.get("type")
+            if isinstance(raw_algo, str) and raw_algo.strip():
+                yml_algorithm = raw_algo.strip()
         objective, constraints = _parse_objective_and_constraints(
             yml_data if isinstance(yml_data, dict) else {}
         )
@@ -1022,6 +1029,14 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         fail_after=int(str(args.get("chaos_fail_after", 2))),
     )
 
+    cli_algorithm = args.get("algorithm")
+    if cli_algorithm is not None and str(cli_algorithm).strip():
+        resolved_algorithm = str(cli_algorithm)
+    elif yml_algorithm is not None:
+        resolved_algorithm = yml_algorithm
+    else:
+        resolved_algorithm = "lhs"
+
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
@@ -1051,7 +1066,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         weather_dir=str(args["weather_dir"]) if args.get("weather_dir") else "weather",
         dry_run=bool(args.get("dry_run", False)),
         sample=int(str(args["sample"])) if args.get("sample") is not None else None,
-        algorithm=str(args["algorithm"]) if args.get("algorithm") else "lhs",
+        algorithm=resolved_algorithm,
         init_script=(Path(str(args["init_script"])).resolve() if args.get("init_script") else None),
         finalize_script=(
             Path(str(args["finalize_script"])).resolve() if args.get("finalize_script") else None

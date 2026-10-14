@@ -531,3 +531,114 @@ def test_import_forces_server_directory_cleanup_sql_false_unless_varied(tmp_path
     import_gem_project(proj3, out3, template_package=pkg1)
     osw3 = json.loads((out3 / "Batch1/template/workflow.osw").read_text())
     assert osw3["steps"][1]["arguments"]["sql"] is True
+
+
+def test_gem_import_doe_and_full_factorial_analysis_type(tmp_path: Path) -> None:
+    """Issue #2057: analysis_type doe / full_factorial maps to full_factorial with levels and Cartesian product n_samples."""
+    proj = tmp_path / "proj_doe"
+    proj.mkdir()
+    (proj / "configs.yml").write_text(
+        yaml.safe_dump(
+            {
+                "osa_settings": {
+                    "analysis_settings": {
+                        "analysis_type": "doe",
+                        "algorithm_settings": {"number_of_samples": 99},
+                    }
+                }
+            }
+        )
+    )
+    (proj / "parametric_space_Batch1_doe.json").write_text(
+        json.dumps(
+            {
+                "SetWallR": {"r_value": [5.0, 25.0], "construction": ["steel", "wood", "mass"]},
+                "SetInfiltration": {"ach": [0.1, 0.25, 0.5]},
+                "SetRoofR": {"r_value": {"min": 10, "max": 40}},
+            }
+        )
+    )
+    (proj / "parametric_space_Batch2_fact.json").write_text(
+        json.dumps(
+            {
+                "osa_settings": {"analysis_type": "full_factorial"},
+                "SetWallR": {"r_value": [10.0, 20.0, 30.0]},
+                "SetInfiltration": {"enabled": [True, False]},
+            }
+        )
+    )
+    out = tmp_path / "out_doe"
+    manifest = import_gem_project(proj, out)
+
+    b1 = manifest["batches"]["Batch1_doe"]
+    # 2 * 3 * 3 * 2 = 36
+    assert b1["n_samples"] == 36
+    assert "--n_samples" in b1["command"]
+    assert b1["command"][b1["command"].index("--n_samples") + 1] == "36"
+    v1 = yaml.safe_load(Path(b1["variables_yml"]).read_text())
+    assert v1["algorithm"] == "full_factorial"
+    by_name1 = {v["name"]: v for v in v1["variables"]}
+    assert by_name1["SetWallR.r_value"]["levels"] == [5.0, 25.0]
+    assert by_name1["SetWallR.construction"]["levels"] == ["steel", "wood", "mass"]
+    assert by_name1["SetInfiltration.ach"]["levels"] == [0.1, 0.25, 0.5]
+    assert by_name1["SetRoofR.r_value"]["levels"] == [10.0, 40.0]
+
+    b2 = manifest["batches"]["Batch2_fact"]
+    # 3 * 2 = 6
+    assert b2["n_samples"] == 6
+    v2 = yaml.safe_load(Path(b2["variables_yml"]).read_text())
+    assert v2["algorithm"] == "full_factorial"
+    by_name2 = {v["name"]: v for v in v2["variables"]}
+    assert by_name2["SetWallR.r_value"]["levels"] == [10.0, 20.0, 30.0]
+    assert by_name2["SetInfiltration.enabled"]["levels"] == [True, False]
+
+
+def test_gem_import_single_run_sobol_morris_and_non_measure_keys(tmp_path: Path) -> None:
+    """Issue #2057: single_run defaults n_samples=1, sobol/morris map cleanly, and all _NON_MEASURE_KEYS are merged."""
+    proj = tmp_path / "proj_types"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1_single.json").write_text(
+        json.dumps(
+            {
+                "analysis_settings": {"analysis_type": "single_run"},
+                "SetWallR": {"r_value": [5.0, 25.0]},
+            }
+        )
+    )
+    (proj / "parametric_space_Batch2_sobol.json").write_text(
+        json.dumps(
+            {
+                "algorithm_settings": {"analysis_type": "sobol", "number_of_samples": 16},
+                "SetWallR": {"r_value": [5.0, 25.0]},
+            }
+        )
+    )
+    (proj / "parametric_space_Batch3_morris.json").write_text(
+        json.dumps(
+            {
+                "osa_settings": {
+                    "analysis_settings": {"analysis_type": "Morris", "number_of_samples": 8}
+                },
+                "SetWallR": {"r_value": [5.0, 25.0]},
+            }
+        )
+    )
+    out = tmp_path / "out_types"
+    manifest = import_gem_project(proj, out)
+
+    b1 = manifest["batches"]["Batch1_single"]
+    assert b1["n_samples"] == 1
+    assert b1["command"][-2:] == ["--n_samples", "1"]
+    v1 = yaml.safe_load(Path(b1["variables_yml"]).read_text())
+    assert v1["algorithm"] == "lhs"
+    assert len(v1["variables"]) == 1
+
+    b2 = manifest["batches"]["Batch2_sobol"]
+    assert b2["n_samples"] == 16
+    v2 = yaml.safe_load(Path(b2["variables_yml"]).read_text())
+    assert v2["algorithm"] == "sobol"
+
+    b3 = manifest["batches"]["Batch3_morris"]
+    assert b3["n_samples"] == 8
+    v3 = yaml.safe_load(Path(b3["variables_yml"]).read_text())
+    assert v3["algorithm"] == "morris"
