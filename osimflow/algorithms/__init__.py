@@ -546,10 +546,10 @@ def _apply_discrete_var(
         for i, sample in enumerate(lhs_samples):
             sample["values"][var_name] = drawn[i]
     elif values_list:
-        uniform_pmf = {v: 1.0 for v in values_list}
-        drawn = qdiscrete(uniform_pmf, n=n_samples, seed=seed)
+        index_pmf = {idx: 1.0 for idx in range(len(values_list))}
+        drawn_indices = qdiscrete(index_pmf, n=n_samples, seed=seed)
         for i, sample in enumerate(lhs_samples):
-            sample["values"][var_name] = drawn[i]
+            sample["values"][var_name] = values_list[drawn_indices[i]]
     else:
         raise ValueError(
             f"discrete variable '{var_name}' requires either a 'pmf' or a 'values' list"
@@ -621,13 +621,16 @@ def _sample_independent(
         else [{"sample_id": f"{i + 1:04d}", "values": {}} for i in range(n_samples)]
     )
 
-    for var_def in discrete_vars:
-        _apply_discrete_var(lhs_samples, var_def, n_samples, seed)
+    if seed is not None and discrete_vars:
+        child_seeds: list[int | None] = [
+            int(child_ss.generate_state(1)[0])
+            for child_ss in np.random.SeedSequence(seed).spawn(len(discrete_vars))
+        ]
+    else:
+        child_seeds = [None] * len(discrete_vars)
 
-    return lhs_samples
-
-    for var_def in discrete_vars:
-        _apply_discrete_var(lhs_samples, var_def, n_samples, seed)
+    for var_def, var_seed in zip(discrete_vars, child_seeds, strict=True):
+        _apply_discrete_var(lhs_samples, var_def, n_samples, var_seed)
 
     return lhs_samples
 
