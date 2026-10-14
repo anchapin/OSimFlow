@@ -221,3 +221,239 @@ def test_invalid_seed_rejected(tmp_path: Path, bad_seed: object) -> None:
     )
     with pytest.raises(ValueError, match="seed must be an integer"):
         import_gem_project(proj, tmp_path / "out_bad")
+
+
+def test_normalize_osw_paths_rewrites_out_of_tree_and_works_in_isolated_dir(
+    tmp_path: Path,
+) -> None:
+    """Issue #2043: parent-relative paths in workflow.osw are normalized inside template/ and resolve when isolated."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "parametric_space.json").write_text(json.dumps({"bar": {"floor_area": [100, 200]}}))
+
+    pkg = tmp_path / "staged_pkg"
+    (pkg / "measures" / "bar").mkdir(parents=True)
+    (pkg / "weather").mkdir(parents=True)
+    (pkg / "weather" / "Chicago.epw").write_text("LOCATION,Chicago\n")
+    (pkg / "seed_models").mkdir(parents=True)
+    (pkg / "seed_models" / "model.osm").write_text("OS:Version,{1};\n")
+    (pkg / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "seed_file": "../seed_models/model.osm",
+                "weather_file": "../../weather/Chicago.epw",
+                "measure_paths": ["../../measures"],
+                "file_paths": ["../../weather", "../../seed_models"],
+                "steps": [
+                    {"measure_dir_name": "bar", "arguments": {"floor_area": 100}},
+                ],
+            }
+        )
+    )
+
+    out = tmp_path / "out"
+    manifest = import_gem_project(proj, out, template_package=pkg)
+    assert list(manifest["batches"]) == ["default"]
+
+    # Copy template/ to a completely separate isolated directory to simulate remote worker execution
+    isolated = tmp_path / "isolated_worker" / "0000"
+    isolated.parent.mkdir(parents=True)
+    import shutil
+
+    shutil.copytree(out / "default" / "template", isolated)
+    isolated_root = isolated.resolve()
+    osw = json.loads((isolated / "workflow.osw").read_text())
+
+    assert osw["measure_paths"] == ["measures"]
+    assert "seed_models" in osw["file_paths"]
+    assert "weather" in osw["file_paths"]
+    assert osw["seed_file"] == "seed_models/model.osm"
+    assert osw["weather_file"] == "weather/Chicago.epw"
+
+    for mp in osw["measure_paths"]:
+        p = (isolated / mp).resolve()
+        p.relative_to(isolated_root)
+        assert p.is_dir()
+    for fp in osw["file_paths"]:
+        p = (isolated / fp).resolve()
+        p.relative_to(isolated_root)
+        assert p.is_dir()
+    for field in ("seed_file", "weather_file"):
+        p = (isolated / osw[field]).resolve()
+        p.relative_to(isolated_root)
+        assert p.is_file()
+
+
+def test_normalize_osw_paths_preserves_valid_in_package_paths(tmp_path: Path) -> None:
+    """Issue #2043: valid in-package relative paths and file_paths-resolved basenames are preserved."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+
+    pkg = tmp_path / "pkg"
+    (pkg / "custom_measures" / "bar").mkdir(parents=True)
+    (pkg / "files" / "seeds").mkdir(parents=True)
+    (pkg / "files" / "seeds" / "seed.osm").write_text("OS:Version,{1};\n")
+    (pkg / "files" / "epw").mkdir(parents=True)
+    (pkg / "files" / "epw" / "site.epw").write_text("LOCATION,Site\n")
+    (pkg / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "seed_file": "seed.osm",
+                "weather_file": "files/epw/site.epw",
+                "measure_paths": ["custom_measures"],
+                "file_paths": ["files/seeds"],
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+
+    out = tmp_path / "out"
+    import_gem_project(proj, out, template_package=pkg)
+    osw = json.loads((out / "Batch1" / "template" / "workflow.osw").read_text())
+    assert osw["seed_file"] == "seed.osm"
+    assert osw["weather_file"] == "files/epw/site.epw"
+    assert osw["measure_paths"] == ["custom_measures"]
+    assert osw["file_paths"] == ["files/seeds", "files/epw"]
+
+
+def test_normalize_osw_paths_missing_or_ambiguous_raises_gem_import_error(
+    tmp_path: Path,
+) -> None:
+    """Issue #2043: zero or multiple in-package matches for seed_file / weather_file raise GemImportError."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+
+    # Missing seed_file
+    pkg_missing = tmp_path / "pkg_missing"
+    pkg_missing.mkdir()
+    (pkg_missing / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "seed_file": "../outside/missing.osm",
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+    with pytest.raises(GemImportError, match="no file named 'missing.osm'"):
+        import_gem_project(proj, tmp_path / "out_missing", template_package=pkg_missing)
+
+    # Ambiguous weather_file
+    pkg_ambig = tmp_path / "pkg_ambig"
+    (pkg_ambig / "weather_a").mkdir(parents=True)
+    (pkg_ambig / "weather_b").mkdir(parents=True)
+    (pkg_ambig / "weather_a" / "dup.epw").write_text("A\n")
+    (pkg_ambig / "weather_b" / "dup.epw").write_text("B\n")
+    (pkg_ambig / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "weather_file": "../outside/dup.epw",
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+    with pytest.raises(GemImportError, match="ambiguous inside template package"):
+        import_gem_project(proj, tmp_path / "out_ambig", template_package=pkg_ambig)
+
+    # Ambiguous measure_dir_name when measure_paths escaped package
+    pkg_ambig_m = tmp_path / "pkg_ambig_m"
+    (pkg_ambig_m / "custom_a" / "bar").mkdir(parents=True)
+    (pkg_ambig_m / "custom_b" / "bar").mkdir(parents=True)
+    (pkg_ambig_m / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "measure_paths": ["../../measures"],
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+    with pytest.raises(GemImportError, match="measure 'bar' is ambiguous"):
+        import_gem_project(proj, tmp_path / "out_ambig_m", template_package=pkg_ambig_m)
+
+    # Missing measure_dir_name when measure_paths escaped package
+    pkg_missing_m = tmp_path / "pkg_missing_m"
+    pkg_missing_m.mkdir()
+    (pkg_missing_m / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "measure_paths": ["../../measures"],
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+    with pytest.raises(GemImportError, match="could not resolve step measure 'bar'"):
+        import_gem_project(proj, tmp_path / "out_missing_m", template_package=pkg_missing_m)
+
+
+def test_normalize_osw_paths_contained_absolute_path_with_duplicate_basename(
+    tmp_path: Path,
+) -> None:
+    """Issue #2043: an absolute path contained inside template_package resolves directly without basename ambiguity."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+
+    pkg = tmp_path / "pkg_abs"
+    (pkg / "measures" / "bar").mkdir(parents=True)
+    (pkg / "seed_a").mkdir(parents=True)
+    (pkg / "seed_b").mkdir(parents=True)
+    (pkg / "seed_a" / "model.osm").write_text("A\n")
+    (pkg / "seed_b" / "model.osm").write_text("B\n")
+    (pkg / "weather_a").mkdir(parents=True)
+    (pkg / "weather_b").mkdir(parents=True)
+    (pkg / "weather_a" / "site.epw").write_text("WA\n")
+    (pkg / "weather_b" / "site.epw").write_text("WB\n")
+    (pkg / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "seed_file": str((pkg / "seed_b" / "model.osm").resolve()),
+                "weather_file": str((pkg / "weather_a" / "site.epw").resolve()),
+                "measure_paths": [str((pkg / "measures").resolve())],
+                "file_paths": [str((pkg / "seed_b").resolve())],
+                "steps": [{"measure_dir_name": "bar", "arguments": {"x": 0}}],
+            }
+        )
+    )
+
+    out = tmp_path / "out_abs"
+    import_gem_project(proj, out, template_package=pkg)
+    osw = json.loads((out / "Batch1" / "template" / "workflow.osw").read_text())
+    assert osw["seed_file"] == "seed_b/model.osm"
+    assert osw["weather_file"] == "weather_a/site.epw"
+    assert osw["measure_paths"] == ["measures"]
+    assert "seed_b" in osw["file_paths"]
+    assert "weather_a" in osw["file_paths"]
+
+
+def test_discover_batches_supports_custom_suffixes_default_and_collisions(
+    tmp_path: Path,
+) -> None:
+    """Issue #2043: Batch<N> sorted numerically, then custom suffixes lexically, then default; collisions raise GemImportError."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "parametric_space.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "parametric_space_Batch10_ten.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "parametric_space_Batch2_two.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "parametric_space_zebra.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "parametric_space_alpha.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "measure_space_alpha.json").write_text(json.dumps({"measure_space": {"bar": {"x": 0}}}))
+
+    batches = discover_batches(proj)
+    assert [b.batch_id for b in batches] == [
+        "Batch2_two",
+        "Batch10_ten",
+        "alpha",
+        "zebra",
+        "default",
+    ]
+    alpha = next(b for b in batches if b.batch_id == "alpha")
+    assert alpha.number is None and alpha.name == "alpha"
+    assert alpha.measure_space == proj / "measure_space_alpha.json"
+
+    # Collision on (kind, batch_id): parametric_space_Batch2_two.json vs parametric_spaceBatch2_two.json
+    (proj / "parametric_spaceBatch2_two.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    with pytest.raises(
+        GemImportError, match="duplicate parametric_space files for batch 'Batch2_two'"
+    ):
+        discover_batches(proj)

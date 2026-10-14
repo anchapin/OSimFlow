@@ -51,8 +51,9 @@ DEFAULT_BATCH_ID = "default"
 
 _FILE_RE = re.compile(
     r"^(?P<kind>parametric_space|measure_space|osa_workflow)"
-    r"(?:_?(?P<batch>Batch(?P<num>\d+)(?:_(?P<name>.+))?))?\.json$"
+    r"(?:(?:_(?P<custom>[A-Za-z0-9].*))|(?:_?(?P<batch>Batch(?P<num>\d+)(?:_(?P<name>.+))?)))?\.json$"
 )
+_BATCH_RE = re.compile(r"^Batch(?P<num>\d+)(?:_(?P<name>.+))?$")
 _NON_MEASURE_KEYS = {"algorithm_setting"}
 
 
@@ -82,13 +83,32 @@ def discover_batches(project_dir: Path) -> list[GemBatch]:
         match = _FILE_RE.match(path.name)
         if not match:
             continue
-        batch_id = match.group("batch") or DEFAULT_BATCH_ID
-        num = match.group("num")
+        raw_suffix = match.group("batch") or match.group("custom")
+        if raw_suffix:
+            bmatch = _BATCH_RE.match(raw_suffix)
+            if bmatch:
+                batch_id = raw_suffix
+                num: int | None = int(bmatch.group("num"))
+                bname: str | None = bmatch.group("name")
+            else:
+                batch_id = raw_suffix
+                num = None
+                bname = raw_suffix
+        else:
+            batch_id = DEFAULT_BATCH_ID
+            num = None
+            bname = None
         batch = batches.setdefault(
             batch_id,
-            GemBatch(batch_id=batch_id, number=int(num) if num else None, name=match.group("name")),
+            GemBatch(batch_id=batch_id, number=num, name=bname),
         )
-        setattr(batch, match.group("kind"), path)
+        kind = match.group("kind")
+        existing = getattr(batch, kind)
+        if existing is not None and existing != path:
+            raise GemImportError(
+                f"duplicate {kind} files for batch {batch_id!r}: {existing.name} and {path.name}"
+            )
+        setattr(batch, kind, path)
     shared = batches.get(DEFAULT_BATCH_ID)
     usable = [b for b in batches.values() if b.parametric_space or b.osa_workflow]
     if shared is not None and shared.measure_space is not None:
@@ -99,7 +119,15 @@ def discover_batches(project_dir: Path) -> list[GemBatch]:
         raise GemImportError(
             f"no parametric_space*.json or osa_workflow*.json found in {project_dir}"
         )
-    return sorted(usable, key=lambda b: (b.number is None, b.number or 0, b.batch_id))
+
+    def _sort_key(b: GemBatch) -> tuple[int, int, str]:
+        if b.number is not None:
+            return (0, b.number, b.batch_id)
+        if b.batch_id != DEFAULT_BATCH_ID:
+            return (1, 0, b.batch_id)
+        return (2, 0, b.batch_id)
+
+    return sorted(usable, key=_sort_key)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -245,6 +273,211 @@ def _overlay_measure_space(
     return unmatched
 
 
+def _rel_dir_if_contained(root_resolved: Path, candidate: Path) -> str | None:
+    """Return POSIX package-relative path if *candidate* resolves inside *root_resolved* and is a dir."""
+    try:
+        resolved = candidate.resolve()
+        rel = resolved.relative_to(root_resolved)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_dir():
+        return None
+    return "." if rel == Path(".") else rel.as_posix()
+
+
+def _rel_file_if_contained(root_resolved: Path, candidate: Path) -> Path | None:
+    """Return relative Path if *candidate* resolves inside *root_resolved* and is a file."""
+    try:
+        resolved = candidate.resolve()
+        rel = resolved.relative_to(root_resolved)
+    except (OSError, ValueError):
+        return None
+    return rel if resolved.is_file() else None
+
+
+def _check_existing_file_in_package(
+    root_resolved: Path,
+    raw_path: Path,
+    valid_file_dirs: list[Path],
+    source_root_resolved: Path | None = None,
+) -> tuple[str, str | None] | None:
+    """Return ``(field_val, required_dir)`` if *raw_path* already resolves inside *root_resolved*."""
+    rel = _rel_file_if_contained(root_resolved, root_resolved / raw_path)
+    if rel is not None:
+        parent_rel = rel.parent.as_posix() if rel.parent != Path(".") else None
+        return rel.as_posix(), parent_rel
+    if raw_path.is_absolute():
+        if source_root_resolved is not None:
+            src_rel = _rel_file_if_contained(source_root_resolved, raw_path)
+            if src_rel is not None:
+                copied_rel = _rel_file_if_contained(root_resolved, root_resolved / src_rel)
+                if copied_rel is not None:
+                    parent_rel = (
+                        copied_rel.parent.as_posix() if copied_rel.parent != Path(".") else None
+                    )
+                    return copied_rel.as_posix(), parent_rel
+        return None
+    for fdir in valid_file_dirs:
+        if _rel_file_if_contained(root_resolved, fdir / raw_path) is not None:
+            fdir_rel = fdir.resolve().relative_to(root_resolved)
+            return (
+                raw_path.as_posix(),
+                "." if fdir_rel == Path(".") else fdir_rel.as_posix(),
+            )
+    return None
+
+
+def _resolve_file_in_package(
+    root_resolved: Path,
+    raw_value: str,
+    valid_file_dirs: list[Path],
+    field_name: str,
+    source_root_resolved: Path | None = None,
+) -> tuple[str, str | None]:
+    """Resolve *raw_value* (seed_file or weather_file) within *root_resolved*.
+
+    Returns ``(new_field_value, required_file_path_dir_or_None)``.
+    Raises :class:`GemImportError` if no candidate or multiple candidates match.
+    """
+    raw_path = Path(raw_value)
+    existing = _check_existing_file_in_package(
+        root_resolved, raw_path, valid_file_dirs, source_root_resolved
+    )
+    if existing is not None:
+        return existing
+
+    target_name = raw_path.name
+    if not target_name:
+        raise GemImportError(f"workflow.osw {field_name} {raw_value!r} has an empty filename")
+    matches = [
+        rel
+        for p in sorted(root_resolved.rglob(target_name))
+        if (rel := _rel_file_if_contained(root_resolved, p)) is not None and rel.name == target_name
+    ]
+    if not matches:
+        raise GemImportError(
+            f"workflow.osw {field_name} {raw_value!r} escapes or is missing from template package "
+            f"and no file named {target_name!r} was found inside {root_resolved}"
+        )
+    if len(matches) > 1:
+        rel_matches = [m.as_posix() for m in matches]
+        raise GemImportError(
+            f"workflow.osw {field_name} {raw_value!r} is ambiguous inside template package; "
+            f"candidates: {rel_matches}"
+        )
+    chosen_rel = matches[0]
+    parent_rel = chosen_rel.parent.as_posix() if chosen_rel.parent != Path(".") else None
+    return chosen_rel.as_posix(), parent_rel
+
+
+def _collect_valid_rel_dirs(
+    root_resolved: Path, raw_entries: Any, source_root_resolved: Path | None = None
+) -> list[str]:
+    """Keep existing path entries that resolve to directories inside *root_resolved*."""
+    result: list[str] = []
+    if not isinstance(raw_entries, list):
+        return result
+    for entry in raw_entries:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        p = Path(entry.strip())
+        rel_dir = _rel_dir_if_contained(root_resolved, root_resolved / p)
+        if rel_dir is None and p.is_absolute() and source_root_resolved is not None:
+            src_rel = _rel_dir_if_contained(source_root_resolved, p)
+            if src_rel is not None:
+                rel_dir = _rel_dir_if_contained(root_resolved, root_resolved / src_rel)
+        if rel_dir is not None and rel_dir not in result:
+            result.append(rel_dir)
+    return result
+
+
+def _find_step_measure_parent(root_resolved: Path, mdir: str, had_invalid_mp: bool) -> str | None:
+    """Locate the unambiguous package-relative parent directory containing measure *mdir*."""
+    candidates: list[str] = []
+    for cand in sorted(root_resolved.rglob(Path(mdir).name)):
+        parent_str = _rel_dir_if_contained(root_resolved, cand.parent) if cand.is_dir() else None
+        if (
+            parent_str is not None
+            and (root_resolved / parent_str / mdir).is_dir()
+            and parent_str not in candidates
+        ):
+            candidates.append(parent_str)
+    if len(candidates) > 1:
+        raise GemImportError(
+            f"workflow.osw measure {mdir!r} is ambiguous inside template package; "
+            f"candidate measure_paths: {candidates}"
+        )
+    if not candidates and had_invalid_mp:
+        raise GemImportError(
+            f"workflow.osw measure_paths could not resolve step measure {mdir!r} "
+            f"inside template package {root_resolved}"
+        )
+    return candidates[0] if candidates else None
+
+
+def _normalize_measure_paths(
+    root_resolved: Path, osw: dict[str, Any], source_root_resolved: Path | None = None
+) -> None:
+    """Normalize ``measure_paths`` in *osw* in-place."""
+    raw_mp = osw.get("measure_paths")
+    valid_mp = _collect_valid_rel_dirs(root_resolved, raw_mp, source_root_resolved)
+    had_invalid_mp = isinstance(raw_mp, list) and len(valid_mp) < len(raw_mp)
+    if (root_resolved / "measures").is_dir() and "measures" not in valid_mp:
+        valid_mp.append("measures")
+
+    steps = osw.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            mdir = step.get("measure_dir_name") if isinstance(step, dict) else None
+            if not isinstance(mdir, str) or not mdir.strip():
+                continue
+            if any((root_resolved / mp / mdir).is_dir() for mp in valid_mp):
+                continue
+            parent_str = _find_step_measure_parent(root_resolved, mdir, had_invalid_mp)
+            if parent_str is not None and parent_str not in valid_mp:
+                valid_mp.append(parent_str)
+
+    if valid_mp or "measure_paths" in osw:
+        osw["measure_paths"] = valid_mp
+
+
+def _normalize_osw_paths(package_path: Path, source_package_path: Path | None = None) -> None:
+    """Normalize ``measure_paths``, ``file_paths``, ``seed_file``, and ``weather_file`` in ``workflow.osw``."""
+    osw_path = package_path / "workflow.osw"
+    if not osw_path.is_file():
+        return
+    root_resolved = package_path.resolve()
+    source_root_resolved = source_package_path.resolve() if source_package_path else None
+    osw = _load_json(osw_path)
+
+    _normalize_measure_paths(root_resolved, osw, source_root_resolved)
+    valid_fp = _collect_valid_rel_dirs(root_resolved, osw.get("file_paths"), source_root_resolved)
+    valid_file_dirs = [root_resolved / fp for fp in valid_fp]
+
+    for field_name in ("seed_file", "weather_file"):
+        raw_val = osw.get(field_name)
+        if isinstance(raw_val, str) and raw_val.strip():
+            new_val, req_dir = _resolve_file_in_package(
+                root_resolved,
+                raw_val.strip(),
+                valid_file_dirs,
+                field_name,
+                source_root_resolved,
+            )
+            osw[field_name] = new_val
+            if req_dir is not None and req_dir not in valid_fp:
+                valid_fp.append(req_dir)
+
+    for std_dir in ("weather", "seed_models"):
+        if (root_resolved / std_dir).is_dir() and std_dir not in valid_fp:
+            valid_fp.append(std_dir)
+
+    if valid_fp or "file_paths" in osw:
+        osw["file_paths"] = valid_fp
+
+    osw_path.write_text(json.dumps(osw, indent=2), encoding="utf-8")
+
+
 def _load_configs(project_dir: Path, configs: Path | None) -> dict[str, Any]:
     path = configs if configs is not None else project_dir / "configs.yml"
     if not path.is_file():
@@ -295,6 +528,8 @@ def _import_batch(
             shutil.rmtree(package_path)
         shutil.copytree(template_package, package_path)
         osw_path = package_path / "workflow.osw"
+        if osw_path.is_file():
+            _normalize_osw_paths(package_path, source_package_path=template_package)
         if batch.measure_space is not None and osw_path.is_file():
             raw = _load_json(batch.measure_space)
             static = dict(raw.get("measure_space", raw))
