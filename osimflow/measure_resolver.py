@@ -9,6 +9,7 @@ measure's dependencies are not installed, rather than producing obscure
 runtime errors during simulation.
 """
 
+import importlib
 import logging
 import os
 import re
@@ -267,21 +268,70 @@ def _apply_probe_rlimits() -> None:
 
 
 _PROBE_WATCHDOG_INTERVAL_S = 0.1
+_PROBE_WATCHDOG_MAX_INTERVAL_S = 1.0
+_PROBE_WATCHDOG_BACKOFF = 1.5
 
 
-def _rss_bytes(pid: int) -> int | None:
-    """Resident set size of ``pid`` in bytes via ``ps`` (None if unavailable)."""
+def _psutil_tree_rss(pid: int) -> int | None:
+    """Sum RSS of ``pid`` and its descendants via psutil (None if unavailable)."""
+    try:
+        psutil = importlib.import_module("psutil")
+    except ImportError:
+        return None
+    try:
+        root = psutil.Process(pid)
+        total = int(root.memory_info().rss)
+        for child in root.children(recursive=True):
+            try:
+                total += int(child.memory_info().rss)
+            except psutil.Error:
+                continue
+        return total
+    except (psutil.Error, OSError):
+        return None
+
+
+def _ps_tree_rss(pid: int) -> int | None:
+    """Sum RSS of ``pid`` and its descendants with a single ``ps`` call."""
     try:
         out = subprocess.run(
-            ["ps", "-o", "rss=", "-p", str(pid)],
+            ["ps", "-A", "-o", "pid=,ppid=,rss="],
             capture_output=True,
             text=True,
             check=False,
             timeout=5,
-        ).stdout.strip()
-        return int(out.split()[0]) * 1024 if out else None
-    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
+        ).stdout
+    except (subprocess.SubprocessError, OSError):
         return None
+    rss_kb: dict[int, int] = {}
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        try:
+            p, pp, r = (int(x) for x in line.split()[:3])
+        except ValueError:
+            continue
+        rss_kb[p] = r
+        children.setdefault(pp, []).append(p)
+    if pid not in rss_kb:
+        return None
+    total, seen, stack = 0, {pid}, [pid]
+    while stack:
+        cur = stack.pop()
+        total += rss_kb.get(cur, 0)
+        for c in children.get(cur, ()):
+            if c not in seen:
+                seen.add(c)
+                stack.append(c)
+    return total * 1024
+
+
+def _rss_bytes(pid: int) -> int | None:
+    """RSS in bytes of ``pid`` plus all its descendants (None if unavailable).
+
+    Prefers psutil (no subprocess spawn); falls back to one ``ps`` snapshot.
+    """
+    rss = _psutil_tree_rss(pid)
+    return rss if rss is not None else _ps_tree_rss(pid)
 
 
 def _run_probe_with_rss_watchdog(cmd: list[str]) -> bool:
@@ -299,6 +349,7 @@ def _run_probe_with_rss_watchdog(cmd: list[str]) -> bool:
         preexec_fn=_apply_probe_rlimits if resource is not None else None,  # noqa: PLW1509
     ) as proc:
         deadline = time.monotonic() + _PROBE_TIMEOUT_S
+        interval = _PROBE_WATCHDOG_INTERVAL_S
         while proc.poll() is None:
             rss = _rss_bytes(proc.pid)
             if rss is not None and rss > _PROBE_MEMORY_LIMIT_BYTES:
@@ -310,7 +361,9 @@ def _run_probe_with_rss_watchdog(cmd: list[str]) -> bool:
                 proc.kill()
                 proc.wait()
                 return False
-            time.sleep(_PROBE_WATCHDOG_INTERVAL_S)
+            time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
+            # Back off: short probes stay responsive, long ones poll cheaply.
+            interval = min(interval * _PROBE_WATCHDOG_BACKOFF, _PROBE_WATCHDOG_MAX_INTERVAL_S)
         return proc.returncode == 0
 
 
