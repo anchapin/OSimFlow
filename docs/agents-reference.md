@@ -156,8 +156,6 @@ physically live in their executor's config module, not in
   `mark-for-reanalysis` — `--priority`;
   `merge` — `--source-ids`, `--target-id`, `--target-work-dir`;
   `import-osa` — `--output`, `--package-output`, `--template-package`;
-  `import-gem-osa` — `--output-dir`, `--batch`, `--template-package`,
-  `--configs`;
   `measure` / `list-measures` — `--filter`, `--project`,
   `--template`, `--variables`;
   `aggregate-runs` / `compare` / `query-results` / `export-results` —
@@ -188,7 +186,7 @@ name in this section.
 - `osimflow/cli/executor.py` — `_build_executor`, `_byos_audit_logger`,
   `_warn_if_mutable_tag`.
 - `osimflow/cli/serve.py` — `serve` / `dashboard` subcommands.
-- `osimflow/cli/io.py` — `import-osa` / `import-gem-osa` / `export`.
+- `osimflow/cli/io.py` — `import-osa` / `export`.
 - `osimflow/cli/s3.py` — S3 result-store helpers (`--from-s3`, `--detach-s3`).
 - `osimflow/cli/registry.py` — `list` / `show` / `compare` /
   `aggregate-runs` / `backup` / `restore`.
@@ -975,11 +973,7 @@ plus `automountServiceAccountToken: false`),
 ### `osimflow/importers/`, `osimflow/exporters/`
 
 `osimflow/importers/osa.py` (`parse_osa`, `parse_analysis_json`,
-`osa_to_variables_yml`); `osimflow/importers/gem_osa.py`
-(`import_gem_project`, `discover_batches`, `parametric_space_to_variables`,
-`GemBatch`, `GemImportError`, `BATCHES_MANIFEST`, `DEFAULT_BATCH_ID` — the
-`import-gem-osa` subcommand, issue #1870: one campaign dir per gem
-`Batch<N>_<name>` plus a `batches.json` mapping);
+`osa_to_variables_yml`, `stage_osa_template_package`);
 `osimflow/exporters/osa.py` (`OSAExporter`,
 `pack_osa` — PAT `.osa` archive).
 

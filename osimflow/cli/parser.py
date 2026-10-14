@@ -1037,17 +1037,6 @@ def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
     imp.add_argument("--log_level", default="INFO")
 
 
-def _add_import_gem_osa_args(imp: argparse.ArgumentParser) -> None:
-    imp.add_argument("project_dir", type=Path, help="Gem project directory")
-    imp.add_argument("--output-dir", type=Path, required=True, help="Campaign directories root")
-    imp.add_argument("--batch", action="append", default=None, help="Batch id (repeatable)")
-    imp.add_argument(
-        "--template-package", type=Path, default=None, help="Package with workflow.osw"
-    )
-    imp.add_argument("--configs", type=Path, default=None, help="configs.yml (default: project)")
-    imp.add_argument("--log_level", default="INFO")
-
-
 def _add_export_args(exp: argparse.ArgumentParser) -> None:
     exp.add_argument(
         "--target",
@@ -1820,11 +1809,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",
     )
     _add_import_osa_args(imp)
-    imp_gem = sub.add_parser(
-        "import-gem-osa",
-        help="Import openstudio-bem-to-surrogate-gem parametric_space/osa_workflow files",
-    )
-    _add_import_gem_osa_args(imp_gem)
     exp = sub.add_parser(
         "export",
         help="Export campaign state to an external format",

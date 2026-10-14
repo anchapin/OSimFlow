@@ -121,31 +121,15 @@ In PAT, use **File → Export → Export Analysis Spreadsheet (.osa)** or
 
 ### Step 2: Import into OSimFlow
 
-### Importing openstudio-bem-to-surrogate-gem projects
+Use the `import-osa` subcommand to convert variable definitions (and optionally stage a normalized template simulation package):
 
 ```bash
-osimflow import-gem-osa ./gem_project --output-dir ./campaigns \
-  --template-package ./seed_package [--batch Batch4491_baseline_training] [--configs configs.yml]
-```
+# From a .osa ZIP file (converts variables.yml and stages template_sim_package)
+osimflow import-osa my_study.osa --output variables.yml --package-output ./template_sim_package
 
-Each `parametric_space[_Batch<N>_<name>].json` becomes
-`<output-dir>/<batch_id>/variables.yml` (`[min,max]` or `{min,max}` → uniform,
-numeric list → discrete, string list → categorical; variables are named
-`<measure>.<argument>`). `measure_space*.json` static arguments are overlaid
-onto the copied `workflow.osw`; `seed`, `number_of_samples` and
-`sample_method` come from `algorithm_setting`, `osa_workflow*.json` or
-`configs.yml`. `<output-dir>/batches.json` maps each batch id to its
-variables file, outdir, sampling settings and an `osimflow run` command.
-`seed` is recorded only (OSimFlow has no seed flag).
-
-Use the `import-osa` subcommand to convert variable definitions:
-
-```bash
-# From a .osa ZIP file
-osimflow import-osa my_study.osa --output variables.yml
-
-# From an already-extracted analysis.json
-osimflow import-osa analysis.json --output variables.yml
+# From an already-extracted analysis.json paired with a seed template package
+osimflow import-osa analysis.json --output variables.yml \
+  --template-package ./seed_package --package-output ./template_sim_package
 ```
 
 This produces a `variables.yml` file mapping every OSA variable to

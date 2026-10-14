@@ -1,4 +1,4 @@
-"""``import-osa`` / ``import-gem-osa`` / ``export`` subcommands."""
+"""``import-osa`` / ``export`` subcommands."""
 
 import argparse
 import logging
@@ -50,24 +50,6 @@ def _run_import_osa(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"Converted {args.input} -> {args.output}")
-    return 0
-
-
-def _run_import_gem_osa(args: argparse.Namespace) -> int:
-    from osimflow.importers.gem_osa import GemImportError, import_gem_project  # noqa: PLC0415
-
-    try:
-        manifest = import_gem_project(
-            args.project_dir,
-            args.output_dir,
-            batches=args.batch,
-            template_package=args.template_package,
-            configs=args.configs,
-        )
-    except GemImportError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    print(f"Imported {len(manifest['batches'])} batch(es) -> {args.output_dir}/batches.json")
     return 0
 
 

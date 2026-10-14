@@ -874,11 +874,23 @@ def _resolve_file_in_package(
     raw_ref: str,
     candidate_subdirs: tuple[str, ...],
     field_name: str,
+    source_root: Path | None = None,
 ) -> str:
     """Resolve an OSW file reference to a path relative to *pkg_dir*."""
     pkg_resolved = pkg_dir.resolve()
     ref_path = Path(raw_ref)
-    if not ref_path.is_absolute():
+    if ref_path.is_absolute():
+        for root in (pkg_resolved, source_root.resolve() if source_root is not None else None):
+            if root is None:
+                continue
+            try:
+                rel = ref_path.resolve().relative_to(root)
+                candidate = (pkg_dir / rel).resolve()
+                if candidate.is_file():
+                    return candidate.relative_to(pkg_resolved).as_posix()
+            except ValueError:
+                continue
+    else:
         direct = (pkg_dir / ref_path).resolve()
         try:
             rel = direct.relative_to(pkg_resolved)
@@ -910,12 +922,32 @@ def _resolve_file_in_package(
     )
 
 
-def _normalize_dir_entries(pkg_dir: Path, entries: list[Any]) -> list[str]:
+def _normalize_dir_entries(
+    pkg_dir: Path, entries: list[Any], source_root: Path | None = None
+) -> list[str]:
     """Return relative directory paths from *entries* that resolve inside *pkg_dir*."""
     pkg_resolved = pkg_dir.resolve()
+    src_resolved = source_root.resolve() if source_root is not None else None
     normalized: list[str] = []
     for entry in entries:
         if not isinstance(entry, str):
+            continue
+        entry_path = Path(entry)
+        if entry_path.is_absolute():
+            rel: Path | None = None
+            for root in (pkg_resolved, src_resolved):
+                if root is None:
+                    continue
+                try:
+                    rel = entry_path.resolve().relative_to(root)
+                    break
+                except ValueError:
+                    continue
+            if rel is None:
+                continue
+            cand = (pkg_dir / rel).resolve()
+            if cand.is_dir():
+                normalized.append(cand.relative_to(pkg_resolved).as_posix())
             continue
         cand = (pkg_dir / entry).resolve()
         try:
@@ -927,7 +959,72 @@ def _normalize_dir_entries(pkg_dir: Path, entries: list[Any]) -> list[str]:
     return normalized
 
 
-def _normalize_osw_paths(osw: dict[str, Any], pkg_dir: Path) -> None:
+def _resolve_step_measure_dirs(
+    pkg_dir: Path,
+    steps: list[Any],
+    existing_mpaths: list[str],
+) -> list[str]:
+    """Verify every step's ``measure_dir_name`` resolves under *existing_mpaths* or discover it."""
+    pkg_resolved = pkg_dir.resolve()
+    resolved_mpaths = list(existing_mpaths)
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        mdir = step.get("measure_dir_name")
+        if not isinstance(mdir, str) or not mdir.strip():
+            continue
+        mdir = mdir.strip()
+        if any((pkg_dir / mp / mdir).is_dir() for mp in resolved_mpaths):
+            continue
+        if (pkg_dir / "measures" / mdir).is_dir():
+            if "measures" not in resolved_mpaths:
+                resolved_mpaths.append("measures")
+            continue
+        matches = sorted(
+            p.parent.resolve().relative_to(pkg_resolved).as_posix()
+            for p in pkg_dir.rglob(mdir)
+            if p.is_dir() and p.name == mdir
+        )
+        if len(matches) == 1:
+            if matches[0] not in resolved_mpaths:
+                resolved_mpaths.append(matches[0])
+        elif len(matches) > 1:
+            raise OSAImportError(
+                f"workflow.osw step measure {mdir!r} is ambiguous in {pkg_dir}: "
+                f"found under {matches}"
+            )
+        else:
+            raise OSAImportError(
+                f"workflow.osw could not resolve step measure {mdir!r} in {pkg_dir}"
+            )
+    return resolved_mpaths
+
+
+def _normalize_osw_file_paths(
+    osw: dict[str, Any], pkg_dir: Path, source_root: Path | None = None
+) -> None:
+    """Normalize ``file_paths`` in *osw* so all referenced asset directories are included."""
+    file_paths = osw.get("file_paths")
+    if not isinstance(file_paths, list):
+        return
+    normalized_fpaths = _normalize_dir_entries(pkg_dir, file_paths, source_root=source_root)
+    for field in ("seed_file", "weather_file"):
+        fval = osw.get(field)
+        if isinstance(fval, str) and "/" in fval:
+            parent_rel = Path(fval).parent.as_posix()
+            if parent_rel and parent_rel != "." and parent_rel not in normalized_fpaths:
+                normalized_fpaths.append(parent_rel)
+    for fallback in ("weather", "seeds", "seed", "seed_models", "files"):
+        if (pkg_dir / fallback).is_dir() and fallback not in normalized_fpaths:
+            normalized_fpaths.append(fallback)
+    if "." not in normalized_fpaths:
+        normalized_fpaths.append(".")
+    osw["file_paths"] = normalized_fpaths
+
+
+def _normalize_osw_paths(
+    osw: dict[str, Any], pkg_dir: Path, source_root: Path | None = None
+) -> None:
     """Rewrite parent-relative or external OSW paths to resolve inside *pkg_dir*."""
     seed_file = osw.get("seed_file")
     if isinstance(seed_file, str) and seed_file.strip():
@@ -936,6 +1033,7 @@ def _normalize_osw_paths(osw: dict[str, Any], pkg_dir: Path) -> None:
             seed_file.strip(),
             ("", "seeds", "seed", "seed_models", "models"),
             "seed_file",
+            source_root=source_root,
         )
 
     weather_file = osw.get("weather_file")
@@ -945,28 +1043,26 @@ def _normalize_osw_paths(osw: dict[str, Any], pkg_dir: Path) -> None:
             weather_file.strip(),
             ("", "weather", "epw"),
             "weather_file",
+            source_root=source_root,
         )
 
     measures_dir = pkg_dir / "measures"
     measure_paths = osw.get("measure_paths")
+    steps = osw.get("steps")
     if isinstance(measure_paths, list):
-        normalized_mpaths = _normalize_dir_entries(pkg_dir, measure_paths)
+        normalized_mpaths = _normalize_dir_entries(pkg_dir, measure_paths, source_root=source_root)
+        had_escaped_mpath = len(normalized_mpaths) < len(
+            [m for m in measure_paths if isinstance(m, str)]
+        )
         if not normalized_mpaths and measures_dir.is_dir():
             normalized_mpaths.append("measures")
-        if normalized_mpaths:
-            osw["measure_paths"] = list(dict.fromkeys(normalized_mpaths))
+        if had_escaped_mpath and isinstance(steps, list):
+            normalized_mpaths = _resolve_step_measure_dirs(pkg_dir, steps, normalized_mpaths)
+        osw["measure_paths"] = list(dict.fromkeys(normalized_mpaths))
     elif measures_dir.is_dir():
         osw["measure_paths"] = ["measures"]
 
-    file_paths = osw.get("file_paths")
-    if isinstance(file_paths, list):
-        normalized_fpaths = _normalize_dir_entries(pkg_dir, file_paths)
-        for fallback in ("weather", "seeds", "seed", "seed_models", "files"):
-            if (pkg_dir / fallback).is_dir() and fallback not in normalized_fpaths:
-                normalized_fpaths.append(fallback)
-        if "." not in normalized_fpaths:
-            normalized_fpaths.append(".")
-        osw["file_paths"] = normalized_fpaths
+    _normalize_osw_file_paths(osw, pkg_dir, source_root=source_root)
 
 
 def _preserve_cleanup_sql(osw: dict[str, Any], varied_pairs: set[tuple[str, str]]) -> None:
@@ -1173,7 +1269,7 @@ def stage_osa_template_package(
         osw_raw = _build_osw_from_osa(parsed_osa)
         osw_path = package_output / "workflow.osw"
 
-    _normalize_osw_paths(osw_raw, package_output)
+    _normalize_osw_paths(osw_raw, package_output, source_root=template_package)
     _preserve_cleanup_sql(osw_raw, varied_pairs)
     osw_path.write_text(json.dumps(osw_raw, indent=2) + "\n", encoding="utf-8")
     log.info("Staged template simulation package to %s", package_output)
