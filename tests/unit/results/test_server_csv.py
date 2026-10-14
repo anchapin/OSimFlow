@@ -31,7 +31,7 @@ def _campaign(tmp_path: Path) -> Path:
                 "sample_id": "s000",
                 "envelope.wall_r": 12.0,
                 "hvac.cop": 3.5,
-                "reporting_179_d.out_eui": 55.2,
+                "openstudio_results.out_eui": 55.2,
             }
         ]
     ).to_csv(d / "aggregated_results.csv", index=False)
@@ -97,7 +97,7 @@ def test_deduplicates_failed_sample_also_present_in_aggregated_results(tmp_path:
                 "sample_id": "s000",
                 "envelope.wall_r": 12.0,
                 "hvac.cop": 3.5,
-                "reporting_179_d.out_eui": 55.2,
+                "openstudio_results.out_eui": 55.2,
             },
             {
                 "sample_id": "s001",
@@ -160,7 +160,7 @@ def test_multi_campaign_column_order(tmp_path: Path) -> None:
     )
     assert rc == 0
     cols = list(pd.read_csv(out).columns)
-    assert cols.index("new.var") < cols.index("reporting_179_d.out_eui")
+    assert cols.index("new.var") < cols.index("openstudio_results.out_eui")
     assert cols[-1] == SIMULATION_FAILED_COL
 
 
@@ -232,12 +232,12 @@ def test_end_to_end_extract_kpis_to_server_csv(tmp_path: Path) -> None:
             {
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [
                                 {"name": "out_eui", "value": 55.2},
-                                {"name": "out_total_electricity_179_d_gj", "value": 12.5},
+                                {"name": "out_total_electricity_gj", "value": 12.5},
                             ],
                         },
                     }
@@ -268,9 +268,9 @@ def test_end_to_end_extract_kpis_to_server_csv(tmp_path: Path) -> None:
     cols = list(df.columns)
     assert cols[:4] == ["name", "_id", "status", "status_message"]
     assert cols[4:6] == ["hvac.cop", "envelope.wall_r"]
-    assert "reporting_179_d.out_eui" in cols
-    assert "reporting_179_d.out_total_electricity_179_d_gj" in cols
+    assert "openstudio_results.out_eui" in cols
+    assert "openstudio_results.out_total_electricity_gj" in cols
     assert "eui_kwh_m2_yr" in cols
-    assert cols.index("envelope.wall_r") < cols.index("reporting_179_d.out_eui")
+    assert cols.index("envelope.wall_r") < cols.index("openstudio_results.out_eui")
     assert cols[-1] == SIMULATION_FAILED_COL
     assert df[SIMULATION_FAILED_COL].tolist() == ["", "hvac: bad argument"]

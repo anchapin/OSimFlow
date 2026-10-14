@@ -260,11 +260,11 @@ def test_download_s3_campaign_includes_out_osw_and_sql_kpis(
             {
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [
-                                {"name": "out_total_electricity_179_d_gj", "value": 12.5},
+                                {"name": "out_total_electricity_gj", "value": 12.5},
                                 {"name": "building_area_m2", "value": 100.0},
                             ],
                         },
@@ -283,11 +283,11 @@ def test_download_s3_campaign_includes_out_osw_and_sql_kpis(
             {
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [
-                                {"name": "out_total_electricity_179_d_gj", "value": 15.0},
+                                {"name": "out_total_electricity_gj", "value": 15.0},
                                 {"name": "building_area_m2", "value": 100.0},
                             ],
                         },
@@ -304,8 +304,8 @@ def test_download_s3_campaign_includes_out_osw_and_sql_kpis(
 
     agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
     assert "eui_kwh_m2_yr" in agg_df.columns
-    assert "reporting_179_d.out_total_electricity_179_d_gj" in agg_df.columns
-    assert agg_df["reporting_179_d.out_total_electricity_179_d_gj"].tolist() == [12.5, 15.0]
+    assert "openstudio_results.out_total_electricity_gj" in agg_df.columns
+    assert agg_df["openstudio_results.out_total_electricity_gj"].tolist() == [12.5, 15.0]
 
     server_df = pd.read_csv(
         out / "download_data.csv", dtype={"name": str, "_id": str}, keep_default_na=False
@@ -313,8 +313,8 @@ def test_download_s3_campaign_includes_out_osw_and_sql_kpis(
     cols = list(server_df.columns)
     assert cols[:4] == ["name", "_id", "status", "status_message"]
     assert cols[4:6] == ["hvac.cop", "envelope.wall_r"]
-    assert "reporting_179_d.out_total_electricity_179_d_gj" in cols
-    assert "reporting_179_d.building_area_m2" in cols
+    assert "openstudio_results.out_total_electricity_gj" in cols
+    assert "openstudio_results.building_area_m2" in cols
     assert "eui_kwh_m2_yr" in cols
     assert cols[-1] == SIMULATION_FAILED_COL
     assert server_df[SIMULATION_FAILED_COL].tolist() == ["", ""]
@@ -1108,7 +1108,7 @@ def test_download_out_osw_only_completed_sample_without_sql(
                 "completed_status": "Success",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [
@@ -1132,8 +1132,8 @@ def test_download_out_osw_only_completed_sample_without_sql(
     run_extract_kpis(s0, "0000", direct_kpi_path, openstudio_version="3.11.0")
     kpi_doc = json.loads(direct_kpi_path.read_text())
     assert "error" not in kpi_doc["kpis"]
-    assert kpi_doc["kpis"]["reporting_179_d.total_site_energy_kbtu"] == 45000.0
-    assert kpi_doc["kpis"]["reporting_179_d.building_area_sqft"] == 10000.0
+    assert kpi_doc["kpis"]["openstudio_results.total_site_energy_kbtu"] == 45000.0
+    assert kpi_doc["kpis"]["openstudio_results.building_area_sqft"] == 10000.0
     assert kpi_doc["quality"]["valid"] is True
     assert any("SQL-derived quality checks skipped" in w for w in kpi_doc["quality"]["warnings"])
     assert extract_failure(s0) is None
@@ -1150,16 +1150,18 @@ def test_download_out_osw_only_completed_sample_without_sql(
 
     agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
     assert agg_df["sample_id"].tolist() == ["0000"]
-    assert agg_df["reporting_179_d.total_site_energy_kbtu"].iloc[0] == pytest.approx(45000.0)
-    assert agg_df["reporting_179_d.building_area_sqft"].iloc[0] == pytest.approx(10000.0)
+    assert agg_df["openstudio_results.total_site_energy_kbtu"].iloc[0] == pytest.approx(45000.0)
+    assert agg_df["openstudio_results.building_area_sqft"].iloc[0] == pytest.approx(10000.0)
 
     dl_df = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
     assert len(dl_df) == 1
     assert dl_df["name"].tolist() == ["0000"]
     assert dl_df["status"].tolist() == ["completed"]
     assert dl_df["status_message"].tolist() == ["completed normal"]
-    assert float(dl_df["reporting_179_d.total_site_energy_kbtu"].iloc[0]) == pytest.approx(45000.0)
-    assert float(dl_df["reporting_179_d.building_area_sqft"].iloc[0]) == pytest.approx(10000.0)
+    assert float(dl_df["openstudio_results.total_site_energy_kbtu"].iloc[0]) == pytest.approx(
+        45000.0
+    )
+    assert float(dl_df["openstudio_results.building_area_sqft"].iloc[0]) == pytest.approx(10000.0)
 
 
 def test_handoff_from_json_normalizes_non_dict_job_ids() -> None:
@@ -1548,7 +1550,7 @@ def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_
                 "completed_status": "Success",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Success",
                             "step_values": [{"name": "building_area_sqft", "value": 10000.0}],
@@ -1560,7 +1562,7 @@ def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_
     )
     (s0 / COMPLETE_MARKER).write_text("")
 
-    # 0001: EnergyPlus succeeded (eplusout.sql exists), but reporting_179_d failed in out.osw
+    # 0001: EnergyPlus succeeded (eplusout.sql exists), but openstudio_results failed in out.osw
     s1 = root / "camp_post_ep" / "work" / "sim" / "0001"
     s1.mkdir(parents=True, exist_ok=True)
     _write_sql(s1 / "eplusout.sql")
@@ -1570,7 +1572,7 @@ def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_
                 "completed_status": "Fail",
                 "steps": [
                     {
-                        "measure_dir_name": "reporting_179_d",
+                        "measure_dir_name": "openstudio_results",
                         "result": {
                             "step_result": "Fail",
                             "step_errors": ["Reporting measure SQL query returned nil"],
@@ -1624,7 +1626,7 @@ def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_
     assert dl_df[SIMULATION_FAILED_COL].iloc[0] == ""
     assert (
         dl_df[SIMULATION_FAILED_COL].iloc[1]
-        == "reporting_179_d: Reporting measure SQL query returned nil"
+        == "openstudio_results: Reporting measure SQL query returned nil"
     )
     assert "Plant loop did not converge" in dl_df[SIMULATION_FAILED_COL].iloc[2]
     assert dl_df[SIMULATION_FAILED_COL].iloc[3] == "Worker died after EnergyPlus finished"

@@ -1,9 +1,9 @@
 """Measure-reported results and failure messages from ``out.osw`` / ``run.log``.
 
-Issue #1871. The openstudio-bem-to-surrogate-gem's server results
+Issue #1871. OpenStudio Server results
 (``download_data.csv``) carry measure-reported outputs such as
-``reporting_179_d.*`` taken from ``out.osw`` step results; OSimFlow's SQL
-extractor never read them. This module ports that logic (and the gem's
+``openstudio_results.*`` taken from ``out.osw`` step results; OSimFlow's SQL
+extractor never read them. This module ports that logic (and the server's
 ``extract_failure_message_from_osw`` / ``collect_failure_message_from_run_log``
 failure-message helpers, including benign-notice filtering).
 
@@ -25,12 +25,11 @@ RUN_LOG_NAME = "run.log"
 FAILED_MARKER_NAME = "_OSIMFLOW_FAILED"
 RETRYING_STATE = "retrying"
 MEASURE_RESULTS_TOKEN = "measure_results"
-SIMULATION_FAILED_KEY = "reporting_179_d.simulation_failed_message"
+SIMULATION_FAILED_KEY = "simulation_failed_message"
 
 # Non-fatal notices emitted even on passing runs; never a failure message.
 BENIGN_ERROR_PATTERN = re.compile(
     r"UseWeatherFile' is selected in YearDescription"
-    r"|run_all_orientation flag is set to False"
     r"|This Curve, Object of type 'OS:Curve:Biquadratic' and named"
 )
 _TS_PREFIX = re.compile(r"^\[[^\]]+\]\s*")

@@ -890,8 +890,8 @@ unchanged:
 |---|---|---|
 | 1 | `name`, `_id`, `status`, `status_message` | Sample id; `status` is `completed`; `status_message` is `completed normal` or `datapoint failure`. |
 | 2 | `<measure>.<argument>` | Variables, in `samples.json` order. |
-| 3 | outputs | KPI and `reporting_179_d.*` values, in aggregated order. |
-| 4 | `reporting_179_d.simulation_failed_message` | Always present and last; empty on success, failure text for failed samples. |
+| 3 | outputs | KPI and `openstudio_results.*` values, in aggregated order. |
+| 4 | `simulation_failed_message` | Always present and last; empty on success, failure text for failed samples. |
 
 Failed samples are included unless `--no-include-failed` is given. The
 reference fixture is `tests/fixtures/server_download_data_reference.csv`

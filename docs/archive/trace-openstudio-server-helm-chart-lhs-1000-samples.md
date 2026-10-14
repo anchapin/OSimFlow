@@ -507,7 +507,7 @@ Where `datapoint_<N>.osw` is a modified copy of the seed OSW with:
 | `run.log` | OpenStudio CLI stdout/stderr |
 | `datapoint.json` | Datapoint metadata + status |
 
-**KPI extraction** (by the `reporting_179_d` ReportingMeasure, or custom):
+**KPI extraction** (by the `openstudio_results` ReportingMeasure, or custom):
 - Queries `eplusout.sql` for objective function variables
 - Returns JSON dict written to `results.json`
 
@@ -782,7 +782,7 @@ Python driver:
 The **common foundation** that OSimFlow retains:
 - **OpenStudio CLI** (`nrel/openstudio:<version>` container) — unchanged
 - **Seed model + measures + OSW** — same format
-- **`bin/extract_kpis.py`** (replaces `reporting_179_d`) — queries `eplusout.sql`
+- **`bin/extract_kpis.py`** (replaces `openstudio_results`) — queries `eplusout.sql`
 - **`bin/aggregate_results.py`** — produces `failed_simulations.csv` + `aggregated_results.csv`
 - **OpenStudio SDK** (`openstudio` Ruby gem) — unchanged for OSW/OSM manipulation
 

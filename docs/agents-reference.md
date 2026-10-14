@@ -622,7 +622,7 @@ name in this section.
   `combine_server_frames`, `SIMULATION_FAILED_COL`. Powers
   `osimflow export-results --format openstudio-server-csv`; columns
   `name,_id,status,status_message`, then `<measure>.<arg>` variables,
-  outputs, and `reporting_179_d.simulation_failed_message` last.
+  outputs, and `simulation_failed_message` last.
 - `osimflow/s3_campaign.py` — S3-backed detached AWS Batch campaigns
   (issue #1873): `S3CampaignStore`, `S3Handoff`, `new_handoff`,
   `S3CampaignError`, `CampaignDetached`, `COMPLETE_MARKER`
