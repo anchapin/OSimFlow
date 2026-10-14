@@ -34,7 +34,7 @@ from typing import Any
 
 import requests
 
-from .apply_params import EPW_FILE_KEY, _infer_osm_attribute_mapping
+from .apply_params import EPW_FILE_KEY, _infer_osm_attribute_mapping, read_measure_xml_aliases
 from .errors import OSimFlowValueError
 
 log = logging.getLogger("osimflow.measures")
@@ -74,12 +74,15 @@ class DiscoveredMeasure:
         path: absolute path to the measure directory.
         language: ``"ruby"`` or ``"python"``.
         arguments: list of arguments the measure exposes.
+        aliases: extra identifiers from ``measure.xml`` (``<name>``,
+            ``<class_name>``) accepted in dotted ``measure_argument`` refs.
     """
 
     name: str
     path: Path
     language: str
     arguments: list[MeasureArgument] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -411,10 +414,21 @@ class MeasureRegistry:
         dotted_to_arg: dict[str, MeasureArgument] = {}
         known_measures: set[str] = set(target._measures.keys())
 
+        # An alias is usable only if it is unique and not another measure's name.
+        alias_claims: dict[str, int] = {}
         for measure in target._measures.values():
+            for alias in measure.aliases:
+                alias_claims[alias] = alias_claims.get(alias, 0) + 1
+        for measure in target._measures.values():
+            usable = [
+                a for a in measure.aliases if alias_claims[a] == 1 and a not in target._measures
+            ]
             for arg in measure.arguments:
                 dotted_to_arg[f"{measure.name}.{arg.name}"] = arg
                 plain_to_measures.setdefault(arg.name, set()).add(measure.name)
+                for alias in usable:
+                    dotted_to_arg[f"{alias}.{arg.name}"] = arg
+            known_measures.update(usable)
 
         effective_has_osm = self._resolve_effective_has_osm(target, has_osm)
         errors: list[str] = []
@@ -718,6 +732,9 @@ class MeasureRegistry:
             path=measure_dir,
             language=language,
             arguments=arguments,
+            aliases=[a for a in read_measure_xml_aliases(xml_path) if a != measure_dir.name]
+            if xml_path.is_file()
+            else [],
         )
 
     # ------------------------------------------------------------------

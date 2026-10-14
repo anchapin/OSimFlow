@@ -152,6 +152,12 @@ variables:
     measure_argument: SetWindowToWallRatio.wwr
 ```
 
+The variable `name` is only an alias: during `APPLY_PARAMETERS` pre-flight and
+`workflow.osw` mutation each sample value is written to the step named by
+`measure_argument`. This lets two measures that share an argument name (e.g.
+`r_value`) be varied independently. The measure part may be the measure
+directory name, the `measure.xml` `<name>`, or its `<class_name>`.
+
 ### Step 3: Prepare the Template Simulation Package
 
 PAT projects contain a seed model, measures, and weather files. Organise
