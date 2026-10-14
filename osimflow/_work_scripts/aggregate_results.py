@@ -22,7 +22,12 @@ from typing import Any
 
 import pandas as pd
 
-from osimflow.osw_results import OUT_OSW_NAME, failure_message, has_valid_osw_completion
+from osimflow.osw_results import (
+    OUT_OSW_NAME,
+    failure_message,
+    has_osw_or_marker_failure,
+    has_valid_osw_completion,
+)
 
 # pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
 try:
@@ -467,6 +472,14 @@ def parse_kpi_json(kpi_path: Path) -> dict[str, Any]:
         return {"sample_id": kpi_path.stem.replace("kpi_", "")}
 
 
+def _has_top_level_error(kpi_path: Path) -> bool:
+    try:
+        data = json.loads(kpi_path.read_text())
+        return isinstance(data, dict) and bool(data.get("error"))
+    except (OSError, ValueError):
+        return False
+
+
 def _load_samples_params(samples_json: Path) -> dict[str, dict[str, object]]:
     """Load per-sample parameter values from samples.json.
 
@@ -514,24 +527,32 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
 
     sql_path = sim_dir / "eplusout.sql"
     severe_summary = err_summary
-    if not err_summary and not sql_path.exists():
-        # Issue #1871: surface the failed measure + first error (out.osw / run.log).
+    osw_or_marker_failed = has_osw_or_marker_failure(sim_dir)
+    if not err_summary and (not sql_path.exists() or osw_or_marker_failed):
+        # Issue #1871 / #2059: surface the failed measure + first error
+        # (out.osw / run.log), even when EnergyPlus produced eplusout.sql
+        # before a reporting measure or workflow step failed.
         err_summary = failure_message(sim_dir)
     if (
         not err_summary
+        and not osw_or_marker_failed
         and not sql_path.exists()
         and has_valid_osw_completion(sim_dir / OUT_OSW_NAME)
     ):
         return None
-    if err_summary or not sql_path.exists():
+    if err_summary or not sql_path.exists() or osw_or_marker_failed:
+        if not err_summary:
+            err_summary = (
+                "eplusout.sql missing" if not sql_path.exists() else "OpenStudio workflow failed"
+            )
         diagnosis: dict[str, Any] | None = None
         if severe_summary and err_path.exists():
             diagnosis = diagnose_error(severe_summary, err_path)
 
         result = {
             "sample_id": sim_dir.name,
-            "error_summary": err_summary or "eplusout.sql missing",
-            "exit_code": 1 if err_summary or not sql_path.exists() else 0,
+            "error_summary": err_summary,
+            "exit_code": 1,
             "log_path": str(err_path) if err_path.exists() else "",
         }
         if diagnosis:
@@ -594,11 +615,32 @@ def main() -> int:
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     args.out_failed.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Read KPIs into wide-form DataFrame
-    all_kpis = []
+    # 1. Extract failures first so failed samples are excluded from
+    # aggregated_results.csv (issue #2059: mutually exclusive pass/fail rows).
+    failures = []
+    for sim_dir in args.simulation_dirs:
+        if sim_dir.exists():
+            f = extract_failure(sim_dir)
+            if f:
+                failures.append(f)
+
+    # 2. Read KPIs into wide-form DataFrame, excluding error payloads and failed samples.
+    raw_kpis = []
     for kpi_path in args.kpis:
-        if kpi_path.exists():
-            all_kpis.append(parse_kpi_json(kpi_path))
+        if kpi_path.exists() and not _has_top_level_error(kpi_path):
+            raw_kpis.append(parse_kpi_json(kpi_path))
+
+    valid_kpi_ids = {str(r["sample_id"]) for r in raw_kpis if len(r) > 1 and not r.get("error")}
+    failures = [
+        f
+        for f in failures
+        if not (
+            f.get("error_summary") == "eplusout.sql missing"
+            and str(f["sample_id"]) in valid_kpi_ids
+        )
+    ]
+    failed_sample_ids = {str(f["sample_id"]) for f in failures}
+    all_kpis = [r for r in raw_kpis if str(r["sample_id"]) not in failed_sample_ids]
 
     if all_kpis:
         df = pd.DataFrame(all_kpis)
@@ -668,14 +710,7 @@ def main() -> int:
                 exc,
             )
 
-    # 2. Extract failures
-    failures = []
-    for sim_dir in args.simulation_dirs:
-        if sim_dir.exists():
-            f = extract_failure(sim_dir)
-            if f:
-                failures.append(f)
-
+    # 3. Write failed_simulations.csv
     if failures:
         fail_df = pd.DataFrame(failures)
         cols = [

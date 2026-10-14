@@ -1505,3 +1505,126 @@ def test_download_propagates_batch_failure_reason_to_failed_simulations_and_down
     assert dl_df["status_message"].tolist() == ["completed normal", "datapoint failure"]
     assert dl_df[SIMULATION_FAILED_COL].iloc[0] == ""
     assert dl_df[SIMULATION_FAILED_COL].iloc[1] == expected_msg
+
+
+def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_when_sql_exists(
+    store: S3CampaignStore, tmp_path: Path
+) -> None:
+    """Issue #2059: when eplusout.sql exists alongside out.osw Fail, _OSIMFLOW_FAILED, or eplusout.err Severe,
+    samples are not duplicated across aggregated_results.csv, failed_simulations.csv, or download_data.csv."""
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    samples = tmp_path / "samples.json"
+    samples.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "0000", "values": {"hvac.cop": 3.5}},
+                    {"sample_id": "0001", "values": {"hvac.cop": 3.0}},
+                    {"sample_id": "0002", "values": {"hvac.cop": 2.5}},
+                    {"sample_id": "0003", "values": {"hvac.cop": 2.0}},
+                ]
+            }
+        )
+    )
+    rec = new_handoff(
+        "camp_post_ep",
+        ["0000", "0001", "0002", "0003"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "j0", "0001": "j1", "0002": "j2", "0003": "j3"},
+    )
+    store.write_handoff(rec, samples)
+
+    root: Path = store.storage.root  # type: ignore[attr-defined]
+
+    # 0000: clean success (eplusout.sql + out.osw Success)
+    s0 = root / "camp_post_ep" / "work" / "sim" / "0000"
+    s0.mkdir(parents=True, exist_ok=True)
+    _write_sql(s0 / "eplusout.sql")
+    (s0 / "out.osw").write_text(
+        json.dumps(
+            {
+                "completed_status": "Success",
+                "steps": [
+                    {
+                        "measure_dir_name": "reporting_179_d",
+                        "result": {
+                            "step_result": "Success",
+                            "step_values": [{"name": "building_area_sqft", "value": 10000.0}],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    (s0 / COMPLETE_MARKER).write_text("")
+
+    # 0001: EnergyPlus succeeded (eplusout.sql exists), but reporting_179_d failed in out.osw
+    s1 = root / "camp_post_ep" / "work" / "sim" / "0001"
+    s1.mkdir(parents=True, exist_ok=True)
+    _write_sql(s1 / "eplusout.sql")
+    (s1 / "out.osw").write_text(
+        json.dumps(
+            {
+                "completed_status": "Fail",
+                "steps": [
+                    {
+                        "measure_dir_name": "reporting_179_d",
+                        "result": {
+                            "step_result": "Fail",
+                            "step_errors": ["Reporting measure SQL query returned nil"],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    (s1 / COMPLETE_MARKER).write_text("")
+
+    # 0002: EnergyPlus wrote eplusout.sql AND a Severe error in eplusout.err
+    s2 = root / "camp_post_ep" / "work" / "sim" / "0002"
+    s2.mkdir(parents=True, exist_ok=True)
+    _write_sql(s2 / "eplusout.sql")
+    (s2 / "eplusout.err").write_text(
+        "Program Version,EnergyPlus\n   ** Severe  ** Plant loop did not converge\n"
+    )
+    (s2 / COMPLETE_MARKER).write_text("")
+
+    # 0003: eplusout.sql exists alongside _OSIMFLOW_FAILED marker
+    s3 = root / "camp_post_ep" / "work" / "sim" / "0003"
+    s3.mkdir(parents=True, exist_ok=True)
+    _write_sql(s3 / "eplusout.sql")
+    (s3 / FAILED_MARKER).write_text("Worker died after EnergyPlus finished\n")
+
+    out = tmp_path / "out_post_ep"
+    store.download("camp_post_ep", out)
+
+    # Verify KPI files were NOT generated for 0001, 0002, or 0003
+    assert (out / "kpis" / "kpi_0000.json").is_file()
+    assert not (out / "kpis" / "kpi_0001.json").exists()
+    assert not (out / "kpis" / "kpi_0002.json").exists()
+    assert not (out / "kpis" / "kpi_0003.json").exists()
+
+    agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
+    fail_df = pd.read_csv(out / "failed_simulations.csv", dtype={"sample_id": str})
+    assert agg_df["sample_id"].tolist() == ["0000"]
+    assert fail_df["sample_id"].tolist() == ["0001", "0002", "0003"]
+    assert set(agg_df["sample_id"]).isdisjoint(set(fail_df["sample_id"]))
+
+    dl_df = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
+    assert len(dl_df) == 4
+    assert dl_df["name"].tolist() == ["0000", "0001", "0002", "0003"]
+    assert dl_df["status_message"].tolist() == [
+        "completed normal",
+        "datapoint failure",
+        "datapoint failure",
+        "datapoint failure",
+    ]
+    assert dl_df[SIMULATION_FAILED_COL].iloc[0] == ""
+    assert (
+        dl_df[SIMULATION_FAILED_COL].iloc[1]
+        == "reporting_179_d: Reporting measure SQL query returned nil"
+    )
+    assert "Plant loop did not converge" in dl_df[SIMULATION_FAILED_COL].iloc[2]
+    assert dl_df[SIMULATION_FAILED_COL].iloc[3] == "Worker died after EnergyPlus finished"
