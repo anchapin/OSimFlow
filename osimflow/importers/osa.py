@@ -82,7 +82,6 @@ from osimflow.errors import OSimFlowError
 log = logging.getLogger("osimflow.importers.osa")
 
 _SKIP_COPY_NAMES = frozenset({".DS_Store", "__pycache__", ".git"})
-_SERVER_CLEANUP_MEASURE_NAMES = frozenset({"ServerDirectoryCleanup", "server_directory_cleanup"})
 _PREBUILT_ALGORITHM_TYPES = frozenset({"single_run", "preflight", "repeat_run"})
 
 OSA_DISTRIBUTION_MAP: dict[str, str] = {
@@ -1065,27 +1064,6 @@ def _normalize_osw_paths(
     _normalize_osw_file_paths(osw, pkg_dir, source_root=source_root)
 
 
-def _preserve_cleanup_sql(osw: dict[str, Any], varied_pairs: set[tuple[str, str]]) -> None:
-    """Keep ``eplusout.sql`` across ``ServerDirectoryCleanup`` so KPI extraction works."""
-    steps = osw.get("steps")
-    if not isinstance(steps, list):
-        return
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        measure_dir = step.get("measure_dir_name")
-        if not isinstance(measure_dir, str) or measure_dir not in _SERVER_CLEANUP_MEASURE_NAMES:
-            continue
-        if (measure_dir, "sql") in varied_pairs:
-            continue
-        args = step.setdefault("arguments", {})
-        if not isinstance(args, dict):
-            continue
-        existing = args.get("sql")
-        if existing is True or (isinstance(existing, str) and existing.lower() == "true"):
-            args["sql"] = _coerce_like(existing, False)
-
-
 def _extract_file_name_field(raw_val: Any) -> str | None:
     """Extract a filename string from either ``{"file_name": "..."}`` or ``"..."``."""
     if isinstance(raw_val, dict) and isinstance(raw_val.get("file_name"), str):
@@ -1222,8 +1200,8 @@ def stage_osa_template_package(
     archive (when *osa_path* is a ZIP archive) into *package_output*, overlays
     static measure arguments from the OSA workflow definition onto
     ``workflow.osw``, normalises ``seed_file`` / ``weather_file`` /
-    ``measure_paths`` / ``file_paths`` so they resolve inside *package_output*,
-    and disables ``ServerDirectoryCleanup.sql`` deletion so KPI extraction works.
+    ``measure_paths`` / ``file_paths`` so they resolve inside *package_output*.
+    Measure arguments are never rewritten beyond the OSA overlay.
     """
     osa_path = Path(osa_path)
     package_output = Path(package_output)
@@ -1270,7 +1248,6 @@ def stage_osa_template_package(
         osw_path = package_output / "workflow.osw"
 
     _normalize_osw_paths(osw_raw, package_output, source_root=template_package)
-    _preserve_cleanup_sql(osw_raw, varied_pairs)
     osw_path.write_text(json.dumps(osw_raw, indent=2) + "\n", encoding="utf-8")
     log.info("Staged template simulation package to %s", package_output)
     return package_output

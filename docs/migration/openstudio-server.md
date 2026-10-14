@@ -132,6 +132,11 @@ osimflow import-osa analysis.json --output variables.yml \
   --template-package ./seed_package --package-output ./template_sim_package
 ```
 
+Staging does not rewrite any measure-specific arguments (for example a
+cleanup measure's `sql` flag). Results are read from `out.osw`, so
+`RUN_OPENSTUDIO_SIM` / `EXTRACT_KPIS` still work if a measure deletes
+`eplusout.sql`; edit the staged `workflow.osw` if you need different arguments.
+
 This produces a `variables.yml` file mapping every OSA variable to
 OSimFlow's distribution schema:
 
