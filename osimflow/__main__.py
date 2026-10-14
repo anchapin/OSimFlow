@@ -594,8 +594,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     # TUI: wrap campaign execution with Rich TUI when available.
     # The TUI is a passive observer (reads run.json) and does not
     # modify campaign state.  It auto-degrades when rich is not
-    # installed, stdout is not a TTY, or --no-tui is passed.
-    use_tui = not args.no_tui
+    # installed, stdout is not a TTY, or --no-tui / --detach-s3 is passed.
+    use_tui = not args.no_tui and not getattr(args, "detach_s3", False)
     tui: object = None
     if use_tui:
         try:

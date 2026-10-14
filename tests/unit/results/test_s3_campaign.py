@@ -880,3 +880,176 @@ def test_download_all_failed_campaign_writes_canonical_download_data_csv(
     assert df["status_message"].tolist() == ["datapoint failure", "datapoint failure"]
     assert "Severe failure 0" in df[SIMULATION_FAILED_COL].iloc[0]
     assert "Severe failure 1" in df[SIMULATION_FAILED_COL].iloc[1]
+
+
+def test_cli_run_detach_s3_disables_rich_tui(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #2044: osimflow run --detach-s3 never starts RichTUI even when is_tui_available() is True."""
+    import sys
+
+    from osimflow.__main__ import main
+
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-signing-secret-0123456789abcdef")
+    monkeypatch.setitem(sys.modules, "openstudio", None)
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "seed_file": "model.osm",
+                "steps": [
+                    {
+                        "measure_dir_name": "SetEnvelopePerformance",
+                        "arguments": {"wwr": 0.4},
+                    }
+                ],
+            }
+        )
+    )
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {"lighting_power_density": 10.0}}))
+
+    vars_yml = tmp_path / "variables.yml"
+    vars_yml.write_text(
+        "variables:\n"
+        "  - name: SetEnvelopePerformance.wwr\n"
+        "    distribution: uniform\n"
+        "    min: 0.3\n"
+        "    max: 0.5\n"
+    )
+
+    bucket_root = tmp_path / "bucket"
+    fake_storage = FakeStorage(bucket_root)
+    fake_batch = _DetachedBatchClient(image="docker.io/nrel/openstudio@sha256:" + "d" * 64)
+
+    from tests.integration._aws_patch import patch_boto3_client
+
+    with (
+        patch_boto3_client(fake_batch),
+        mock.patch("osimflow.campaign.build_result_storage", return_value=fake_storage),
+        mock.patch("osimflow.storage.build_result_storage", return_value=fake_storage),
+        mock.patch("osimflow.tui.is_tui_available", return_value=True),
+        mock.patch("osimflow.tui.RichTUI") as mock_tui_cls,
+    ):
+        rc = main(
+            [
+                "run",
+                "--executor",
+                "aws_batch",
+                "--aws-batch-queue",
+                "osimflow-q",
+                "--aws-batch-job-definition",
+                "osimflow-openstudio-job-def",
+                "--input_variables",
+                str(vars_yml),
+                "--template_sim_package",
+                str(pkg),
+                "--n_samples",
+                "1",
+                "--outdir",
+                str(tmp_path / "camp_tui"),
+                "--openstudio_version",
+                "3.11.0",
+                "--container-digest",
+                "sha256:" + "d" * 64,
+                "--detach-s3",
+                "--result-storage-backend",
+                "s3",
+                "--result-storage-bucket",
+                "test-bucket",
+            ]
+        )
+
+    assert rc == 0
+    mock_tui_cls.assert_not_called()
+    mock_tui_cls.return_value.start.assert_not_called()
+
+
+def test_cli_list_and_status_from_s3_json_stdout_purity(
+    store: S3CampaignStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Issue #2044: list/status --from-s3 emit strictly valid JSON on stdout and stderr-only errors."""
+    from osimflow.__main__ import main
+
+    with mock.patch("osimflow.storage.build_result_storage", return_value=store.storage):
+        # 1. list --from-s3 when 0 campaigns exist -> [] on stdout, empty stderr
+        rc = main(["list", "--from-s3", "--result-storage-bucket", "test-bucket"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.err == ""
+        assert json.loads(captured.out) == []
+
+        # 2. Submit a campaign, verify list --from-s3 and status --from-s3 JSON purity
+        _submit(store, tmp_path, "camp_json")
+        _complete(store, "camp_json", "0000")
+
+        rc = main(["list", "--from-s3", "--result-storage-bucket", "test-bucket"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.err == ""
+        listed = json.loads(captured.out)
+        assert isinstance(listed, list) and len(listed) == 1
+        assert listed[0]["campaign_id"] == "camp_json"
+        assert listed[0]["samples"] == 2
+
+        rc = main(
+            [
+                "status",
+                str(tmp_path / "camp_json"),
+                "--from-s3",
+                "--result-storage-bucket",
+                "test-bucket",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.err == ""
+        st = json.loads(captured.out)
+        assert st["campaign_id"] == "camp_json"
+        assert st["state"] == "running"
+        assert st["completed"] == 1
+        assert st["total"] == 2
+
+        # 3. Failed status --from-s3 on non-existent campaign -> empty stdout, error on stderr, rc != 0
+        rc = main(
+            [
+                "status",
+                str(tmp_path / "does_not_exist"),
+                "--from-s3",
+                "--result-storage-bucket",
+                "test-bucket",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc != 0
+        assert captured.out == ""
+        assert "error:" in captured.err
+
+        # 4. Operational S3 error (OSError) during list --from-s3 and status --from-s3
+        with mock.patch.object(
+            store.storage, "list_results", side_effect=OSError("S3 AccessDenied")
+        ):
+            rc_list = main(["list", "--from-s3", "--result-storage-bucket", "test-bucket"])
+            cap_list = capsys.readouterr()
+            assert rc_list == 1
+            assert cap_list.out == ""
+            assert "error: S3 AccessDenied" in cap_list.err
+
+            rc_st = main(
+                [
+                    "status",
+                    str(tmp_path / "camp_json"),
+                    "--from-s3",
+                    "--result-storage-bucket",
+                    "test-bucket",
+                ]
+            )
+            cap_st = capsys.readouterr()
+            assert rc_st == 1
+            assert cap_st.out == ""
+            assert "error: S3 AccessDenied" in cap_st.err
