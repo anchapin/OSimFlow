@@ -913,7 +913,8 @@ class TestStageOsaTemplatePackage:
         assert thermostat_step["arguments"]["heating_setpoint"] == 20.0
 
         cleanup_step = osw["steps"][1]
-        assert cleanup_step["arguments"]["sql"] is False
+        # Measure-specific arguments are left untouched by import-osa.
+        assert cleanup_step["arguments"]["sql"] is True
 
     def test_stage_directly_from_osa_zip(self, tmp_path: Path) -> None:
         from osimflow.importers.osa import stage_osa_template_package
