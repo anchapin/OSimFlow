@@ -27,6 +27,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
+from osimflow import cache as _cache_mod
 from osimflow.executors.base import (
     BaseExecutor,
     Handle,
@@ -977,6 +978,85 @@ class AWSBatchExecutor(BaseExecutor):
                 f"read it."
             )
         validated.add(job_definition)
+
+    def resolve_job_definition_image(self, job_definition: str | None = None) -> str | None:
+        """Return the ``containerProperties.image`` of *job_definition*, or ``None`` (issue #2027).
+
+        Queries ``describe_job_definitions`` and caches the result per
+        ``job_definition``.  Returns ``None`` on missing job definitions,
+        empty ``containerProperties.image``, or AWS client errors so
+        campaign construction can degrade gracefully and let ``run()``
+        enforce the digest-pinning contract.
+        """
+        target = (job_definition or getattr(self, "job_definition", "") or "").strip()
+        if not target:
+            return None
+        cache: dict[str, str] = self.__dict__.setdefault("_job_def_images", {})
+        if target in cache:
+            return cache[target]
+        try:
+            client = self._get_client()
+            if ":" in target:
+                response = client.describe_job_definitions(jobDefinitions=[target])
+            else:
+                response = client.describe_job_definitions(
+                    jobDefinitionName=target, status="ACTIVE"
+                )
+        except Exception as exc:  # noqa: BLE001 - best-effort discovery; Campaign.run() enforces the digest contract
+            log.debug(
+                "AWSBatchExecutor: could not inspect job definition %r for digest resolution: %s",
+                target,
+                exc,
+            )
+            return None
+        if not isinstance(response, dict) or not response.get("jobDefinitions"):
+            return None
+        definitions: list[dict[str, Any]] = list(response["jobDefinitions"])
+        definition = max(definitions, key=lambda d: int(d.get("revision", 0)))
+        actual = str((definition.get("containerProperties") or {}).get("image") or "").strip()
+        if actual:
+            cache[target] = actual
+            return actual
+        return None
+
+    def resolve_job_definition_digest(
+        self,
+        job_definition: str | None = None,
+        *,
+        label: str = "",
+    ) -> str | None:
+        """Return the ``<repo>@sha256:<hex>`` ref for *job_definition*, or ``None`` (issue #2027).
+
+        When ``containerProperties.image`` is already digest-pinned
+        (``<repo>@sha256:<hex>`` or ``<repo>:<tag>@sha256:<hex>``), the
+        authoritative digest is returned directly without invoking local
+        Docker.  When ``containerProperties.image`` is a mutable tag, falls
+        back to :func:`osimflow.cache._resolve_image_digest` and returns
+        ``None`` when no digest can be resolved.
+        """
+        actual = self.resolve_job_definition_image(job_definition)
+        if not actual:
+            return None
+        effective_label = actual if ":" in actual or "/" in actual else (label or actual)
+        pinned = _cache_mod.digest_pinned_image_ref(effective_label, actual)
+        if pinned is not None:
+            return pinned
+        try:
+            resolved = _cache_mod._resolve_image_digest(actual)
+        except _cache_mod.ImageDigestUnavailableError:
+            return None
+        return _cache_mod.digest_pinned_image_ref(effective_label, resolved)
+
+    def validate_job_definition_digest(
+        self,
+        expected_image: str,
+        job_definition: str | None = None,
+    ) -> None:
+        """Validate that the AWS Batch job definition matches *expected_image* (issue #2027)."""
+        target = (job_definition or getattr(self, "job_definition", "") or "").strip()
+        if not target or not expected_image:
+            return
+        self._validate_job_definition_image(target, expected_image)
 
     def _validate_job_definition_image(self, job_definition: str, expected_image: str) -> None:
         """Fail unless the job definition launches the requested image (issue #1810).
