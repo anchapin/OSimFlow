@@ -1822,7 +1822,7 @@ cross-links for depth.
 | `osimflow run` | Run a parametric campaign — the main command. See [§3 Quick Start](#3-quick-start) and [§5 Running Campaigns](#5-running-campaigns). |
 | `osimflow warm-cache` | Pre-populate the simulation cache with `--n_warm` pilot samples (default 10) before a campaign; accepts the full `run` flag surface. See [§7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior). |
 | `osimflow import-gem-osa` | Import openstudio-bem-to-surrogate-gem `parametric_space*.json` / `measure_space*.json` / `osa_workflow*.json` into one campaign dir per batch plus `batches.json`. Flags: `--output-dir`, `--batch`, `--template-package`, `--configs`. See [migration-openstudio-server.md](migration/openstudio-server.md). |
-| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.8](#78-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](migration/pat.md). |
+| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config (and optionally stage a normalized template simulation package with `--template-package` / `--package-output`). See [§7.8](#78-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](migration/pat.md). |
 | `osimflow export` | Export campaign state to an external format (`--target pat`) with `--variables` / `--n_samples` / `--algorithm`. |
 | `osimflow serve` | Start the REST API server (flags above; requires `pip install osimflow[api]`). See [api.md](api.md). |
 | `osimflow dashboard` | Launch a local ephemeral dashboard for campaign results (`--port`, default 8000). |
@@ -1865,6 +1865,8 @@ in [§4.1](#41-cli-flags); shared flags like `--outdir`, `--log_level`, or
 | `--page INT` / `--per-page INT` | `query-results` | Pagination (default 1 / 100; per-page max 1000). |
 | `--include-failed` / `--no-include-failed` | `export-results` | Include (default) or exclude failed simulations in the export. |
 | `--output PATH` | `import-osa`, `aggregate-runs`, `backup`, `export-results` | Output file path for the produced artifact. |
+| `--template-package PATH` | `import-osa`, `import-gem-osa` | Source template simulation package directory to copy and normalize when staging a campaign package. |
+| `--package-output PATH` | `import-osa` | Destination directory for the staged template simulation package. |
 | `--output-dir PATH` | `download` | Destination directory (default `<outdir>-downloads/<campaign_id>`). |
 | `--include-intermediates` | `download` | Also download per-sample `.osw`/`.osm` and `eplusout.sql` files. |
 | `--priority INT` | `mark-for-reanalysis` | Priority of the new reanalysis sample (default 0). |

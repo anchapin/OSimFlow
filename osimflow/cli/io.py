@@ -18,15 +18,34 @@ from osimflow import (
     SlurmExecutor,  # noqa: F401 — see above.
 )
 from osimflow.exporters.osa import OSAExporter
-from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
+from osimflow.importers.osa import (
+    OSAImportError,
+    osa_to_variables_yml,
+    parse_osa,
+    stage_osa_template_package,
+)
 
 log = logging.getLogger("osimflow.__main__")
 
 
 def _run_import_osa(args: argparse.Namespace) -> int:
+    template_package: Path | None = getattr(args, "template_package", None)
+    package_output: Path | None = getattr(args, "package_output", None)
     try:
         osa_data = parse_osa(args.input)
         osa_to_variables_yml(osa_data, args.output)
+        if template_package is not None or package_output is not None:
+            dest_pkg = (
+                package_output
+                if package_output is not None
+                else Path(args.output).resolve().parent / "template_sim_package"
+            )
+            stage_osa_template_package(
+                args.input,
+                dest_pkg,
+                template_package=template_package,
+                osa_data=osa_data,
+            )
     except (FileNotFoundError, OSAImportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

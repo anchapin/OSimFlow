@@ -1022,6 +1022,18 @@ def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
         default=Path("variables.yml"),
         help="Output path for the converted variables.yml (default: variables.yml)",
     )
+    imp.add_argument(
+        "--template-package",
+        type=Path,
+        default=None,
+        help="Optional source template simulation package directory to stage",
+    )
+    imp.add_argument(
+        "--package-output",
+        type=Path,
+        default=None,
+        help="Destination directory for the staged template simulation package",
+    )
     imp.add_argument("--log_level", default="INFO")
 
 

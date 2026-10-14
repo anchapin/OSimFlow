@@ -1,9 +1,11 @@
 """OpenStudio Analysis (.osa / analysis.json) import converter.
 
 Converts OSA variable definitions and distributions to OSimFlow's
-``variables.yml`` schema so that users migrating from the OpenStudio
-Analysis Spreadsheet / Parametric Analysis Tool can run their studies
-through ``osimflow run``.
+``variables.yml`` schema and optionally stages a ready-to-run template
+simulation package (with static workflow arguments overlaid and paths
+normalised) so that users migrating from the OpenStudio Analysis
+Spreadsheet / Parametric Analysis Tool can run their studies through
+``osimflow run``.
 
 Typical OSA structure (analysis.json)::
 
@@ -66,6 +68,7 @@ pivot                 pivot=true              mapped to categorical + flag
 
 import json
 import logging
+import shutil
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -77,6 +80,10 @@ from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
 from osimflow.errors import OSimFlowError
 
 log = logging.getLogger("osimflow.importers.osa")
+
+_SKIP_COPY_NAMES = frozenset({".DS_Store", "__pycache__", ".git"})
+_SERVER_CLEANUP_MEASURE_NAMES = frozenset({"ServerDirectoryCleanup", "server_directory_cleanup"})
+_PREBUILT_ALGORITHM_TYPES = frozenset({"single_run", "preflight", "repeat_run"})
 
 OSA_DISTRIBUTION_MAP: dict[str, str] = {
     "uniform": "uniform",
@@ -339,7 +346,12 @@ _OSA_ALGORITHM_MAP: dict[str, str] = {
     "sobol": "sobol",
     "morris": "morris",
     "fast99": "fast99",
-    "doe": "lhs",
+    "doe": "grid",
+    "full_factorial": "grid",
+    "grid": "grid",
+    "single_run": "lhs",
+    "preflight": "lhs",
+    "repeat_run": "lhs",
 }
 
 
@@ -488,6 +500,33 @@ def parse_analysis_json(analysis_path: Path) -> dict[str, Any]:
     return parse_osa(analysis_path)
 
 
+def _measure_step_name(measure: dict[str, Any]) -> str | None:
+    """Resolve the canonical measure directory/step name from an OSA workflow step."""
+    m_dir = (
+        measure.get("measure_definition_directory")
+        or measure.get("measure_definition_directory_local")
+        or measure.get("measure_dir_name")
+    )
+    if isinstance(m_dir, str) and m_dir.strip():
+        return Path(m_dir.strip()).name
+    for key in ("measure_definition_name", "name", "measure_definition_class_name"):
+        val = measure.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _is_varied_workflow_variable(mv: dict[str, Any]) -> bool:
+    """Return True if a workflow ``variables[]`` entry represents a varied parameter.
+
+    In standard OpenStudio ``.osa`` / ``analysis.json`` workflow steps, entries
+    under ``variables[]`` with ``"variable": false`` (and no distribution or
+    uncertainty description) represent static step argument assignments rather
+    than varied campaign parameters.
+    """
+    return mv.get("variable") is not False
+
+
 def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
     """Extract variables nested inside workflow measures.
 
@@ -508,60 +547,86 @@ def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
         measure_vars = measure.get("variables", [])
         if not isinstance(measure_vars, list):
             continue
+        m_name = _measure_step_name(measure)
         for mv in measure_vars:
-            if not isinstance(mv, dict):
+            if not isinstance(mv, dict) or not _is_varied_workflow_variable(mv):
                 continue
             mv_copy = dict(mv)
-            m_dir = measure.get("measure_definition_directory") or measure.get(
-                "measure_definition_directory_local"
-            )
-            m_name = (
-                Path(m_dir).name
-                if m_dir
-                else (
-                    measure.get("measure_definition_name")
-                    or measure.get("name")
-                    or measure.get("measure_definition_class_name")
-                )
-            )
             arg_name: str | None = None
             if "argument" in mv_copy and isinstance(mv_copy["argument"], dict):
                 arg_name = mv_copy["argument"].get("name")
+            elif isinstance(mv_copy.get("argument_name"), str):
+                arg_name = mv_copy["argument_name"]
             if m_name and arg_name:
                 mv_copy["measure"] = {"name": m_name, "argument": arg_name}
             extracted.append(mv_copy)
     return extracted
 
 
-def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
-    """Convert parsed OSA data to an OSimFlow ``variables.yml`` file.
+def _extract_seed(algorithm: dict[str, Any]) -> int | None:
+    """Extract and validate an optional integer ``seed`` from an OSA algorithm block."""
+    raw_seed = algorithm.get("seed")
+    if raw_seed is None:
+        return None
+    if isinstance(raw_seed, bool) or not isinstance(raw_seed, int):
+        raise OSAImportError(f"OSA algorithm 'seed' must be an integer, got {raw_seed!r}")
+    return int(raw_seed)
 
-    Parameters
-    ----------
-    osa_data : dict
-        Normalised analysis data (as returned by :func:`parse_osa`).
-    output_path : Path
-        Where to write the resulting ``variables.yml``.
 
-    Raises
-    ------
-    OSAImportError
-        If no variables are found or a distribution cannot be mapped.
-    """
-    problem = osa_data.get("problem", {})
-    if not isinstance(problem, dict):
-        raise OSAImportError("'problem' is not a dict")
+def _extract_n_samples(algorithm: dict[str, Any]) -> int | None:
+    """Extract and validate an optional positive ``number_of_samples`` from an OSA algorithm block."""
+    raw_n = algorithm.get("number_of_samples")
+    if raw_n is None:
+        raw_n = algorithm.get("n_samples")
+    if raw_n is None:
+        return None
+    if isinstance(raw_n, bool) or not isinstance(raw_n, int) or raw_n < 1:
+        raise OSAImportError(
+            f"OSA algorithm 'number_of_samples' must be a positive integer, got {raw_n!r}"
+        )
+    return int(raw_n)
 
-    osa_variables = problem.get("variables", [])
+
+def _supports_prebuilt_workflow(problem: dict[str, Any], allow_empty: bool) -> bool:
+    """Return True when a 0-variable OSA problem represents a valid prebuilt workflow."""
+    if allow_empty:
+        return True
+    workflow = problem.get("workflow")
+    if isinstance(workflow, list) and len(workflow) > 0:
+        return True
+    algorithm = problem.get("algorithm")
+    if isinstance(algorithm, dict):
+        algo_type = str(algorithm.get("type") or problem.get("analysis_type") or "").lower()
+        if algo_type in _PREBUILT_ALGORITHM_TYPES:
+            return True
+    analysis_type = str(problem.get("analysis_type") or "").lower()
+    return analysis_type in _PREBUILT_ALGORITHM_TYPES
+
+
+def _extract_problem_variables(
+    problem: dict[str, Any],
+    *,
+    allow_empty: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Convert active OSA problem variables or determine prebuilt-workflow mode."""
+    raw_problem_vars = problem.get("variables", [])
+    if not isinstance(raw_problem_vars, list):
+        raise OSAImportError("'problem.variables' must be a list")
+    osa_variables = [
+        v for v in raw_problem_vars if isinstance(v, dict) and _is_varied_workflow_variable(v)
+    ]
+    if not osa_variables and not raw_problem_vars:
+        workflow_raw = problem.get("workflow", [])
+        if isinstance(workflow_raw, list):
+            osa_variables = _extract_workflow_variables(workflow_raw)
+
     if not osa_variables:
-        osa_variables = _extract_workflow_variables(problem.get("workflow", []))
-
-    if not osa_variables:
+        if not raw_problem_vars and _supports_prebuilt_workflow(problem, allow_empty):
+            return [], True
         raise OSAImportError("No variables found in OSA problem definition or workflow measures")
 
     warnings: list[str] = []
     converted: list[dict[str, Any]] = []
-
     for i, osa_var in enumerate(osa_variables):
         entry, var_warnings = _convert_variable(osa_var, i)
         warnings.extend(var_warnings)
@@ -576,13 +641,52 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
 
     for w in warnings:
         log.warning(w)
+    return converted, False
 
-    algorithm = problem.get("algorithm", {})
+
+def _resolve_problem_algorithm_dict(problem: dict[str, Any]) -> dict[str, Any]:
+    """Extract and normalise the ``algorithm`` dictionary from *problem*."""
+    algorithm_raw = problem.get("algorithm", {})
+    if algorithm_raw is not None and not isinstance(algorithm_raw, dict):
+        raise OSAImportError("'problem.algorithm' must be a dict")
+    algorithm: dict[str, Any] = dict(algorithm_raw) if isinstance(algorithm_raw, dict) else {}
+    if "type" not in algorithm and "analysis_type" in problem:
+        algorithm["type"] = problem["analysis_type"]
+    return algorithm
+
+
+def osa_to_variables_yml(
+    osa_data: dict[str, Any],
+    output_path: Path,
+    *,
+    allow_empty: bool = False,
+) -> None:
+    """Convert parsed OSA data to an OSimFlow ``variables.yml`` file.
+
+    Parameters
+    ----------
+    osa_data : dict
+        Normalised analysis data (as returned by :func:`parse_osa`).
+    output_path : Path
+        Where to write the resulting ``variables.yml``.
+    allow_empty : bool, optional
+        When True, allow 0-variable problems to emit ``variables: []`` with
+        ``prebuilt_workflow: true`` even when no ``workflow`` steps or
+        single-run algorithm type are present.
+
+    Raises
+    ------
+    OSAImportError
+        If no variables are found (and the problem is not a prebuilt/single-run
+        workflow) or a distribution/algorithm cannot be mapped.
+    """
+    problem = osa_data.get("problem", {})
+    if not isinstance(problem, dict):
+        raise OSAImportError("'problem' is not a dict")
+
+    algorithm = _resolve_problem_algorithm_dict(problem)
     algorithm_name: str = "lhs"
-    if isinstance(algorithm, dict) and algorithm:
-        if "type" not in algorithm and "analysis_type" in problem:
-            algorithm = dict(algorithm)
-            algorithm["type"] = problem["analysis_type"]
+    if algorithm.get("type"):
         resolved = _resolve_algorithm(algorithm)
         algorithm_name = resolved.name()
         log.info(
@@ -591,13 +695,486 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
             algorithm_name,
         )
 
+    seed = _extract_seed(algorithm)
+    n_samples = _extract_n_samples(algorithm)
+    converted, is_prebuilt = _extract_problem_variables(problem, allow_empty=allow_empty)
+
+    metadata: dict[str, Any] = {"algorithm": algorithm_name}
+    if n_samples is not None:
+        metadata["n_samples"] = n_samples
+    elif is_prebuilt:
+        metadata["n_samples"] = 1
+    if seed is not None:
+        metadata["seed"] = seed
+
     variables_yml: dict[str, Any] = {
+        "_metadata": metadata,
         "algorithm": algorithm_name,
-        "variables": converted,
     }
+    if seed is not None:
+        variables_yml["seed"] = seed
+    if is_prebuilt:
+        variables_yml["prebuilt_workflow"] = True
+    variables_yml["variables"] = converted
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         yaml.dump(variables_yml, f, default_flow_style=False, sort_keys=False)
 
     log.info("Wrote %d variables to %s", len(converted), output_path)
+
+
+def _ignore_copy_names(_dir: str, names: list[str]) -> set[str]:
+    return {name for name in names if name in _SKIP_COPY_NAMES}
+
+
+def _copy_package_tree(src: Path, dst: Path) -> None:
+    """Copy a template simulation package directory into *dst*."""
+    src_resolved = src.resolve()
+    dst_resolved = dst.resolve()
+    if src_resolved == dst_resolved:
+        return
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst, ignore=_ignore_copy_names)
+
+
+def _extract_osa_zip(osa_path: Path, dst: Path) -> None:
+    """Safely extract an ``.osa`` ZIP archive into *dst* (preventing ZipSlip)."""
+    dst.mkdir(parents=True, exist_ok=True)
+    dst_resolved = dst.resolve()
+    try:
+        with zipfile.ZipFile(osa_path) as zf:
+            for member in zf.infolist():
+                member_name = member.filename
+                if not member_name or Path(member_name).name in _SKIP_COPY_NAMES:
+                    continue
+                target_path = (dst / member_name).resolve()
+                try:
+                    target_path.relative_to(dst_resolved)
+                except ValueError as exc:
+                    raise OSAImportError(
+                        f"Refusing to extract archive member outside destination: {member_name!r}"
+                    ) from exc
+                if member.is_dir():
+                    target_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src_fh, target_path.open("wb") as dst_fh:
+                        shutil.copyfileobj(src_fh, dst_fh)
+    except zipfile.BadZipFile as exc:
+        raise OSAImportError(f"Not a valid ZIP/OSA file: {osa_path}: {exc}") from exc
+
+
+def _coerce_int_or_float(existing: int | float, value: Any) -> Any:
+    """Coerce *value* to ``int`` or ``float`` matching *existing* when lossless."""
+    result = value
+    if isinstance(existing, int):
+        if isinstance(value, float) and value.is_integer():
+            result = int(value)
+        elif isinstance(value, str):
+            try:
+                result = int(value)
+            except ValueError:
+                result = value
+    elif isinstance(value, int | str) and not isinstance(value, bool):
+        try:
+            result = float(value)
+        except ValueError:
+            result = value
+    return result
+
+
+def _coerce_like(existing: Any, value: Any) -> Any:
+    """Coerce *value* to match the type of *existing* in ``workflow.osw`` when safe."""
+    result = value
+    if existing is None or isinstance(value, type(existing)):
+        return result
+    if isinstance(existing, bool):
+        if isinstance(value, str) and value.lower() in ("true", "false"):
+            result = value.lower() == "true"
+    elif isinstance(existing, int | float):
+        result = _coerce_int_or_float(existing, value)
+    elif isinstance(existing, str) and isinstance(value, int | float | bool):
+        result = ("true" if value else "false") if isinstance(value, bool) else str(value)
+    return result
+
+
+def _static_var_arg_and_value(mv: dict[str, Any]) -> tuple[str | None, Any, bool]:
+    """Extract ``(arg_name, value, found)`` from a non-varied workflow variable dict."""
+    arg_name: str | None = None
+    if isinstance(mv.get("argument"), dict):
+        arg_name = mv["argument"].get("name")
+    elif isinstance(mv.get("argument_name"), str):
+        arg_name = mv["argument_name"]
+    elif isinstance(mv.get("name"), str):
+        arg_name = mv["name"]
+    if not isinstance(arg_name, str) or not arg_name:
+        return None, None, False
+    for val_key in ("static_value", "value", "default_value"):
+        if val_key in mv and mv[val_key] is not None:
+            return arg_name, mv[val_key], True
+    arg_block = mv.get("argument")
+    if isinstance(arg_block, dict) and arg_block.get("default_value") is not None:
+        return arg_name, arg_block["default_value"], True
+    return arg_name, None, False
+
+
+def _extract_step_static_arguments(step: dict[str, Any]) -> dict[str, Any]:
+    """Extract static argument assignments from an OSA workflow step entry."""
+    result: dict[str, Any] = {}
+    raw_args = step.get("arguments")
+    if isinstance(raw_args, dict):
+        result.update({k: v for k, v in raw_args.items() if isinstance(k, str) and k})
+    elif isinstance(raw_args, list):
+        for item in raw_args:
+            if not isinstance(item, dict):
+                continue
+            arg_name = item.get("name") or item.get("argument_name")
+            if isinstance(arg_name, str) and arg_name and "value" in item:
+                result[arg_name] = item["value"]
+
+    raw_vars = step.get("variables")
+    if isinstance(raw_vars, list):
+        for mv in raw_vars:
+            if not isinstance(mv, dict) or _is_varied_workflow_variable(mv):
+                continue
+            arg_name, val, found = _static_var_arg_and_value(mv)
+            if found and arg_name is not None:
+                result[arg_name] = val
+    return result
+
+
+def _collect_varied_measure_args(osa_data: dict[str, Any]) -> set[tuple[str, str]]:
+    """Return the set of ``(measure_name, argument_name)`` pairs varied by *osa_data*."""
+    problem = osa_data.get("problem", {})
+    if not isinstance(problem, dict):
+        return set()
+    raw_problem_vars = problem.get("variables", [])
+    osa_variables: list[dict[str, Any]] = []
+    if isinstance(raw_problem_vars, list):
+        osa_variables = [
+            v for v in raw_problem_vars if isinstance(v, dict) and _is_varied_workflow_variable(v)
+        ]
+    if not osa_variables and isinstance(problem.get("workflow"), list):
+        osa_variables = _extract_workflow_variables(problem["workflow"])
+
+    varied: set[tuple[str, str]] = set()
+    for osa_var in osa_variables:
+        ref = _resolve_measure_argument(osa_var) or osa_var.get("name")
+        if isinstance(ref, str) and "." in ref:
+            m_name, a_name = ref.split(".", 1)
+            varied.add((m_name, a_name))
+    return varied
+
+
+def _resolve_file_in_package(
+    pkg_dir: Path,
+    raw_ref: str,
+    candidate_subdirs: tuple[str, ...],
+    field_name: str,
+) -> str:
+    """Resolve an OSW file reference to a path relative to *pkg_dir*."""
+    pkg_resolved = pkg_dir.resolve()
+    ref_path = Path(raw_ref)
+    if not ref_path.is_absolute():
+        direct = (pkg_dir / ref_path).resolve()
+        try:
+            rel = direct.relative_to(pkg_resolved)
+            if direct.is_file():
+                return rel.as_posix()
+        except ValueError:
+            pass
+
+    basename = ref_path.name
+    for subdir in candidate_subdirs:
+        candidate = (pkg_dir / subdir / basename) if subdir else (pkg_dir / basename)
+        if candidate.is_file():
+            return candidate.resolve().relative_to(pkg_resolved).as_posix()
+
+    matches = sorted(
+        p.resolve().relative_to(pkg_resolved).as_posix()
+        for p in pkg_dir.rglob(basename)
+        if p.is_file()
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise OSAImportError(
+            f"workflow.osw {field_name}={raw_ref!r} could not be resolved uniquely in "
+            f"{pkg_dir}: multiple files named {basename!r} found ({matches})"
+        )
+    raise OSAImportError(
+        f"workflow.osw {field_name}={raw_ref!r} does not exist in package {pkg_dir}"
+    )
+
+
+def _normalize_dir_entries(pkg_dir: Path, entries: list[Any]) -> list[str]:
+    """Return relative directory paths from *entries* that resolve inside *pkg_dir*."""
+    pkg_resolved = pkg_dir.resolve()
+    normalized: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        cand = (pkg_dir / entry).resolve()
+        try:
+            rel = cand.relative_to(pkg_resolved)
+        except ValueError:
+            continue
+        if cand.is_dir():
+            normalized.append(rel.as_posix())
+    return normalized
+
+
+def _normalize_osw_paths(osw: dict[str, Any], pkg_dir: Path) -> None:
+    """Rewrite parent-relative or external OSW paths to resolve inside *pkg_dir*."""
+    seed_file = osw.get("seed_file")
+    if isinstance(seed_file, str) and seed_file.strip():
+        osw["seed_file"] = _resolve_file_in_package(
+            pkg_dir,
+            seed_file.strip(),
+            ("", "seeds", "seed", "seed_models", "models"),
+            "seed_file",
+        )
+
+    weather_file = osw.get("weather_file")
+    if isinstance(weather_file, str) and weather_file.strip():
+        osw["weather_file"] = _resolve_file_in_package(
+            pkg_dir,
+            weather_file.strip(),
+            ("", "weather", "epw"),
+            "weather_file",
+        )
+
+    measures_dir = pkg_dir / "measures"
+    measure_paths = osw.get("measure_paths")
+    if isinstance(measure_paths, list):
+        normalized_mpaths = _normalize_dir_entries(pkg_dir, measure_paths)
+        if not normalized_mpaths and measures_dir.is_dir():
+            normalized_mpaths.append("measures")
+        if normalized_mpaths:
+            osw["measure_paths"] = list(dict.fromkeys(normalized_mpaths))
+    elif measures_dir.is_dir():
+        osw["measure_paths"] = ["measures"]
+
+    file_paths = osw.get("file_paths")
+    if isinstance(file_paths, list):
+        normalized_fpaths = _normalize_dir_entries(pkg_dir, file_paths)
+        for fallback in ("weather", "seeds", "seed", "seed_models", "files"):
+            if (pkg_dir / fallback).is_dir() and fallback not in normalized_fpaths:
+                normalized_fpaths.append(fallback)
+        if "." not in normalized_fpaths:
+            normalized_fpaths.append(".")
+        osw["file_paths"] = normalized_fpaths
+
+
+def _preserve_cleanup_sql(osw: dict[str, Any], varied_pairs: set[tuple[str, str]]) -> None:
+    """Keep ``eplusout.sql`` across ``ServerDirectoryCleanup`` so KPI extraction works."""
+    steps = osw.get("steps")
+    if not isinstance(steps, list):
+        return
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        measure_dir = step.get("measure_dir_name")
+        if not isinstance(measure_dir, str) or measure_dir not in _SERVER_CLEANUP_MEASURE_NAMES:
+            continue
+        if (measure_dir, "sql") in varied_pairs:
+            continue
+        args = step.setdefault("arguments", {})
+        if not isinstance(args, dict):
+            continue
+        existing = args.get("sql")
+        if existing is True or (isinstance(existing, str) and existing.lower() == "true"):
+            args["sql"] = _coerce_like(existing, False)
+
+
+def _extract_file_name_field(raw_val: Any) -> str | None:
+    """Extract a filename string from either ``{"file_name": "..."}`` or ``"..."``."""
+    if isinstance(raw_val, dict) and isinstance(raw_val.get("file_name"), str):
+        val = raw_val["file_name"].strip()
+        return val or None
+    if isinstance(raw_val, str) and raw_val.strip():
+        return raw_val.strip()
+    return None
+
+
+def _build_osw_from_osa(osa_data: dict[str, Any]) -> dict[str, Any]:
+    """Synthesise a ``workflow.osw`` dict from *osa_data* when none exists on disk."""
+    osw: dict[str, Any] = {}
+    seed_name = _extract_file_name_field(osa_data.get("seed"))
+    if seed_name:
+        osw["seed_file"] = seed_name
+
+    weather_name = _extract_file_name_field(osa_data.get("weather_file"))
+    if weather_name:
+        osw["weather_file"] = weather_name
+
+    steps: list[dict[str, Any]] = []
+    problem = osa_data.get("problem", {})
+    workflow = problem.get("workflow", []) if isinstance(problem, dict) else []
+    if isinstance(workflow, list):
+        for wf_step in workflow:
+            if not isinstance(wf_step, dict):
+                continue
+            m_name = _measure_step_name(wf_step)
+            if not m_name:
+                continue
+            osw_step: dict[str, Any] = {
+                "measure_dir_name": m_name,
+                "arguments": _extract_step_static_arguments(wf_step),
+            }
+            if isinstance(wf_step.get("name"), str):
+                osw_step["name"] = wf_step["name"]
+            steps.append(osw_step)
+    osw["steps"] = steps
+    return osw
+
+
+def _apply_step_static_arguments(
+    osw_step: dict[str, Any],
+    measure_name: str,
+    static_args: dict[str, Any],
+    varied_pairs: set[tuple[str, str]],
+) -> None:
+    """Overlay non-varied *static_args* onto *osw_step* with type coercion."""
+    step_args = osw_step.setdefault("arguments", {})
+    if not isinstance(step_args, dict):
+        step_args = {}
+        osw_step["arguments"] = step_args
+    for arg_name, val in static_args.items():
+        if (measure_name, arg_name) in varied_pairs:
+            continue
+        step_args[arg_name] = _coerce_like(step_args.get(arg_name), val)
+
+
+def _find_matching_osw_steps(
+    steps: list[Any], m_name: str, wf_step_name: Any
+) -> list[dict[str, Any]]:
+    """Return existing OSW steps matching *m_name* (and *wf_step_name* when disambiguating)."""
+    matching = [s for s in steps if isinstance(s, dict) and s.get("measure_dir_name") == m_name]
+    if isinstance(wf_step_name, str) and wf_step_name and len(matching) > 1:
+        named = [s for s in matching if s.get("name") == wf_step_name]
+        if named:
+            return named
+    return matching
+
+
+def _overlay_osa_workflow_onto_osw(
+    osw: dict[str, Any],
+    osa_data: dict[str, Any],
+    varied_pairs: set[tuple[str, str]],
+) -> None:
+    """Overlay static step arguments and seed/weather references from *osa_data* onto *osw*."""
+    if not osw.get("seed_file"):
+        seed_name = _extract_file_name_field(osa_data.get("seed"))
+        if seed_name:
+            osw["seed_file"] = seed_name
+
+    if not osw.get("weather_file"):
+        weather_name = _extract_file_name_field(osa_data.get("weather_file"))
+        if weather_name:
+            osw["weather_file"] = weather_name
+
+    problem = osa_data.get("problem", {})
+    workflow = problem.get("workflow", []) if isinstance(problem, dict) else []
+    if not isinstance(workflow, list) or not workflow:
+        return
+
+    steps = osw.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+        osw["steps"] = steps
+
+    for wf_step in workflow:
+        if not isinstance(wf_step, dict):
+            continue
+        m_name = _measure_step_name(wf_step)
+        if not m_name:
+            continue
+        static_args = _extract_step_static_arguments(wf_step)
+        wf_step_name = wf_step.get("name")
+        matching_steps = _find_matching_osw_steps(steps, m_name, wf_step_name)
+        if not matching_steps:
+            filtered_args = {
+                k: v for k, v in static_args.items() if (m_name, k) not in varied_pairs
+            }
+            new_step: dict[str, Any] = {
+                "measure_dir_name": m_name,
+                "arguments": filtered_args,
+            }
+            if isinstance(wf_step_name, str) and wf_step_name:
+                new_step["name"] = wf_step_name
+            steps.append(new_step)
+            continue
+
+        for osw_step in matching_steps:
+            _apply_step_static_arguments(osw_step, m_name, static_args, varied_pairs)
+
+
+def stage_osa_template_package(
+    osa_path: Path,
+    package_output: Path,
+    *,
+    template_package: Path | None = None,
+    osa_data: dict[str, Any] | None = None,
+) -> Path:
+    """Stage a ready-to-run template simulation package from an OSA file and/or seed package.
+
+    Copies *template_package* (if provided) and/or extracts the ``.osa`` ZIP
+    archive (when *osa_path* is a ZIP archive) into *package_output*, overlays
+    static measure arguments from the OSA workflow definition onto
+    ``workflow.osw``, normalises ``seed_file`` / ``weather_file`` /
+    ``measure_paths`` / ``file_paths`` so they resolve inside *package_output*,
+    and disables ``ServerDirectoryCleanup.sql`` deletion so KPI extraction works.
+    """
+    osa_path = Path(osa_path)
+    package_output = Path(package_output)
+    is_zip = osa_path.exists() and (
+        osa_path.suffix.lower() == ".osa" or zipfile.is_zipfile(osa_path)
+    )
+
+    if template_package is not None:
+        template_package = Path(template_package)
+        if not template_package.is_dir():
+            raise OSAImportError(f"Template package directory not found: {template_package}")
+        _copy_package_tree(template_package, package_output)
+        if is_zip:
+            _extract_osa_zip(osa_path, package_output)
+    elif is_zip:
+        if package_output.exists():
+            shutil.rmtree(package_output)
+        _extract_osa_zip(osa_path, package_output)
+    else:
+        raise OSAImportError(
+            "Staging a template package from a plain JSON analysis file requires "
+            "a source --template-package directory"
+        )
+
+    parsed_osa = osa_data if osa_data is not None else parse_osa(osa_path)
+    varied_pairs = _collect_varied_measure_args(parsed_osa)
+
+    osw_path = package_output / "workflow.osw"
+    if not osw_path.is_file():
+        alt_osws = sorted(package_output.glob("*.osw"))
+        if len(alt_osws) == 1:
+            osw_path = alt_osws[0]
+
+    if osw_path.is_file():
+        try:
+            osw_raw = json.loads(osw_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise OSAImportError(f"Invalid JSON in {osw_path}: {exc}") from exc
+        if not isinstance(osw_raw, dict):
+            raise OSAImportError(f"{osw_path} must contain a JSON object")
+        _overlay_osa_workflow_onto_osw(osw_raw, parsed_osa, varied_pairs)
+    else:
+        osw_raw = _build_osw_from_osa(parsed_osa)
+        osw_path = package_output / "workflow.osw"
+
+    _normalize_osw_paths(osw_raw, package_output)
+    _preserve_cleanup_sql(osw_raw, varied_pairs)
+    osw_path.write_text(json.dumps(osw_raw, indent=2) + "\n", encoding="utf-8")
+    log.info("Staged template simulation package to %s", package_output)
+    return package_output
