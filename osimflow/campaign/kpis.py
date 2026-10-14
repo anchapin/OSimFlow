@@ -47,7 +47,7 @@ from ..observability.monitoring import RunTrace
 from ..queues.dispatch import ConsumerQueue
 from ..storage import ResultStorageUploader
 from ..work import publish_kpi_results
-from .fanout import dispatch_step_work
+from .fanout import BookkeepingOnce, dispatch_step_work
 from .lifecycle import CampaignPauseRequested
 from .observability import ObservabilityManager
 
@@ -305,26 +305,38 @@ class CampaignKpisMixin:
                     _state: dict[str, object] = state,
                     _sim_dir: Path = _sim_dir,
                     _index: int = _sample_index,
+                    _once: BookkeepingOnce = BookkeepingOnce(),
                 ) -> None:
                     self.cache.store(_key, Path(result_path), exit_code=0)
-                    out.append(Path(result_path))
+                    _once.run("out", lambda: out.append(Path(result_path)))
                     _state["extract_exit_code"] = 0
                     _state["extract_status"] = "ok"
-                    self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("EXTRACT_KPIS", status="ok"),
+                    )
                     # Record sample status to observability backend immediately
                     # so completed samples are not missed if campaign crashes
                     # before _finalize_samples (issue #847).
-                    self._obs.record_sample_status(_sid, "ok", trace_id=self._trace_id_for(_sid))
+                    _once.run(
+                        "obs",
+                        lambda: self._obs.record_sample_status(
+                            _sid, "ok", trace_id=self._trace_id_for(_sid)
+                        ),
+                    )
                     # Worker direct-to-storage push (issue #625): upload
                     # kpis.json + atomic _manifest.json, then report to the
                     # Coordinator. No-op for the LocalStorage backend.
-                    self._publish_sample_results(
-                        sample_id=_sid,
-                        index=_index,
-                        simulation_dir=_sim_dir,
-                        kpi_path=Path(result_path),
-                        exit_code=0,
-                        status="completed",
+                    _once.run(
+                        "publish",
+                        lambda: self._publish_sample_results(
+                            sample_id=_sid,
+                            index=_index,
+                            simulation_dir=_sim_dir,
+                            kpi_path=Path(result_path),
+                            exit_code=0,
+                            status="completed",
+                        ),
                     )
 
                 submissions[sid] = (handle, _on_success)

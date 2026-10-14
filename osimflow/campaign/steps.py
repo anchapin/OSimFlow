@@ -22,6 +22,7 @@ from ..executors import Handle
 from ..observability.monitoring import RunTrace, WorkerRecoveryManager
 from ..s3_campaign import S3CampaignStore, SubmitClaim
 from .dag import SampleDict, SimResult
+from .fanout import BookkeepingOnce
 from .types import SampleSpec
 
 
@@ -658,16 +659,25 @@ class CampaignStepsMixin:
                     _state: dict[str, object] = state,
                     _apply_out_dir: Path = apply_out_dir,
                     _archive: bool = archive,
+                    _once: BookkeepingOnce = BookkeepingOnce(),
                 ) -> None:
                     self.cache.store(_key, _apply_out_dir, exit_code=0)
                     out[_sid] = _apply_out_dir
                     _state["apply_exit_code"] = 0
                     _state["apply_status"] = "ok"
-                    self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("APPLY_PARAMETERS", status="ok"),
+                    )
                     # Record sample status to observability backend immediately
                     # so completed samples are not missed if campaign crashes
                     # before _finalize_samples (issue #847).
-                    self._obs.record_sample_status(_sid, "ok", trace_id=self._trace_id_for(_sid))
+                    _once.run(
+                        "obs",
+                        lambda: self._obs.record_sample_status(
+                            _sid, "ok", trace_id=self._trace_id_for(_sid)
+                        ),
+                    )
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
                         self._archive_sample_artifacts(
@@ -976,6 +986,7 @@ class CampaignStepsMixin:
                     _state: dict[str, object] = state,
                     _archive: bool = archive,
                     _handle: Handle = h,
+                    _once: BookkeepingOnce = BookkeepingOnce(),
                 ) -> None:
                     err = result_path / "eplusout.err"
                     if err.exists():
@@ -992,11 +1003,19 @@ class CampaignStepsMixin:
                     _state["billed_duration_seconds"] = getattr(
                         _handle, "billed_duration_seconds", None
                     )
-                    self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok"),
+                    )
                     # Record sample status to observability backend immediately
                     # so completed samples are not missed if campaign crashes
                     # before _finalize_samples (issue #847).
-                    self._obs.record_sample_status(_sid, "ok", trace_id=self._trace_id_for(_sid))
+                    _once.run(
+                        "obs",
+                        lambda: self._obs.record_sample_status(
+                            _sid, "ok", trace_id=self._trace_id_for(_sid)
+                        ),
+                    )
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                         self._archive_sample_artifacts(
