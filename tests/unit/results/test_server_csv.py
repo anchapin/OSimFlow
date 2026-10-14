@@ -59,7 +59,58 @@ def test_failed_column_present_without_failures(tmp_path: Path) -> None:
 
 
 def test_empty_campaign(tmp_path: Path) -> None:
-    assert build_server_csv_frame(tmp_path).empty
+    df = build_server_csv_frame(tmp_path)
+    assert df.empty
+    assert list(df.columns) == ["name", "_id", "status", "status_message", SIMULATION_FAILED_COL]
+
+
+def test_empty_campaign_preserves_variable_columns_from_samples_json(tmp_path: Path) -> None:
+    """Issue #2041: empty campaign with samples.json preserves canonical variable columns."""
+    (tmp_path / "samples.json").write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"sample_id": "0000", "values": {"hvac.cop": 3.5, "envelope.wall_r": 12.0}},
+                ]
+            }
+        )
+    )
+    df = build_server_csv_frame(tmp_path)
+    assert df.empty
+    assert list(df.columns) == [
+        "name",
+        "_id",
+        "status",
+        "status_message",
+        "hvac.cop",
+        "envelope.wall_r",
+        SIMULATION_FAILED_COL,
+    ]
+
+
+def test_deduplicates_failed_sample_also_present_in_aggregated_results(tmp_path: Path) -> None:
+    """Issue #2041: defense-in-depth — failed sample in both CSVs appears once as datapoint failure."""
+    d = _campaign(tmp_path)
+    pd.DataFrame(
+        [
+            {
+                "sample_id": "s000",
+                "envelope.wall_r": 12.0,
+                "hvac.cop": 3.5,
+                "reporting_179_d.out_eui": 55.2,
+            },
+            {
+                "sample_id": "s001",
+                "envelope.wall_r": 9.0,
+                "hvac.cop": 2.0,
+                "error": "eplusout.sql_missing",
+            },
+        ]
+    ).to_csv(d / "aggregated_results.csv", index=False)
+    df = build_server_csv_frame(d)
+    assert df["name"].tolist() == ["s000", "s001"]
+    assert df["status_message"].tolist() == ["completed normal", "datapoint failure"]
+    assert df[SIMULATION_FAILED_COL].tolist() == ["", "Measure hvac failed: bad argument"]
 
 
 def test_cli_export_and_no_include_failed(tmp_path: Path) -> None:

@@ -405,8 +405,10 @@ class S3CampaignStore:
             kpi_files: list[Path] = []
             sim_dirs: list[Path] = []
             for sid in record.sample_ids:
+                if sid not in done:
+                    continue
                 sim_dir = sim_root / sid
-                if sid in done:
+                if states.get(sid) == "complete" and (sim_dir / "eplusout.sql").is_file():
                     try:
                         kpi_files.append(
                             extract_kpis(
@@ -430,8 +432,7 @@ class S3CampaignStore:
             )
         server_csv = outdir / DOWNLOAD_CSV_NAME
         frame = build_server_csv_frame(outdir)
-        if not frame.empty:
-            frame.to_csv(server_csv, index=False)
+        frame.to_csv(server_csv, index=False)
         return {
             "campaign_id": campaign_id,
             "fetched": fetched,
