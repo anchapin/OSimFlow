@@ -267,6 +267,124 @@ def default_apply_parameters(
     return result
 
 
+#: Per-sample deferred ``.osm`` attribute mutations file written when local
+#: OpenStudio Python bindings are unavailable on a submit host (issue #2024).
+#: Consumed and removed by :func:`run_openstudio_sim` inside the
+#: ``nrel/openstudio`` worker container before ``openstudio.cli run``.
+_PENDING_OSM_PARAMS_FILE = ".osimflow_pending_osm_params.json"
+
+
+def _apply_json_stub_osm_attributes(osm_path: Path, parameters: dict[str, Any]) -> bool:
+    """Mutate a test-mode JSON ``model.osm`` in place if it starts with ``{``."""
+    try:
+        text = osm_path.read_text()
+    except OSError:
+        return False
+    if not text.lstrip().startswith("{"):
+        return False
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    attrs = data.setdefault("attributes", {})
+    if not isinstance(attrs, dict):
+        return False
+    for name, value in parameters.items():
+        attrs[name] = value
+    osm_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return True
+
+
+def _apply_parameters_with_osm_deferral(
+    template: Path,
+    parameters: dict[str, Any],
+    sample_id: str,
+    out: Path,
+    *,
+    max_retries: int = 3,
+) -> Path:
+    """Apply OSW mutations locally and apply or defer ``.osm`` mutations (issue #2024).
+
+    Used when ``APPLY_PARAMETERS`` executes on the submit host for
+    ``--detach-s3`` or OSW-only ``aws_batch`` runs so we never submit
+    synchronous ``scientific_python_image`` jobs against the
+    ``nrel/openstudio`` Batch job definition:
+
+    1. Mutates ``out / workflow.osw`` in place via :func:`_apply_osw_parameters`.
+    2. If ``.osm`` attribute parameters remain:
+       - applies them immediately via :func:`default_apply_parameters` when
+         OpenStudio Python bindings are installed on the submit host;
+       - otherwise mutates JSON-mode test ``.osm`` stubs in place and writes
+         ``.osimflow_pending_osm_params.json`` into ``out`` so
+         :func:`run_openstudio_sim` applies them inside the
+         ``nrel/openstudio`` worker container before ``openstudio.cli run``.
+    """
+    osm_path = out / "model.osm"
+    pending_file = out / _PENDING_OSM_PARAMS_FILE
+    pending_file.unlink(missing_ok=True)
+
+    remaining = _apply_osw_parameters(out / "workflow.osw", parameters)
+    if not remaining:
+        if not (out / "workflow.osw").is_file() and not osm_path.is_file():
+            raise FileNotFoundError(f"neither workflow.osw nor model.osm found in {out!r}")
+        return out
+
+    if not osm_path.is_file():
+        raise FileNotFoundError(f"model.osm not found in {out!r}")
+
+    if not _is_stub_mode():
+        try:
+            import openstudio as _os_check  # noqa: PLC0415, F401
+        except ImportError:
+            has_bindings = False
+        else:
+            has_bindings = True
+        if has_bindings:
+            return default_apply_parameters(
+                template,
+                remaining,
+                sample_id,
+                out,
+                max_retries=max_retries,
+            )
+
+    _apply_json_stub_osm_attributes(osm_path, remaining)
+    pending_file.write_text(json.dumps(remaining, indent=2, sort_keys=True) + "\n")
+    log.info(
+        "deferred %d .osm attribute mutation(s) for sample=%s -> %s",
+        len(remaining),
+        sample_id,
+        pending_file,
+    )
+    return out
+
+
+def _apply_pending_osm_parameters(
+    modified_sim_package: Path,
+    sample_id: str,
+    *,
+    max_retries: int = 3,
+) -> None:
+    """Apply deferred ``.osm`` attribute mutations inside the simulation worker (issue #2024)."""
+    pending_file = modified_sim_package / _PENDING_OSM_PARAMS_FILE
+    if not pending_file.is_file():
+        return
+    raw = json.loads(pending_file.read_text())
+    if isinstance(raw, dict) and raw:
+        osm_path = modified_sim_package / "model.osm"
+        if not (osm_path.is_file() and _apply_json_stub_osm_attributes(osm_path, raw)):
+            default_apply_parameters(
+                modified_sim_package,
+                raw,
+                sample_id,
+                modified_sim_package,
+                max_retries=max_retries,
+            )
+    pending_file.unlink(missing_ok=True)
+
+
 def _apply_parameters_via_cli(
     template: Path,
     sample_id: str,
@@ -435,6 +553,15 @@ def _run_openstudio_sim_impl(
         stdout_path = sim_out / "stdout.log"
     if stderr_path is None:
         stderr_path = sim_out / "stderr.log"
+
+    # Issue #2024: apply any .osm attribute mutations that were deferred by a
+    # detached submit host lacking local OpenStudio Python bindings before
+    # checking or running the simulation inside the nrel/openstudio worker.
+    _apply_pending_osm_parameters(
+        modified_sim_package,
+        sample_id,
+        max_retries=max_retries,
+    )
 
     # ------------------------------------------------------------------
     # When openstudio.cli is available, default_apply_parameters now
