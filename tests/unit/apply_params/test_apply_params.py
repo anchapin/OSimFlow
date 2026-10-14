@@ -23,6 +23,9 @@ from osimflow.apply_params import (
     CrossMeasureConflictError,
     MappedParameter,
     UnmappedParameterError,
+    _build_mappings_without_osm_bindings,
+    _infer_osm_attribute_mapping,
+    _load_custom_apply,
     _mutate_osw,
     _resolve_dir_template,
     _select_template_file,
@@ -735,14 +738,33 @@ class TestResolveDirTemplate:
 
 
 class TestResolveTemplateFile:
-    """Error paths in resolve_template_file (line 275)."""
+    """Error and resolution paths in resolve_template_file."""
 
     def test_empty_directory_raises(self, tmp_path: Path) -> None:
-        """Line 275: directory with no .osw and no .osm raises ValueError."""
+        """Directory with no .osw and no .osm raises ValueError."""
         empty_dir = tmp_path / "empty_template"
         empty_dir.mkdir()
         with pytest.raises(ValueError, match="contains neither workflow.osw nor model.osm"):
             resolve_template_file(empty_dir)
+
+    def test_file_path_returned_directly(self, tmp_path: Path) -> None:
+        """Non-directory path is returned as-is."""
+        osw = _write_osw(tmp_path, SINGLE_MEASURE_OSW)
+        assert resolve_template_file(osw) == osw
+
+    def test_directory_prefers_osw_or_falls_back_to_osm(self, tmp_path: Path) -> None:
+        """Directory with workflow.osw returns it; directory with only model.osm returns model.osm."""
+        osm_only = tmp_path / "osm_only"
+        osm_only.mkdir()
+        osm = osm_only / "model.osm"
+        osm.write_text("{}")
+        assert resolve_template_file(osm_only) == osm
+
+        both = tmp_path / "both"
+        both.mkdir()
+        osw = _write_osw(both, SINGLE_MEASURE_OSW)
+        (both / "model.osm").write_text("{}")
+        assert resolve_template_file(both) == osw
 
 
 class TestSelectTemplateFile:
@@ -754,3 +776,69 @@ class TestSelectTemplateFile:
         empty_dir.mkdir()
         with pytest.raises(ValueError, match="contains neither workflow.osw nor model.osm"):
             _select_template_file(empty_dir)
+
+
+class TestInferAndBuildMappingsWithoutOsmBindings:
+    """Issue #2024: _infer_osm_attribute_mapping and _build_mappings_without_osm_bindings."""
+
+    def test_infer_simple_known_and_unknown_attributes(self) -> None:
+        mapped = _infer_osm_attribute_mapping("lighting_power_density")
+        assert mapped is not None
+        assert mapped.kind == "attribute"
+        assert mapped.name == "lighting_power_density"
+        assert _infer_osm_attribute_mapping("unknown_simple_attr") is None
+
+    def test_infer_dotted_known_invalid_and_unknown_object_type(self) -> None:
+        mapped = _infer_osm_attribute_mapping("SpaceType_Office.lighting_power_density")
+        assert mapped is not None
+        assert mapped.kind == "attribute"
+        assert mapped.object_type == "SpaceType"
+        assert mapped.object_name == "Office"
+        # No underscore on left side -> OSMAttributeError caught -> None
+        assert _infer_osm_attribute_mapping("MeasureName.arg_name") is None
+        # Unknown object type -> None
+        assert _infer_osm_attribute_mapping("UnknownType_Obj.attr") is None
+
+    def test_build_mappings_dir_osw_only_and_osm_only(self, tmp_path: Path) -> None:
+        osw_only = tmp_path / "osw_only"
+        osw_only.mkdir()
+        _write_osw(osw_only, SINGLE_MEASURE_OSW)
+        m_osw = _build_mappings_without_osm_bindings(
+            osw_only, ["heating_setpoint", "lighting_power_density"]
+        )
+        assert "heating_setpoint" in m_osw
+        assert "lighting_power_density" not in m_osw
+
+        osm_only = tmp_path / "osm_only"
+        osm_only.mkdir()
+        (osm_only / "model.osm").write_text("OS:Version,3.11.0;")
+        m_osm = _build_mappings_without_osm_bindings(
+            osm_only,
+            [
+                "lighting_power_density",
+                "SpaceType_Office.lighting_power_density",
+                "nonexistent_var",
+            ],
+        )
+        assert "lighting_power_density" in m_osm
+        assert "SpaceType_Office.lighting_power_density" in m_osm
+        assert "nonexistent_var" not in m_osm
+
+    def test_build_mappings_single_file_osw_and_osm(self, tmp_path: Path) -> None:
+        osw_file = _write_osw(tmp_path, SINGLE_MEASURE_OSW)
+        m_osw = _build_mappings_without_osm_bindings(osw_file, ["heating_setpoint"])
+        assert "heating_setpoint" in m_osw
+
+        osm_file = tmp_path / "single.osm"
+        osm_file.write_text("OS:Version,3.11.0;")
+        m_osm = _build_mappings_without_osm_bindings(
+            osm_file, ["cooling_setpoint", "unknown_param"]
+        )
+        assert "cooling_setpoint" in m_osm
+        assert "unknown_param" not in m_osm
+
+
+def test_load_custom_apply_deprecated_raises(tmp_path: Path) -> None:
+    """Deprecated _load_custom_apply warns and raises RuntimeError."""
+    with pytest.deprecated_call(), pytest.raises(RuntimeError, match="has been removed"):
+        _load_custom_apply(tmp_path / "custom.py")
