@@ -36,6 +36,8 @@ from typing import Any
 TASK_PAYLOAD_ENV = "OSIMFLOW_TASK_PAYLOAD"
 #: Hex HMAC-SHA256 digest over the exact ``TASK_PAYLOAD_ENV`` string bytes.
 TASK_PAYLOAD_SIG_ENV = "OSIMFLOW_TASK_PAYLOAD_SIG"
+#: Alias for ``TASK_PAYLOAD_SIG_ENV`` (issue #2025).
+TASK_PAYLOAD_HMAC_ENV = TASK_PAYLOAD_SIG_ENV
 #: Shared secret used for signing (submission) and verification (runner).
 TASK_PAYLOAD_SECRET_ENV = "OSIMFLOW_TASK_PAYLOAD_SECRET"
 #: Path to a file holding the shared secret (issue #1633). Docker Swarm
@@ -146,16 +148,26 @@ def build_signature_env(
     *,
     secret: str | None = None,
     include_secret: bool = True,
+    require_secret: bool = False,
 ) -> dict[str, str]:
     """Return the env vars to attach alongside ``OSIMFLOW_TASK_PAYLOAD``.
 
-    When a shared secret is configured (explicit *secret* or the
-    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` environment variable), returns
+    When a shared secret is configured (explicit *secret* or resolved via
+    :func:`resolve_payload_secret` from ``OSIMFLOW_TASK_PAYLOAD_SECRET``,
+    ``NOMAD_META_task_payload_secret``, or
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE``), returns
     ``OSIMFLOW_TASK_PAYLOAD_SIG`` (the signature) and — unless
     *include_secret* is False — ``OSIMFLOW_TASK_PAYLOAD_SECRET`` (so
-    the remote worker can verify). Returns an empty dict in legacy
-    unsigned mode so executor env builders stay byte-identical when no
-    secret is configured.
+    the remote worker can verify).
+
+    ``osimflow.remote_runner`` is fail-closed (issue #1205) and refuses to
+    execute unsigned task payloads at container startup. Executors that
+    invoke ``remote_runner`` (such as ``AWSBatchExecutor``, issue #2025)
+    must pass ``require_secret=True`` (and validate secret availability at
+    submit time) so they never silently fall back to ``{}`` and submit
+    unsigned jobs that ``remote_runner`` will inevitably reject. When
+    *require_secret* is True and no non-empty secret can be resolved,
+    raises ``RuntimeError``.
 
     *include_secret=False* is the signature-only mode for substrates
     that deliver the secret out-of-band (issue #1633: AWS Batch
@@ -169,8 +181,16 @@ def build_signature_env(
     ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`` path second (Swarm secret
     mount), so verification works identically in both modes.
     """
-    resolved = secret if secret is not None else os.environ.get(TASK_PAYLOAD_SECRET_ENV)
+    resolved = secret if secret is not None else resolve_payload_secret()
     if not resolved:
+        if require_secret:
+            raise RuntimeError(
+                f"{TASK_PAYLOAD_SECRET_ENV} is not configured — refusing to build "
+                "unsigned task payload environment that osimflow.remote_runner will "
+                f"reject at container startup. Export {TASK_PAYLOAD_SECRET_ENV} "
+                f"(or {TASK_PAYLOAD_SECRET_FILE_ENV}) on the orchestrator before "
+                "submitting remote tasks (issue #1205, #2025)."
+            )
         return {}
     env = {TASK_PAYLOAD_SIG_ENV: sign_task_payload(payload, resolved)}
     if include_secret:

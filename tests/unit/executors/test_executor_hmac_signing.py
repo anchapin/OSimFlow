@@ -292,10 +292,15 @@ def test_executor_propagates_signature_when_secret_configured(
 def test_executor_omits_signature_when_no_secret(
     executor_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #1384: legacy unsigned mode is preserved across every executor."""
+    """Issue #1384/#2025: AWS Batch fails fast when no secret is configured;
+    other executors retain legacy unsigned mode until aligned."""
     monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
     factory = EXECUTOR_FACTORIES[executor_name]
     builder = ENV_BUILDERS[executor_name]
+    if executor_name == "aws_batch":
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            builder(factory)
+        return
     env_map = builder(factory)
     assert env_map["OSIMFLOW_TASK_PAYLOAD"] == TASK_PAYLOAD
     assert TASK_PAYLOAD_SIG_ENV not in env_map

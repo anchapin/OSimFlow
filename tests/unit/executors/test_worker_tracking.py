@@ -52,6 +52,7 @@ def _isolated_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> object:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
     monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
     monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)

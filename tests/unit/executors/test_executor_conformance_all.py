@@ -205,6 +205,7 @@ def _aws_batch_factory() -> BaseExecutor:
     ex._client = None
     ex._ec2_client = None
     ex._botocore_session = None
+    ex._resolved_payload_secret = "stub-conformance-secret"
     ex._wait_for_terminal = _stub_wait_for_terminal(_succeeded_terminal_job())  # type: ignore[method-assign]
     ex._submit_job = _stub_submit_job("aws")  # type: ignore[method-assign]
     # Issue #1563: ``__new__``-based factory bypasses the real ctor;

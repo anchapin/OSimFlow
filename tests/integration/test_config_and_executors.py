@@ -229,12 +229,13 @@ def test_slurm_executor_debug_submits_locally() -> None:
 # ---------------------------------------------------------------------------
 # AWSBatchExecutor (no real AWS — boto3.client is patched)
 # ---------------------------------------------------------------------------
-def test_aws_batch_executor_submits() -> None:
+def test_aws_batch_executor_submits(monkeypatch: pytest.MonkeyPatch) -> None:
     """Smoke test: the executor accepts a boto3.client-patched environment
     and returns a Handle. The real polling behavior is covered in
     `test_awsbatch_boto3_wiring.py`."""
     from unittest.mock import MagicMock
 
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "stub-job"}
     fake_client.describe_jobs.return_value = {

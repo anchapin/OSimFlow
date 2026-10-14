@@ -413,27 +413,61 @@ class TestAwsBatchSecretDelivery:
         ex._validate_job_definition_secret("d:3")  # noqa: SLF001  # cached
         assert client.describe_job_definitions.call_count == 2
 
-    def test_ref_without_secret_warns_unsigned(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_ref_without_secret_warns_unsigned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Issue #2025: payload_secret_arn without a signing secret fails fast."""
         from osimflow.executors import AWSBatchExecutor
-        from osimflow.task_payload_hmac import (
-            TASK_PAYLOAD_SECRET_ENV,
-            TASK_PAYLOAD_SIG_ENV,
-        )
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
 
         monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
         ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
-        with caplog.at_level(logging.WARNING):
-            env = ex._build_environment(  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="aws-batch-payload-secret-arn"):
+            ex._build_environment(  # noqa: SLF001
                 container="nrel/openstudio:3.11.0",
                 openstudio_version="3.11.0",
                 task_payload=TASK_PAYLOAD,
             )
-        names = {e["name"] for e in env}
-        assert TASK_PAYLOAD_SECRET_ENV not in names
-        assert TASK_PAYLOAD_SIG_ENV not in names
-        assert any("cannot be signed" in r.message for r in caplog.records)
+
+    def test_missing_secret_without_arn_fails_before_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2025: missing secret fails fast before submit_job is called."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor()
+        client = MagicMock()
+        ex._client = client  # noqa: SLF001
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_ENV):
+            ex.submit(lambda: None, name="sim_0001")
+        client.submit_job.assert_not_called()
+
+    def test_secret_ref_resolves_via_secrets_client_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #2025: when _secrets_client is provided, ARN resolves secret for signing."""
+        from osimflow.executors import AWSBatchExecutor
+        from osimflow.task_payload_hmac import (
+            TASK_PAYLOAD_SECRET_ENV,
+            TASK_PAYLOAD_SIG_ENV,
+            sign_task_payload,
+        )
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
+        secrets_client = MagicMock()
+        secrets_client.get_secret_value.return_value = {"SecretString": "arn-fetched-secret\n"}
+        ex._secrets_client = secrets_client  # type: ignore[attr-defined]  # noqa: SLF001
+        env = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+        env_map = _parse_env_list(env)
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(
+            TASK_PAYLOAD, "arn-fetched-secret"
+        )
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
 
 
 class TestAzureBatchSecretDelivery:

@@ -53,6 +53,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
 
 
+@pytest.fixture(autouse=True)
+def _payload_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "test-hmac-secret")
+
+
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
     wd = tmp_path / "work"
