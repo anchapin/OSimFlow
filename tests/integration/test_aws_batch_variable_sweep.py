@@ -2,7 +2,7 @@
 
 Skip-gated: needs real Batch infrastructure and a worker image that bundles the
 Ruby measure(s). The template package is supplied via
-``OSIMFLOW_AWS_BATCH_SWEEP_PACKAGE`` (a gem-style dir with ``workflow.osw``)
+``OSIMFLOW_AWS_BATCH_SWEEP_PACKAGE`` (a measure-only dir with ``workflow.osw``)
 and ``OSIMFLOW_AWS_BATCH_SWEEP_VARIABLES`` (its variables.yml).
 """
 

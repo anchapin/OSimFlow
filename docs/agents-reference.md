@@ -261,7 +261,7 @@ name in this section.
   `SevereEnergyPlusError`).  Since issue #1869 `default_apply_parameters` writes
   OSW measure arguments and the `__epw_file__` weather target straight
   into `workflow.osw` (no OpenStudio bindings / `model.osm` needed), so
-  `APPLY_PARAMETERS` sweeps gem-style packages on `aws_batch`; the
+  `APPLY_PARAMETERS` sweeps measure-only OSW packages on `aws_batch`; the
   `custom` algorithm may emit per-sample `weather_file` / `seed_model`
   overrides (`docs/aws-batch-worker-runtime.md`).  `aggregate_results` produces
   `aggregated_results.csv` + `aggregated_results.parquet` (both

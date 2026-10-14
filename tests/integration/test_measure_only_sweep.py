@@ -1,4 +1,4 @@
-"""Variable-aware sweep over a gem-style OSW package, no model.osm (issue #1869)."""
+"""Variable-aware sweep over a measure-only OSW package, no model.osm (issue #1869)."""
 
 import json
 from pathlib import Path
