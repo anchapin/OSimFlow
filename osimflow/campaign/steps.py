@@ -676,14 +676,18 @@ class CampaignStepsMixin:
                     _archive: bool = archive,
                     _once: BookkeepingOnce = BookkeepingOnce(),
                 ) -> None:
-                    self.cache.store(_key, _apply_out_dir, exit_code=0)
-                    out[_sid] = _apply_out_dir
-                    _state["apply_exit_code"] = 0
-                    _state["apply_status"] = "ok"
                     _once.run(
-                        "trace",
-                        lambda: self.trace.step_item_done("APPLY_PARAMETERS", status="ok"),
+                        "cache_store",
+                        lambda: self.cache.store(_key, _apply_out_dir, exit_code=0),
                     )
+                    if _archive:
+                        archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
+                        _once.run(
+                            "archive_apply",
+                            lambda: self._archive_sample_artifacts(
+                                _apply_out_dir, archive_dst, ["*.osw", "*.osm"]
+                            ),
+                        )
                     # Record sample status to observability backend immediately
                     # so completed samples are not missed if campaign crashes
                     # before _finalize_samples (issue #847).
@@ -693,11 +697,13 @@ class CampaignStepsMixin:
                             _sid, "ok", trace_id=self._trace_id_for(_sid)
                         ),
                     )
-                    if _archive:
-                        archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
-                        self._archive_sample_artifacts(
-                            _apply_out_dir, archive_dst, ["*.osw", "*.osm"]
-                        )
+                    out[_sid] = _apply_out_dir
+                    _state["apply_exit_code"] = 0
+                    _state["apply_status"] = "ok"
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("APPLY_PARAMETERS", status="ok"),
+                    )
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
@@ -707,25 +713,33 @@ class CampaignStepsMixin:
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
             state = ctx["state"]
-            if state.get("apply_exit_code") != 0 and "apply_status" not in state:
+            if state.get("apply_status") != "ok":
+                out.pop(_sid, None)
+                already_marked = state.get("apply_status") == "failed"
                 state["apply_exit_code"] = 1
                 state["apply_status"] = "failed"
-                state["error_summary"] = "APPLY: unknown error during concurrent execution"
-                self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
-                self.trace.step_item_done("APPLY_PARAMETERS", status="failed")
-                # Record sample status to observability backend (issue #847).
-                self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
-                # Send sample failure alert (issue #1180).
-                self._maybe_alert(
-                    "sample.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "sample_id": _sid,
-                        "step": "APPLY_PARAMETERS",
-                        "status": "failed",
-                        "error": "apply exited with non-zero code",
-                    },
+                state.setdefault(
+                    "error_summary", "APPLY: unknown error during concurrent execution"
                 )
+                if state.get("failure_class") != "bookkeeping_error":
+                    self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
+                self.trace.step_item_done("APPLY_PARAMETERS", status="failed")
+                if not already_marked:
+                    # Record sample status to observability backend (issue #847).
+                    self._obs.record_sample_status(
+                        _sid, "failed", trace_id=self._trace_id_for(_sid)
+                    )
+                    # Send sample failure alert (issue #1180).
+                    self._maybe_alert(
+                        "sample.failed",
+                        {
+                            "campaign_id": self.trace.campaign_id,
+                            "sample_id": _sid,
+                            "step": "APPLY_PARAMETERS",
+                            "status": "failed",
+                            "error": "apply exited with non-zero code",
+                        },
+                    )
 
         self.trace.step_finished(
             "APPLY_PARAMETERS",
@@ -1006,35 +1020,19 @@ class CampaignStepsMixin:
                     err = result_path / "eplusout.err"
                     if err.exists():
                         err.unlink()
-                    self.cache.store(_key, _c.Path(result_path), exit_code=0)
-                    out[_sid] = _c.Path(result_path)
-                    _state["sim_exit_code"] = 0
-                    _state["sim_status"] = "ok"
-                    _state["eplusout_sql"] = str(result_path / "eplusout.sql")
-                    _state["worker_id"] = _handle.worker_id
-                    _state["worker_ip"] = getattr(_handle, "worker_ip", None)
-                    _state["worker_region"] = getattr(_handle, "worker_region", None)
-                    _state["cost_usd"] = getattr(_handle, "cost_usd", None)
-                    _state["billed_duration_seconds"] = getattr(
-                        _handle, "billed_duration_seconds", None
-                    )
                     _once.run(
-                        "trace",
-                        lambda: self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok"),
-                    )
-                    # Record sample status to observability backend immediately
-                    # so completed samples are not missed if campaign crashes
-                    # before _finalize_samples (issue #847).
-                    _once.run(
-                        "obs",
-                        lambda: self._obs.record_sample_status(
-                            _sid, "ok", trace_id=self._trace_id_for(_sid)
-                        ),
+                        "cache_store",
+                        lambda: self.cache.store(_key, _c.Path(result_path), exit_code=0),
                     )
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
-                        self._archive_sample_artifacts(
-                            _c.Path(result_path), archive_dst, ["*.osw", "*.osm", "eplusout.sql"]
+                        _once.run(
+                            "archive_sim",
+                            lambda: self._archive_sample_artifacts(
+                                _c.Path(result_path),
+                                archive_dst,
+                                ["*.osw", "*.osm", "eplusout.sql"],
+                            ),
                         )
                     if self._result_storage is not None:
                         sql_path = result_path / "eplusout.sql"
@@ -1055,6 +1053,30 @@ class CampaignStepsMixin:
                                     exc,
                                     exc_info=True,
                                 )
+                    # Record sample status to observability backend immediately
+                    # so completed samples are not missed if campaign crashes
+                    # before _finalize_samples (issue #847).
+                    _once.run(
+                        "obs",
+                        lambda: self._obs.record_sample_status(
+                            _sid, "ok", trace_id=self._trace_id_for(_sid)
+                        ),
+                    )
+                    out[_sid] = _c.Path(result_path)
+                    _state["sim_exit_code"] = 0
+                    _state["sim_status"] = "ok"
+                    _state["eplusout_sql"] = str(result_path / "eplusout.sql")
+                    _state["worker_id"] = _handle.worker_id
+                    _state["worker_ip"] = getattr(_handle, "worker_ip", None)
+                    _state["worker_region"] = getattr(_handle, "worker_region", None)
+                    _state["cost_usd"] = getattr(_handle, "cost_usd", None)
+                    _state["billed_duration_seconds"] = getattr(
+                        _handle, "billed_duration_seconds", None
+                    )
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok"),
+                    )
 
                 submissions[sid] = (handle, _on_success)
 
@@ -1078,25 +1100,31 @@ class CampaignStepsMixin:
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
             state = ctx["state"]
-            if state.get("sim_exit_code") != 0 and "sim_status" not in state:
+            if state.get("sim_status") != "ok":
+                out.pop(_sid, None)
+                already_marked = state.get("sim_status") == "failed"
                 state["sim_exit_code"] = 1
                 state["sim_status"] = "failed"
-                state["error_summary"] = "SIM: unknown error during concurrent execution"
-                self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
+                state.setdefault("error_summary", "SIM: unknown error during concurrent execution")
+                if state.get("failure_class") != "bookkeeping_error":
+                    self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="failed")
-                # Record sample status to observability backend (issue #847).
-                self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
-                # Send sample failure alert (issue #1180).
-                self._maybe_alert(
-                    "sample.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "sample_id": _sid,
-                        "step": "RUN_OPENSTUDIO_SIM",
-                        "status": "failed",
-                        "error": "sim exited with non-zero code",
-                    },
-                )
+                if not already_marked:
+                    # Record sample status to observability backend (issue #847).
+                    self._obs.record_sample_status(
+                        _sid, "failed", trace_id=self._trace_id_for(_sid)
+                    )
+                    # Send sample failure alert (issue #1180).
+                    self._maybe_alert(
+                        "sample.failed",
+                        {
+                            "campaign_id": self.trace.campaign_id,
+                            "sample_id": _sid,
+                            "step": "RUN_OPENSTUDIO_SIM",
+                            "status": "failed",
+                            "error": "sim exited with non-zero code",
+                        },
+                    )
 
         any_failed = any(ctx["state"].get("sim_exit_code", 0) != 0 for ctx in pending.values())
         self.trace.step_finished(

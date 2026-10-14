@@ -163,7 +163,40 @@ class TestMarkSampleFailed:
         state = spies["state"]["sample_0"]
         assert state["extract_kpis_exit_code"] == 1
         assert state["extract_kpis_status"] == "failed"
+        assert state["extract_exit_code"] == 1
+        assert state["extract_status"] == "failed"
         assert "boom" in state["error_summary"]
+
+    @pytest.mark.parametrize(
+        ("step_name", "canonical_prefix"),
+        [
+            ("APPLY_PARAMETERS", "apply"),
+            ("RUN_OPENSTUDIO_SIM", "sim"),
+            ("EXTRACT_KPIS", "extract"),
+        ],
+    )
+    def test_canonical_status_keys_populated_for_fanout_steps(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        step_name: str,
+        canonical_prefix: str,
+    ) -> None:
+        """Issue #2023: mark_sample_failed sets canonical apply/sim/extract keys."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+        # Pre-seed "ok" to verify mark_sample_failed overwrites any stale ok state.
+        spies["state"]["sample_0"] = {
+            f"{canonical_prefix}_exit_code": 0,
+            f"{canonical_prefix}_status": "ok",
+        }
+        mark_sample_failed(deps, "sample_0", step_name, RuntimeError("boom"), "t0")
+        state = spies["state"]["sample_0"]
+        assert state[f"{canonical_prefix}_exit_code"] == 1
+        assert state[f"{canonical_prefix}_status"] == "failed"
+        assert state[f"{step_name.lower()}_exit_code"] == 1
+        assert state[f"{step_name.lower()}_status"] == "failed"
 
     def test_checkpoint_obs_and_alert_called(
         self, variables_yml: Path, template_pkg: Path, outdir: Path

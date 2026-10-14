@@ -307,22 +307,9 @@ class CampaignKpisMixin:
                     _index: int = _sample_index,
                     _once: BookkeepingOnce = BookkeepingOnce(),
                 ) -> None:
-                    self.cache.store(_key, Path(result_path), exit_code=0)
-                    _once.run("out", lambda: out.append(Path(result_path)))
-                    _state["extract_exit_code"] = 0
-                    _state["extract_status"] = "ok"
                     _once.run(
-                        "trace",
-                        lambda: self.trace.step_item_done("EXTRACT_KPIS", status="ok"),
-                    )
-                    # Record sample status to observability backend immediately
-                    # so completed samples are not missed if campaign crashes
-                    # before _finalize_samples (issue #847).
-                    _once.run(
-                        "obs",
-                        lambda: self._obs.record_sample_status(
-                            _sid, "ok", trace_id=self._trace_id_for(_sid)
-                        ),
+                        "cache_store",
+                        lambda: self.cache.store(_key, Path(result_path), exit_code=0),
                     )
                     # Worker direct-to-storage push (issue #625): upload
                     # kpis.json + atomic _manifest.json, then report to the
@@ -338,6 +325,22 @@ class CampaignKpisMixin:
                             status="completed",
                         ),
                     )
+                    # Record sample status to observability backend immediately
+                    # so completed samples are not missed if campaign crashes
+                    # before _finalize_samples (issue #847).
+                    _once.run(
+                        "obs",
+                        lambda: self._obs.record_sample_status(
+                            _sid, "ok", trace_id=self._trace_id_for(_sid)
+                        ),
+                    )
+                    _once.run("out", lambda: out.append(Path(result_path)))
+                    _state["extract_exit_code"] = 0
+                    _state["extract_status"] = "ok"
+                    _once.run(
+                        "trace",
+                        lambda: self.trace.step_item_done("EXTRACT_KPIS", status="ok"),
+                    )
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "EXTRACT_KPIS")
@@ -347,17 +350,38 @@ class CampaignKpisMixin:
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
             state = ctx["state"]
-            if state.get("extract_exit_code") != 0 and "extract_status" not in state:
+            if state.get("extract_status") != "ok":
+                out[:] = [p for p in out if p.name not in (f"kpi_{_sid}.json", f"{_sid}.json")]
+                already_marked = state.get("extract_status") == "failed"
                 state["extract_exit_code"] = 1
                 state["extract_status"] = "failed"
-                state["error_summary"] = "EXTRACT: unknown error during concurrent execution"
+                state.setdefault(
+                    "error_summary", "EXTRACT: unknown error during concurrent execution"
+                )
                 self.trace.step_item_done("EXTRACT_KPIS", status="failed")
+                if not already_marked:
+                    self._obs.record_sample_status(
+                        _sid, "failed", trace_id=self._trace_id_for(_sid)
+                    )
+                    # Send sample failure alert (issue #1180).
+                    self._maybe_alert(
+                        "sample.failed",
+                        {
+                            "campaign_id": self.trace.campaign_id,
+                            "sample_id": _sid,
+                            "step": "EXTRACT_KPIS",
+                            "status": "failed",
+                            "error": "extract exited with non-zero code",
+                        },
+                    )
             # Worker direct-to-storage (issue #625): publish a 'failed'
             # manifest for any sample that did not complete cleanly. Successful
             # samples were already published in _on_success above and are
             # skipped here (extract_status == "ok" / "cached").
-            # Also record sample status to observability backend (issue #847).
-            if state.get("extract_status") == "failed":
+            if (
+                state.get("extract_status") == "failed"
+                and state.get("failure_class") != "bookkeeping_error"
+            ):
                 self._publish_sample_results(
                     sample_id=_sid,
                     index=index_map.get(_sid, -1),
@@ -365,18 +389,6 @@ class CampaignKpisMixin:
                     kpi_path=None,
                     exit_code=int(state.get("extract_exit_code", 1) or 1),
                     status="failed",
-                )
-                self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
-                # Send sample failure alert (issue #1180).
-                self._maybe_alert(
-                    "sample.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "sample_id": _sid,
-                        "step": "EXTRACT_KPIS",
-                        "status": "failed",
-                        "error": "extract exited with non-zero code",
-                    },
                 )
 
         self.trace.step_finished(
