@@ -240,8 +240,9 @@ name in this section.
   `BENIGN_ERROR_PATTERN`, `MEASURE_RESULTS_TOKEN` (`--kpis`
   opt-in token), `SIMULATION_FAILED_KEY`, `OUT_OSW_NAME`,
   `RUN_LOG_NAME`. `work._publish_run_artifacts` copies both files into
-  the per-sample sim dir (success or failure); `extract_kpis` adds the
-  `<measure_dir_name>.<attribute>` KPIs only when `--kpis` names them;
+  the per-sample sim dir (success or failure); `extract_kpis` includes the
+  `<measure_dir_name>.<attribute>` KPIs by default for built-in extraction
+  (`kpis=None`) and filters them when `--kpis` is set (issue #2028);
   `aggregate_results.extract_failure` uses the message when
   `eplusout.sql` is missing.
 - `osimflow/_work_retry.py`, `osimflow/_work_env.py`,
