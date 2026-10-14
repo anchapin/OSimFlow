@@ -413,8 +413,12 @@ class CampaignStepsMixin:
         if not registry._measures:
             return
 
+        has_osm = (self.cfg.template_sim_package / "model.osm").is_file() or any(
+            self.cfg.template_sim_package.glob("*.osm")
+        )
+
         try:
-            registry.validate_variables_mapping(variables, registry)
+            registry.validate_variables_mapping(variables, registry, has_osm=has_osm)
         except _c.UnmappedVariableError:
             self.trace.step_finished(
                 "VALIDATE_MEASURE_VARIABLES",

@@ -174,6 +174,7 @@ def _transitive_import_closure(package_root: Path) -> frozenset[Path]:
     roots = [
         "osimflow.work",
         "osimflow.apply_params",
+        "osimflow.measures",
         "osimflow.campaign.steps",
         "osimflow.campaign.runner",
     ]
@@ -460,7 +461,8 @@ def compute_code_hashes(
         apply_params_file = Path(inspect.getfile(sys.modules["osimflow"].apply_params))
     except (AttributeError, KeyError):
         apply_params_file = None
-    for f in (work_file, apply_params_file):
+    measures_file = package_root / "measures.py"
+    for f in (work_file, apply_params_file, measures_file):
         if f is not None and f.is_file():
             candidates.append(f)
     # Transitive osimflow-internal import closure of the work layer

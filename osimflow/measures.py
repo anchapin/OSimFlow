@@ -21,6 +21,7 @@ __all__ = [
 ]
 
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ from typing import Any
 
 import requests
 
+from .apply_params import EPW_FILE_KEY, _infer_osm_attribute_mapping
 from .errors import OSimFlowValueError
 
 log = logging.getLogger("osimflow.measures")
@@ -185,6 +187,7 @@ class MeasureRegistry:
 
     def __init__(self) -> None:
         self._measures: dict[str, DiscoveredMeasure] = {}
+        self._indexed_path: Path | None = None
 
     # ------------------------------------------------------------------
     # BCL cache directory (lazily initialized)
@@ -202,13 +205,14 @@ class MeasureRegistry:
     def index_measures(self, path: Path) -> None:
         """Scan ``path/measures/`` and register all discovered measures.
 
-        Recursively searches for ``measure.rb`` and ``measure.py`` files
-        under ``path/measures/``. Each measure directory is registered
-        under its directory name.
+        Recursively searches for ``measure.xml``, ``measure.rb``, and
+        ``measure.py`` files under ``path/measures/``. Each measure
+        directory is registered under its directory name.
 
         Parameters:
             path: the ``template_sim_package`` root directory.
         """
+        self._indexed_path = path
         measures_dir = path / "measures"
         if not measures_dir.is_dir():
             log.info("index_measures: no measures/ directory found in %s", path)
@@ -228,87 +232,204 @@ class MeasureRegistry:
                 )
 
     def read_measure_arguments(self, measure_path: Path) -> list[MeasureArgument]:
-        """Read argument definitions from a measure file.
+        """Read argument definitions from a measure directory.
 
-        Supports both Ruby (``measure.rb``) and Python (``measure.py``)
-        measure entry points. Returns an empty list if the file cannot be
-        parsed or neither entry point exists.
+        Parses ``measure.xml`` first as authoritative metadata (preserving
+        XML document order), then appends any additional arguments
+        discovered from ``measure.rb`` or ``measure.py`` whose ``name`` is
+        not already present (preserving source order). Falls back to
+        source parsing if ``measure.xml`` is absent or malformed.
 
         Parameters:
             measure_path: path to the measure directory containing
-                ``measure.rb`` or ``measure.py``.
+                ``measure.xml``, ``measure.rb``, or ``measure.py``.
         """
+        xml_path = measure_path / "measure.xml"
         rb_path = measure_path / "measure.rb"
         py_path = measure_path / "measure.py"
 
+        xml_args: list[MeasureArgument] = []
+        if xml_path.is_file():
+            xml_args = self._parse_measure_xml(xml_path)
+
+        src_args: list[MeasureArgument] = []
         if rb_path.is_file():
-            return self._parse_ruby_measure(rb_path)
-        if py_path.is_file():
-            return self._parse_python_measure(py_path)
-        return []
+            src_args = self._parse_ruby_measure(rb_path)
+        elif py_path.is_file():
+            src_args = self._parse_python_measure(py_path)
+
+        merged: list[MeasureArgument] = []
+        seen: set[str] = set()
+        for arg in xml_args:
+            if arg.name not in seen:
+                seen.add(arg.name)
+                merged.append(arg)
+        for arg in src_args:
+            if arg.name not in seen:
+                seen.add(arg.name)
+                merged.append(arg)
+        return merged
+
+    @staticmethod
+    def _resolve_effective_has_osm(target: MeasureRegistry, has_osm: bool | None) -> bool:
+        if has_osm is not None:
+            return has_osm
+        if target._indexed_path is not None:
+            return (target._indexed_path / "model.osm").is_file() or any(
+                target._indexed_path.glob("*.osm")
+            )
+        return False
+
+    @staticmethod
+    def _is_valid_skip_ref(ref: str, known_measures: set[str]) -> bool | None:
+        """Return ``True``/``False`` if *ref* is ``<Measure>.__SKIP__``, else ``None``."""
+        if "." not in ref:
+            return None
+        m_prefix, arg_suffix = ref.split(".", 1)
+        if arg_suffix != "__SKIP__":
+            return None
+        return m_prefix in known_measures
+
+    @classmethod
+    def _validate_dotted_measure_argument(
+        cls,
+        name: str,
+        measure_arg: str,
+        *,
+        known_measures: set[str],
+        dotted_to_arg: dict[str, MeasureArgument],
+        effective_has_osm: bool,
+        errors: list[str],
+    ) -> None:
+        skip_ok = cls._is_valid_skip_ref(measure_arg, known_measures)
+        if skip_ok is True or measure_arg in dotted_to_arg:
+            return
+        if (
+            skip_ok is None
+            and effective_has_osm
+            and measure_arg == name
+            and _infer_osm_attribute_mapping(measure_arg) is not None
+        ):
+            return
+        errors.append(
+            f"  Variable {name!r}: measure_argument {measure_arg!r} "
+            f"not found in any discovered measure."
+        )
+
+    @classmethod
+    def _validate_plain_variable_name(
+        cls,
+        name: str,
+        *,
+        known_measures: set[str],
+        dotted_to_arg: dict[str, MeasureArgument],
+        plain_to_measures: dict[str, set[str]],
+        effective_has_osm: bool,
+        errors: list[str],
+        ambiguous: list[str],
+    ) -> None:
+        skip_ok = cls._is_valid_skip_ref(name, known_measures)
+        if skip_ok is not None:
+            if not skip_ok:
+                errors.append(f"  Variable {name!r}: not found in any discovered measure argument.")
+            return
+        if name in dotted_to_arg:
+            return
+        if name in plain_to_measures:
+            if len(plain_to_measures[name]) > 1:
+                ambiguous.append(
+                    f"  Variable {name!r}: appears in multiple measures "
+                    f"({', '.join(sorted(plain_to_measures[name]))}). "
+                    f"Use the dotted form 'MeasureName.argument_name' in variables.yml."
+                )
+            return
+        if effective_has_osm and _infer_osm_attribute_mapping(name) is not None:
+            return
+        errors.append(f"  Variable {name!r}: not found in any discovered measure argument.")
+
+    @classmethod
+    def _validate_single_variable(
+        cls,
+        var: dict[str, Any],
+        *,
+        known_measures: set[str],
+        dotted_to_arg: dict[str, MeasureArgument],
+        plain_to_measures: dict[str, set[str]],
+        effective_has_osm: bool,
+        errors: list[str],
+        ambiguous: list[str],
+    ) -> None:
+        name = var.get("name", "")
+        measure_arg = var.get("measure_argument")
+        if (not name and not measure_arg) or EPW_FILE_KEY in (name, measure_arg):
+            return
+        if measure_arg and isinstance(measure_arg, str) and "." in measure_arg:
+            cls._validate_dotted_measure_argument(
+                name,
+                measure_arg,
+                known_measures=known_measures,
+                dotted_to_arg=dotted_to_arg,
+                effective_has_osm=effective_has_osm,
+                errors=errors,
+            )
+            return
+        if name:
+            cls._validate_plain_variable_name(
+                name,
+                known_measures=known_measures,
+                dotted_to_arg=dotted_to_arg,
+                plain_to_measures=plain_to_measures,
+                effective_has_osm=effective_has_osm,
+                errors=errors,
+                ambiguous=ambiguous,
+            )
 
     def validate_variables_mapping(
         self,
         variables: list[dict[str, Any]],
-        registry: MeasureRegistry,
+        registry: MeasureRegistry | None = None,
+        *,
+        has_osm: bool | None = None,
     ) -> None:
         """Validate that every variable maps to a discovered measure argument.
 
         Runs before ``RUN_OPENSTUDIO_SIM`` as a pre-flight check (GAP-003).
         For each variable in ``variables``, verifies that its name (or its
         ``measure_argument`` dotted name) corresponds to a real argument
-        in a discovered measure.
+        in a discovered measure, the special ``__epw_file__`` key, a
+        ``<KnownMeasure>.__SKIP__`` toggle, or (when a ``.osm`` model is
+        present in the template package) a valid ``.osm`` attribute.
 
         Raises:
             UnmappedVariableError: a variable name does not correspond to
-                any discovered measure argument.
-            AmbiguousVariableError: a plain variable name appears in
-                multiple measures and must be disambiguated.
+                any discovered measure argument (or valid ``.osm`` attribute).
         """
+        target = registry if registry is not None else self
+
         # Build the registry of known argument names.
         plain_to_measures: dict[str, set[str]] = {}
         dotted_to_arg: dict[str, MeasureArgument] = {}
+        known_measures: set[str] = set(target._measures.keys())
 
-        for measure in self._measures.values():
+        for measure in target._measures.values():
             for arg in measure.arguments:
-                # Dotted key: always registered.
-                dotted_key = f"{measure.name}.{arg.name}"
-                dotted_to_arg[dotted_key] = arg
-                # Plain key: collect which measures expose it.
+                dotted_to_arg[f"{measure.name}.{arg.name}"] = arg
                 plain_to_measures.setdefault(arg.name, set()).add(measure.name)
 
+        effective_has_osm = self._resolve_effective_has_osm(target, has_osm)
         errors: list[str] = []
         ambiguous: list[str] = []
 
         for var in variables:
-            name = var.get("name", "")
-            if not name:
-                continue
-
-            # Check for explicit measure_argument dotted reference.
-            measure_arg = var.get("measure_argument")
-            if measure_arg and isinstance(measure_arg, str) and "." in measure_arg:
-                # Validate the dotted reference directly.
-                if measure_arg not in dotted_to_arg:
-                    errors.append(
-                        f"  Variable {name!r}: measure_argument {measure_arg!r} "
-                        f"not found in any discovered measure."
-                    )
-                continue
-
-            # Otherwise, check the plain name.
-            if name in dotted_to_arg:
-                # Plain name that happens to match a dotted key — okay.
-                continue
-
-            if name not in plain_to_measures:
-                errors.append(f"  Variable {name!r}: not found in any discovered measure argument.")
-            elif len(plain_to_measures.get(name, set())) > 1:
-                ambiguous.append(
-                    f"  Variable {name!r}: appears in multiple measures "
-                    f"({', '.join(sorted(plain_to_measures[name]))}). "
-                    f"Use the dotted form 'MeasureName.argument_name' in variables.yml."
-                )
+            self._validate_single_variable(
+                var,
+                known_measures=known_measures,
+                dotted_to_arg=dotted_to_arg,
+                plain_to_measures=plain_to_measures,
+                effective_has_osm=effective_has_osm,
+                errors=errors,
+                ambiguous=ambiguous,
+            )
 
         if errors or ambiguous:
             lines: list[str] = ["Measure validation FAILED:", ""]
@@ -573,16 +694,21 @@ class MeasureRegistry:
     def _discover_measure(self, measure_dir: Path) -> DiscoveredMeasure | None:
         """Discover a single measure directory.
 
-        Returns ``None`` if neither ``measure.rb`` nor ``measure.py`` exists.
+        Returns ``None`` if none of ``measure.rb``, ``measure.py``, or
+        ``measure.xml`` exists. Always keys the measure by
+        ``measure_dir.name`` to match ``measure_dir_name`` in ``workflow.osw``.
         """
         rb_path = measure_dir / "measure.rb"
         py_path = measure_dir / "measure.py"
+        xml_path = measure_dir / "measure.xml"
 
         language: str
         if rb_path.is_file():
             language = "ruby"
         elif py_path.is_file():
             language = "python"
+        elif xml_path.is_file():
+            language = self._detect_xml_measure_language(xml_path)
         else:
             return None
 
@@ -595,127 +721,263 @@ class MeasureRegistry:
         )
 
     # ------------------------------------------------------------------
-    # Internal: Ruby parsing
+    # Internal: measure.xml parsing
     # ------------------------------------------------------------------
-    _RUBY_ARGUMENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-        (
-            "Double",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeDoubleArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "String",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeStringArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Integer",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeIntegerArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Boolean",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeBool(?:ean)?Argument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Choice",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*[^,]+\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Path",
-            re.compile(
-                r'OpenStudio::Measure::OSArgument\.makePathArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-    ]
+    _XML_ARGUMENT_TYPE_MAP: dict[str, str] = {
+        "double": "Double",
+        "integer": "Integer",
+        "int": "Integer",
+        "boolean": "Boolean",
+        "bool": "Boolean",
+        "string": "String",
+        "str": "String",
+        "choice": "Choice",
+        "path": "Path",
+    }
+
+    @staticmethod
+    def _parse_xml_root(xml_text: str) -> ET.Element:
+        """Parse XML text using ``defusedxml.ElementTree`` when installed."""
+        try:
+            defused_et = importlib.import_module("defusedxml.ElementTree")
+            root: ET.Element = defused_et.fromstring(xml_text)
+            return root
+        except ModuleNotFoundError:
+            return ET.fromstring(xml_text)
+
+    @classmethod
+    def _detect_xml_measure_language(cls, xml_path: Path) -> str:
+        """Infer ``"python"`` or ``"ruby"`` from ``measure.xml`` script entries."""
+        try:
+            root = cls._parse_xml_root(xml_path.read_text(encoding="utf-8"))
+        except (OSError, ET.ParseError, ValueError):
+            return "ruby"
+        for file_elem in root.findall("./files/file"):
+            usage = (file_elem.findtext("usage_type") or "").strip().lower()
+            ftype = (file_elem.findtext("filetype") or "").strip().lower()
+            if usage == "script" and ftype in ("py", "python"):
+                return "python"
+        return "ruby"
+
+    def _parse_measure_xml(self, xml_path: Path) -> list[MeasureArgument]:
+        """Parse ``<measure><arguments><argument>`` entries from ``measure.xml``."""
+        try:
+            xml_text = xml_path.read_text(encoding="utf-8")
+            root = self._parse_xml_root(xml_text)
+        except (OSError, ET.ParseError, ValueError):
+            log.warning(
+                "Failed to parse measure.xml at %s; falling back to source parsing",
+                xml_path,
+                exc_info=True,
+            )
+            return []
+
+        arguments: list[MeasureArgument] = []
+        seen: set[str] = set()
+        for arg_elem in root.findall("./arguments/argument"):
+            raw_name = arg_elem.findtext("name")
+            if raw_name is None or not raw_name.strip():
+                continue
+            name = raw_name.strip()
+            if name in seen:
+                continue
+            seen.add(name)
+
+            raw_type = (arg_elem.findtext("type") or "").strip().lower()
+            arg_type = self._XML_ARGUMENT_TYPE_MAP.get(raw_type, "String")
+
+            raw_required = (arg_elem.findtext("required") or "").strip().lower()
+            required = raw_required in ("true", "yes", "1")
+
+            default_elem = arg_elem.find("default_value")
+            default = default_elem.text if default_elem is not None else None
+
+            arguments.append(
+                MeasureArgument(
+                    name=name,
+                    type=arg_type,
+                    required=required,
+                    default=default,
+                )
+            )
+        return arguments
+
+    # ------------------------------------------------------------------
+    # Internal: Delimiter-aware Ruby & Python OSArgument call scanner
+    # ------------------------------------------------------------------
+    _RUBY_OSARGUMENT_CALL_RE: re.Pattern[str] = re.compile(
+        r"OpenStudio::(?:Measure|Ruleset)::OSArgument(?:\.|::)make"
+        r"(Double|String|Integer|Bool(?:ean)?|Choice|Path)Argument\s*\("
+    )
+
+    _PYTHON_OSARGUMENT_CALL_RE: re.Pattern[str] = re.compile(
+        r"openstudio\.(?:measure|ruleset)\.OSArgument\.make"
+        r"(Double|String|Integer|Bool(?:ean)?|Choice|Path)Argument\s*\("
+    )
+
+    @staticmethod
+    def _strip_hash_comments(text: str) -> str:
+        """Strip ``#`` line comments outside single/double-quoted string literals."""
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        in_quote: str | None = None
+        escape = False
+        while i < n:
+            ch = text[i]
+            if in_quote is not None:
+                out.append(ch)
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == in_quote:
+                    in_quote = None
+                i += 1
+            elif ch in ("'", '"'):
+                in_quote = ch
+                out.append(ch)
+                i += 1
+            elif ch == "#":
+                while i < n and text[i] != "\n":
+                    i += 1
+            else:
+                out.append(ch)
+                i += 1
+        return "".join(out)
+
+    @staticmethod
+    def _advance_quote_state(
+        ch: str,
+        in_quote: str | None,
+        escape: bool,
+    ) -> tuple[str | None, bool]:
+        """Advance string-literal state for character *ch* inside quotes."""
+        if escape:
+            return in_quote, False
+        if ch == "\\":
+            return in_quote, True
+        if ch == in_quote:
+            return None, False
+        return in_quote, False
+
+    @classmethod
+    def _extract_balanced_call_args(cls, text: str, open_paren_pos: int) -> tuple[str, int] | None:
+        """Return ``(inner_args_text, close_pos)`` for ``(`` at *open_paren_pos*."""
+        depth_paren = 1
+        in_quote: str | None = None
+        escape = False
+        for i in range(open_paren_pos + 1, len(text)):
+            ch = text[i]
+            if in_quote is not None:
+                in_quote, escape = cls._advance_quote_state(ch, in_quote, escape)
+            elif ch in ("'", '"'):
+                in_quote = ch
+            elif ch == "(":
+                depth_paren += 1
+            elif ch == ")":
+                depth_paren -= 1
+                if depth_paren == 0:
+                    return text[open_paren_pos + 1 : i], i + 1
+        return None
+
+    @classmethod
+    def _split_top_level_args(cls, inner: str) -> list[str]:
+        """Split comma-separated call arguments at top-level nesting depth."""
+        parts: list[str] = []
+        cur: list[str] = []
+        depth = 0
+        in_quote: str | None = None
+        escape = False
+        for ch in inner:
+            if in_quote is not None:
+                cur.append(ch)
+                in_quote, escape = cls._advance_quote_state(ch, in_quote, escape)
+            elif ch in ("'", '"'):
+                in_quote = ch
+                cur.append(ch)
+            elif ch in "([{":
+                depth += 1
+                cur.append(ch)
+            elif ch in ")]}":
+                depth = max(0, depth - 1)
+                cur.append(ch)
+            elif ch == "," and depth == 0:
+                parts.append("".join(cur).strip())
+                cur = []
+            else:
+                cur.append(ch)
+        tail = "".join(cur).strip()
+        if tail:
+            parts.append(tail)
+        return parts
+
+    @staticmethod
+    def _unquote_string_literal(expr: str) -> str | None:
+        """Extract string contents if *expr* is a single- or double-quoted literal."""
+        token = expr.strip()
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+            return token[1:-1]
+        return None
+
+    @classmethod
+    def _scan_osargument_calls(
+        cls,
+        text: str,
+        call_re: re.Pattern[str],
+    ) -> list[MeasureArgument]:
+        """Extract ``MeasureArgument`` entries from Ruby or Python source text."""
+        cleaned = cls._strip_hash_comments(text)
+        arguments: list[MeasureArgument] = []
+        seen: set[str] = set()
+
+        for match in call_re.finditer(cleaned):
+            raw_kind = match.group(1)
+            arg_type = "Boolean" if raw_kind in ("Bool", "Boolean") else raw_kind
+            open_paren_pos = match.end() - 1
+            extracted = cls._extract_balanced_call_args(cleaned, open_paren_pos)
+            if extracted is None:
+                continue
+            inner, _ = extracted
+            call_args = cls._split_top_level_args(inner)
+            if len(call_args) < 2:
+                continue
+
+            name = cls._unquote_string_literal(call_args[0])
+            if not name or name in seen:
+                continue
+
+            if arg_type == "Choice":
+                req_expr = call_args[1] if len(call_args) == 2 else call_args[2]
+            elif arg_type == "Path" and len(call_args) >= 4:
+                req_expr = call_args[3]
+            else:
+                req_expr = call_args[1]
+
+            req_clean = req_expr.strip()
+            if req_clean.lower().startswith("required"):
+                _, _, rhs = req_clean.partition("=")
+                if rhs:
+                    req_clean = rhs.strip()
+            required = req_clean.lower() in ("true", "yes", "1")
+
+            seen.add(name)
+            arguments.append(MeasureArgument(name=name, type=arg_type, required=required))
+
+        return arguments
 
     def _parse_ruby_measure(self, rb_path: Path) -> list[MeasureArgument]:
-        """Parse a Ruby measure file for argument definitions.
-
-        Uses regex patterns to find ``make<Type>Argument`` calls and
-        extract the argument name and required flag.
-        """
+        """Parse a Ruby measure file for argument definitions."""
         try:
             text = rb_path.read_text(encoding="utf-8")
         except OSError:
             return []
-
-        arguments: list[MeasureArgument] = []
-        for arg_type, pattern in self._RUBY_ARGUMENT_PATTERNS:
-            for match in pattern.finditer(text):
-                name = match.group(1)
-                required_str = match.group(2)
-                required = required_str.lower() in ("true", "yes")
-                arguments.append(MeasureArgument(name=name, type=arg_type, required=required))
-
-        return arguments
-
-    # ------------------------------------------------------------------
-    # Internal: Python parsing
-    # ------------------------------------------------------------------
-    _PYTHON_ARGUMENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-        (
-            "Double",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makeDoubleArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "String",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makeStringArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Integer",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makeIntegerArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Boolean",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makeBool(?:ean)?Argument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Choice",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-        (
-            "Path",
-            re.compile(
-                r'openstudio\.measure\.OSArgument\.makePathArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
-            ),
-        ),
-    ]
+        return self._scan_osargument_calls(text, self._RUBY_OSARGUMENT_CALL_RE)
 
     def _parse_python_measure(self, py_path: Path) -> list[MeasureArgument]:
-        """Parse a Python measure file for argument definitions.
-
-        Uses regex patterns to find ``OSArgument.make<Type>Argument`` calls
-        and extract the argument name and required flag.
-        """
+        """Parse a Python measure file for argument definitions."""
         try:
             text = py_path.read_text(encoding="utf-8")
         except OSError:
             return []
-
-        arguments: list[MeasureArgument] = []
-        for arg_type, pattern in self._PYTHON_ARGUMENT_PATTERNS:
-            for match in pattern.finditer(text):
-                name = match.group(1)
-                required_str = match.group(2)
-                required = required_str.lower() in ("true", "yes")
-                arguments.append(MeasureArgument(name=name, type=arg_type, required=required))
-
-        return arguments
+        return self._scan_osargument_calls(text, self._PYTHON_OSARGUMENT_CALL_RE)
