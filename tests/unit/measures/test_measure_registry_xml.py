@@ -1,5 +1,5 @@
 """Unit tests for MeasureRegistry XML parsing, delimiter-aware Ruby/Python
-OSArgument scanning, and Gem-on-Batch variable validation (issue #2052).
+OSArgument scanning, and OSW package variable validation (issue #2052).
 """
 
 from pathlib import Path
@@ -111,7 +111,7 @@ def test_read_measure_arguments_parses_measure_xml(tmp_path: Path) -> None:
 def test_discover_measure_xml_only_uses_directory_name(tmp_path: Path) -> None:
     """_discover_measure accepts measure.xml-only dirs and keys by directory name."""
     pkg = tmp_path / "pkg"
-    rb_dir = pkg / "measures" / "ChangeBuildingLocation_179d_gem"
+    rb_dir = pkg / "measures" / "ChangeBuildingLocation"
     rb_dir.mkdir(parents=True)
     (rb_dir / "measure.xml").write_text(
         """<?xml version="1.0"?>
@@ -158,10 +158,9 @@ def test_discover_measure_xml_only_uses_directory_name(tmp_path: Path) -> None:
     registry = MeasureRegistry()
     registry.index_measures(pkg)
 
-    assert "ChangeBuildingLocation_179d_gem" in registry._measures
+    assert "ChangeBuildingLocation" in registry._measures
     assert "change_building_location" not in registry._measures
-    assert "ChangeBuildingLocation" not in registry._measures
-    assert registry._measures["ChangeBuildingLocation_179d_gem"].language == "ruby"
+    assert registry._measures["ChangeBuildingLocation"].language == "ruby"
     assert registry._measures["PythonXmlOnlyMeasure"].language == "python"
 
 
@@ -481,11 +480,11 @@ class PyAdvancedMeasure(openstudio.measure.ModelMeasure):
 
 
 # ---------------------------------------------------------------------------
-# 3. All 23 gem measures discovery + validation (__epw_file__, __SKIP__, .osm)
+# 3. All 23 commercial-building measures discovery + validation (__epw_file__, __SKIP__, .osm)
 # ---------------------------------------------------------------------------
 
-_GEM_23_MEASURES: dict[str, list[tuple[str, str]]] = {
-    "179d_gem_baseline_hvac_control": [
+_COMMERCIAL_23_MEASURES: dict[str, list[tuple[str, str]]] = {
+    "baseline_hvac_control": [
         ("standard", "Choice"),
         ("building_type", "Choice"),
         ("climate_zone", "Choice"),
@@ -493,7 +492,7 @@ _GEM_23_MEASURES: dict[str, list[tuple[str, str]]] = {
         ("debug", "Boolean"),
         ("use_upstream_args", "Boolean"),
     ],
-    "ChangeBuildingLocation_179d_gem": [
+    "ChangeBuildingLocation": [
         ("weather_file_name", "String"),
         ("set_year", "Integer"),
         ("use_upstream_args", "Boolean"),
@@ -528,7 +527,7 @@ _GEM_23_MEASURES: dict[str, list[tuple[str, str]]] = {
         ("Sizing Run Directories", "Boolean"),
     ],
     "SetLightingLoadsByLPD": [("lpd", "Double")],
-    "create_179d_gem_baseline_building": [
+    "create_baseline_building": [
         ("standard", "Choice"),
         ("building_type", "Choice"),
         ("climate_zone", "Choice"),
@@ -645,11 +644,11 @@ _GEM_23_MEASURES: dict[str, list[tuple[str, str]]] = {
 }
 
 
-def test_all_23_gem_measures_indexed_and_validated(tmp_path: Path) -> None:
-    """All 23 gem measures are indexed and validate including __SKIP__ and __epw_file__."""
-    pkg = tmp_path / "gem_package"
+def test_all_23_commercial_measures_indexed_and_validated(tmp_path: Path) -> None:
+    """All 23 commercial measures are indexed and validate including __SKIP__ and __epw_file__."""
+    pkg = tmp_path / "commercial_package"
     measures_root = pkg / "measures"
-    for measure_name, arg_specs in _GEM_23_MEASURES.items():
+    for measure_name, arg_specs in _COMMERCIAL_23_MEASURES.items():
         mdir = measures_root / measure_name
         mdir.mkdir(parents=True)
         xml_args = "\n".join(
@@ -665,7 +664,7 @@ def test_all_23_gem_measures_indexed_and_validated(tmp_path: Path) -> None:
     registry.index_measures(pkg)
 
     assert len(registry._measures) == 23
-    assert set(registry._measures.keys()) == set(_GEM_23_MEASURES.keys())
+    assert set(registry._measures.keys()) == set(_COMMERCIAL_23_MEASURES.keys())
 
     variables: list[dict[str, Any]] = [
         {"name": "__epw_file__"},

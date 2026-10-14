@@ -883,7 +883,7 @@ static entries that don't need sampling to keep the campaign focused.
 
 `osimflow export-results --outdirs <campaign_dir> --format openstudio-server-csv --output download_data.csv`
 writes the same layout as `download_data.csv?export=true` on the server
-(issue #1872), so gem tooling that reads `rake download_results` output works
+(issue #1872), so downstream tooling that reads `rake download_results` output works
 unchanged:
 
 | Order | Columns | Notes |

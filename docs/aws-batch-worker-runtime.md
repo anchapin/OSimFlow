@@ -63,14 +63,14 @@ register another job definition and pass it with `--aws-batch-job-definition`.
 Not run in CI by default: ECR publishing and live AWS Batch execution (need AWS
 credentials).
 
-## Parametric sweeps of gem-style OSW packages (issue #1869)
+## Parametric sweeps of measure-only OSW packages (issue #1869)
 
 `APPLY_PARAMETERS` is valid on `aws_batch` with the built-in apply function
 (custom `--custom_apply_script` hooks stay rejected). Measure arguments that
 map to a `workflow.osw` step (`Measure.argument` or an unambiguous plain
 name) and the `epw_file` weather target are written directly into the
 per-sample OSW JSON, so **no OpenStudio Python bindings and no `model.osm`**
-are needed (a gem-style package whose `seed_file` lives under `files/` works).
+are needed (a measure-only package whose `seed_file` lives under `files/` works).
 Variables that map to `.osm` attributes still require `model.osm` + bindings.
 
 - Discrete / categorical string variables (window type, EPW choice) are
