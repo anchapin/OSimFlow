@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+from osimflow.apply_params import resolve_seed_osm
 from osimflow.campaign.types import SampleSpec, VariableSpec
 from osimflow.config import CampaignConfig
 
@@ -64,10 +65,14 @@ def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNa
 def _package_content_digest(pkg: Path) -> str:
     """SHA-256 over the parameterized ``workflow.osw`` / ``model.osm`` bytes."""
     h = hashlib.sha256()
-    for name in ("workflow.osw", "model.osm"):
-        f = pkg / name
+    root = pkg.resolve()
+    files = [root / "workflow.osw", root / "model.osm"]
+    seed = resolve_seed_osm(pkg)
+    if seed is not None and seed.resolve() not in files:
+        files.append(seed.resolve())
+    for f in files:
         if f.is_file():
-            h.update(name.encode())
+            h.update(f.relative_to(root).as_posix().encode())
             h.update(f.read_bytes())
     return h.hexdigest()
 

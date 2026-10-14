@@ -79,7 +79,7 @@ from osimflow._work_stub import (  # noqa: F401
     _stub_eui_for_sample,
     _write_stub_eplusout_sql,
 )
-from osimflow.apply_params import OSMAttributeError  # noqa: F401
+from osimflow.apply_params import OSMAttributeError, resolve_seed_osm  # noqa: F401
 from osimflow.errors import OSimFlowRuntimeError  # noqa: F401
 from osimflow.json_utils import safe_json_dumps
 from osimflow.osw_results import OUT_OSW_NAME, RUN_LOG_NAME, has_valid_osw_completion  # noqa: F401
@@ -214,7 +214,7 @@ def default_apply_parameters(
         OSMAttributeError: a dotted variable name references an object
             type or instance name that does not exist in the model.
     """
-    osm_path = out / "model.osm"
+    osm_path = resolve_seed_osm(out) or out / "model.osm"
     # Issue #1869: measure arguments and the weather file live in the OSW
     # (plain JSON), so they are applied without the OpenStudio bindings.
     parameters = _apply_osw_parameters(out / "workflow.osw", parameters)
@@ -321,7 +321,7 @@ def _apply_parameters_with_osm_deferral(
          :func:`run_openstudio_sim` applies them inside the
          ``nrel/openstudio`` worker container before ``openstudio.cli run``.
     """
-    osm_path = out / "model.osm"
+    osm_path = resolve_seed_osm(out) or out / "model.osm"
     pending_file = out / _PENDING_OSM_PARAMS_FILE
     pending_file.unlink(missing_ok=True)
 
@@ -373,7 +373,7 @@ def _apply_pending_osm_parameters(
         return
     raw = json.loads(pending_file.read_text())
     if isinstance(raw, dict) and raw:
-        osm_path = modified_sim_package / "model.osm"
+        osm_path = resolve_seed_osm(modified_sim_package) or modified_sim_package / "model.osm"
         if not (osm_path.is_file() and _apply_json_stub_osm_attributes(osm_path, raw)):
             default_apply_parameters(
                 modified_sim_package,

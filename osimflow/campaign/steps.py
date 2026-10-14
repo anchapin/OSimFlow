@@ -415,8 +415,10 @@ class CampaignStepsMixin:
         if not registry._measures:
             return
 
-        has_osm = (self.cfg.template_sim_package / "model.osm").is_file() or any(
-            self.cfg.template_sim_package.glob("*.osm")
+        has_osm = (
+            (self.cfg.template_sim_package / "model.osm").is_file()
+            or any(self.cfg.template_sim_package.glob("*.osm"))
+            or _c.resolve_seed_osm(self.cfg.template_sim_package) is not None
         )
 
         try:

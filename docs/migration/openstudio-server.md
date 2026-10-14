@@ -132,6 +132,12 @@ osimflow import-osa analysis.json --output variables.yml \
   --template-package ./seed_package --package-output ./template_sim_package
 ```
 
+The staged package always contains a canonical `workflow.osw` (a single
+alternate `*.osw` from the archive is overlaid and written to that name).
+At run time the seed `.osm` is taken from `workflow.osw`'s `seed_file`
+(falling back to `model.osm`, then a single top-level `*.osm`) rather than
+a hardcoded `model.osm`.
+
 Staging does not rewrite any measure-specific arguments (for example a
 cleanup measure's `sql` flag). Results are read from `out.osw`, so
 `RUN_OPENSTUDIO_SIM` / `EXTRACT_KPIS` still work if a measure deletes
