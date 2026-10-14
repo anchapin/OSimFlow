@@ -1,0 +1,51 @@
+# =============================================================================
+# .github/workflows/windows-subprocess.yml — Windows subprocess-kill fallback
+# =============================================================================
+# Issue #2010: the non-POSIX fallback in osimflow/_subprocess_utils.py
+# (Popen.terminate()/kill() on the direct child) is exercised for real on
+# windows-latest. Separate from ci.yml so path filters stay out of ci.yml.
+# =============================================================================
+name: windows-subprocess
+
+on:
+  pull_request:
+    paths:
+      - "osimflow/_subprocess_utils.py"
+      - "tests/windows/test_subprocess_fallback_real.py"
+      - ".github/workflows/windows-subprocess.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-subprocess-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-subprocess:
+    name: windows subprocess fallback
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.x"
+
+      - name: Install
+        shell: bash
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/Scripts/python.exe pytest
+
+      - name: Run fallback tests
+        shell: bash
+        run: |
+          .venv/Scripts/python.exe -m pytest -o addopts="" -p no:cacheprovider \
+            tests/windows/test_subprocess_fallback_real.py -v
