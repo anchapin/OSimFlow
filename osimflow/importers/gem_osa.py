@@ -492,6 +492,24 @@ def _load_configs(project_dir: Path, configs: Path | None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _preserve_cleanup_sql(osw_path: Path, varied: set[str]) -> None:
+    """Force ``ServerDirectoryCleanup.sql`` to ``False``/``"false"`` unless varied in *varied*."""
+    if not osw_path.is_file() or "ServerDirectoryCleanup.sql" in varied:
+        return
+    osw = _load_json(osw_path)
+    updated = False
+    for step in osw.get("steps") or []:
+        if isinstance(step, dict) and step.get("measure_dir_name") == "ServerDirectoryCleanup":
+            step_args = step.setdefault("arguments", {})
+            if isinstance(step_args, dict):
+                step_args["sql"] = (
+                    _coerce_like(step_args["sql"], "false") if "sql" in step_args else False
+                )
+                updated = True
+    if updated:
+        osw_path.write_text(json.dumps(osw, indent=2), encoding="utf-8")
+
+
 def _import_batch(
     batch: GemBatch,
     output_dir: Path,
@@ -522,6 +540,7 @@ def _import_batch(
 
     unmatched: list[str] = []
     package_path: Path | None = None
+    varied = {str(v["name"]) for v in variables}
     if template_package is not None:
         package_path = batch_dir / "template"
         if package_path.exists():
@@ -537,10 +556,10 @@ def _import_batch(
             if isinstance(reporting, dict):
                 for measure, arguments in reporting.items():
                     static.setdefault(measure, arguments)
-            varied = {str(v["name"]) for v in variables}
             unmatched = _overlay_measure_space(osw_path, static, varied)
             for measure in unmatched:
                 log.warning("%s: measure %r has no step in %s", batch.batch_id, measure, osw_path)
+        _preserve_cleanup_sql(osw_path, varied)
 
     n_samples = _as_int(settings.get("number_of_samples"))
     outdir = batch_dir / "results"

@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from osimflow.osw_results import failure_message
+from osimflow.osw_results import OUT_OSW_NAME, failure_message, has_valid_osw_completion
 
 # pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
 try:
@@ -517,6 +517,12 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
     if not err_summary and not sql_path.exists():
         # Issue #1871: surface the failed measure + first error (out.osw / run.log).
         err_summary = failure_message(sim_dir)
+    if (
+        not err_summary
+        and not sql_path.exists()
+        and has_valid_osw_completion(sim_dir / OUT_OSW_NAME)
+    ):
+        return None
     if err_summary or not sql_path.exists():
         diagnosis: dict[str, Any] | None = None
         if severe_summary and err_path.exists():
