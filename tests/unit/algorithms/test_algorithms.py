@@ -413,6 +413,73 @@ class TestSampleIndependent:
         result = _sample_independent(var_list, n_samples=3, seed=42)
         assert len(result) == 3
 
+    def test_discrete_vars_equal_cardinality_not_collinear_with_seed(self) -> None:
+        """Issue #2055: equal-cardinality discrete/categorical variables under a fixed seed
+        must draw from independent streams rather than producing 100% collinear sequences."""
+        var_list: list[dict[str, Any]] = [
+            {"name": "disc_a", "distribution": "discrete", "values": [10, 20, 30]},
+            {"name": "disc_b", "distribution": "discrete", "values": [100, 200, 300]},
+            {"name": "cat_c", "distribution": "categorical", "values": ["low", "mid", "high"]},
+        ]
+        samples = _sample_independent(var_list, n_samples=20, seed=179)
+        idx_a = [[10, 20, 30].index(s["values"]["disc_a"]) for s in samples]
+        idx_b = [[100, 200, 300].index(s["values"]["disc_b"]) for s in samples]
+        idx_c = [["low", "mid", "high"].index(s["values"]["cat_c"]) for s in samples]
+        assert idx_a != idx_b
+        assert idx_a != idx_c
+        assert idx_b != idx_c
+
+    def test_discrete_vars_identical_pmf_not_collinear_with_seed(self) -> None:
+        """Issue #2055: PMF-weighted discrete variables with identical weights under a fixed
+        seed must draw from independent streams."""
+        var_list: list[dict[str, Any]] = [
+            {
+                "name": "pmf_a",
+                "distribution": "discrete",
+                "pmf": {"x0": 0.2, "x1": 0.5, "x2": 0.3},
+            },
+            {
+                "name": "pmf_b",
+                "distribution": "discrete",
+                "pmf": {"y0": 0.2, "y1": 0.5, "y2": 0.3},
+            },
+        ]
+        samples = _sample_independent(var_list, n_samples=20, seed=179)
+        idx_a = [["x0", "x1", "x2"].index(s["values"]["pmf_a"]) for s in samples]
+        idx_b = [["y0", "y1", "y2"].index(s["values"]["pmf_b"]) for s in samples]
+        assert idx_a != idx_b
+
+    def test_discrete_vars_seed_reproducibility_and_divergence(self, tmp_path: Path) -> None:
+        """Issue #2055: LHSAlgorithm with discrete/categorical variables is 100% deterministic
+        for a given seed and diverges across different seeds."""
+        algo = LHSAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "d1", "distribution": "discrete", "values": [1, 2, 3]},
+                {"name": "d2", "distribution": "categorical", "values": ["a", "b", "c"]},
+            ]
+        }
+        p1 = algo.generate_samples(variables, n_samples=20, seed=179, outdir=tmp_path / "r1")
+        p2 = algo.generate_samples(variables, n_samples=20, seed=179, outdir=tmp_path / "r2")
+        p3 = algo.generate_samples(variables, n_samples=20, seed=180, outdir=tmp_path / "r3")
+        s1 = json.loads(p1.read_text())["samples"]
+        s2 = json.loads(p2.read_text())["samples"]
+        s3 = json.loads(p3.read_text())["samples"]
+        assert s1 == s2
+        assert s1 != s3
+
+    def test_unweighted_discrete_bool_int_mix_preserves_types_without_collision(self) -> None:
+        """Issue #2055: unweighted discrete variable with [False, 0, True, 1] indexes
+        positionally without dict-key collision (0 == False, 1 == True) and preserves
+        exact bool vs int element types."""
+        var_list: list[dict[str, Any]] = [
+            {"name": "mixed", "distribution": "discrete", "values": [False, 0, True, 1]},
+        ]
+        samples = _sample_independent(var_list, n_samples=200, seed=42)
+        drawn = [s["values"]["mixed"] for s in samples]
+        seen_type_val = {(type(v), v) for v in drawn}
+        assert seen_type_val == {(bool, False), (int, 0), (bool, True), (int, 1)}
+
 
 class TestResolveConditional:
     """Tests for _resolve_conditional."""
