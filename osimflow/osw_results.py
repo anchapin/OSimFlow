@@ -124,7 +124,7 @@ def has_valid_osw_completion(osw_path: Path) -> bool:
 
 
 def extract_failure_message_from_osw(osw_content: str) -> str | None:
-    """First failed step -> ``"<measure>: <first error line>"`` (gem parity)."""
+    """First failed step -> ``"<measure>: <first error line>"`` from ``out.osw`` ``steps``."""
     try:
         osw = json.loads(osw_content)
     except json.JSONDecodeError:
@@ -146,7 +146,7 @@ def extract_failure_message_from_osw(osw_content: str) -> str | None:
 
 
 def collect_failure_message_from_run_log(content: str) -> str | None:
-    """Most informative failure message from ``run.log`` (gem parity).
+    """Most informative failure message from ``run.log``.
 
     Priority: model "did not finish" error + following ERROR lines, then the
     first OSRunner ERROR + following ERROR lines, then the first FATAL line.

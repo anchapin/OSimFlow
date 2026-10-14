@@ -934,7 +934,7 @@ written the claim becomes `submitted`; later runs are a no-op. Batch `SubmitJob`
 has no client token, hence name lookup plus S3 records. The S3 bucket must
 support conditional writes.
 
-## Sequential batches (`rake execute_sequential` equivalent, issue #1874)
+## Sequential batches (`osimflow run-batches`, issue #1874)
 
 ```yaml
 common: {executor: aws_batch, detach-s3: true, result-storage-backend: s3, result-storage-bucket: my-bucket,

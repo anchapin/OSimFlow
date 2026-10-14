@@ -243,10 +243,6 @@ INDEX_EXEMPT_DOCS: dict[str, str] = {
         "internal gap analysis vs. openstudio-server — multi-agent audit report, "
         "project-internal artefact, not a user-facing runbook"
     ),
-    "archive/trace-openstudio-server-helm-chart-lhs-1000-samples.md": (
-        "internal execution trace of a competitor's helm chart — informational, "
-        "not a user-facing guide"
-    ),
 }
 
 # Matches the subcommand name at the start of an add_parser( chunk.
