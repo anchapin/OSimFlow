@@ -1364,3 +1364,268 @@ class TestIslandModelGAAlgorithmIntegration:
         assert "sequential_search" in available
         algo = AlgorithmRegistry.get("sequential_search")
         assert isinstance(algo, SequentialSearchAlgorithm)
+
+
+# ---------------------------------------------------------------------------
+# Issue #2030: Centralized seed propagation & parameterized algorithm tests
+# ---------------------------------------------------------------------------
+
+_STOCHASTIC_ALGORITHMS: tuple[str, ...] = (
+    "lhs",
+    "sobol",
+    "halton",
+    "morris",
+    "fast99",
+    "random",
+    "diag",
+    "repeat_all",
+    "uq",
+    "qdiscrete",
+    "de",
+    "dual_annealing",
+    "rgenoud",
+    "calibration",
+    "nsga2",
+    "pso",
+    "spea2",
+    "ga",
+    "gaisl",
+    "custom",
+)
+
+_DETERMINISTIC_ALGORITHMS: tuple[str, ...] = (
+    "grid",
+    "full_factorial",
+    "sequential_search",
+)
+
+
+def _seeded_custom_doe(
+    variables: dict[str, Any], n_samples: int, seed: int | None, outdir: Path
+) -> list[dict[str, Any]]:
+    rng = np.random.default_rng(seed if seed is not None else 0)
+    return [
+        {
+            "sample_id": f"{i + 1:04d}",
+            "values": {
+                "x": float(rng.uniform(0.0, 10.0)),
+                "y": float(rng.uniform(-5.0, 5.0)),
+            },
+        }
+        for i in range(n_samples)
+    ]
+
+
+def _variables_for_algorithm(algo_name: str, seed: int | None = None) -> dict[str, Any]:
+    if algo_name == "qdiscrete":
+        doc: dict[str, Any] = {
+            "variables": [
+                {
+                    "name": "x",
+                    "distribution": "discrete",
+                    "values": [1, 2, 3, 4, 5, 6, 7, 8],
+                    "pmf": {i: 0.125 for i in range(1, 9)},
+                },
+                {
+                    "name": "y",
+                    "distribution": "discrete",
+                    "values": [10, 20, 30, 40, 50, 60, 70, 80],
+                    "pmf": {i * 10: 0.125 for i in range(1, 9)},
+                },
+            ]
+        }
+    elif algo_name == "full_factorial":
+        doc = {
+            "variables": [
+                {"name": "x", "distribution": "discrete_factorial", "levels": [1, 2, 3]},
+                {"name": "y", "distribution": "discrete_factorial", "levels": [10, 20]},
+            ]
+        }
+    elif algo_name == "grid":
+        doc = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0, "n_steps": 3},
+                {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0, "n_steps": 3},
+            ]
+        }
+    elif algo_name == "custom":
+        doc = {
+            "algorithm": {
+                "type": "custom",
+                "samples_function": f"{__name__}:_seeded_custom_doe",
+            },
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+                {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+            ],
+        }
+    else:
+        doc = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+                {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+            ]
+        }
+    if seed is not None:
+        doc["seed"] = seed
+    return doc
+
+
+class TestSeedPropagationAcrossAlgorithms:
+    """Issue #2030: parameterized seed propagation and behavior across registered algorithms."""
+
+    def test_all_registered_algorithms_covered(self) -> None:
+        registered = set(AlgorithmRegistry.list_available())
+        covered = set(_STOCHASTIC_ALGORITHMS) | set(_DETERMINISTIC_ALGORITHMS)
+        assert registered == covered
+
+    @pytest.mark.parametrize("algo_name", _STOCHASTIC_ALGORITHMS)
+    def test_stochastic_algorithms_seed_reproducibility_and_variation(
+        self, algo_name: str, tmp_path: Path
+    ) -> None:
+        algo_a = AlgorithmRegistry.get(algo_name)
+        algo_b = AlgorithmRegistry.get(algo_name)
+        algo_c = AlgorithmRegistry.get(algo_name)
+        algo_unseeded = AlgorithmRegistry.get(algo_name)
+
+        vars_doc = _variables_for_algorithm(algo_name)
+        n_samples = 65 if algo_name == "fast99" else 8
+
+        p_a = algo_a.generate_samples(
+            vars_doc, n_samples=n_samples, seed=101, outdir=tmp_path / "a"
+        )
+        p_b = algo_b.generate_samples(
+            vars_doc, n_samples=n_samples, seed=101, outdir=tmp_path / "b"
+        )
+        p_c = algo_c.generate_samples(
+            vars_doc, n_samples=n_samples, seed=202, outdir=tmp_path / "c"
+        )
+        p_u = algo_unseeded.generate_samples(
+            vars_doc, n_samples=n_samples, seed=None, outdir=tmp_path / "u"
+        )
+
+        samples_a = json.loads(p_a.read_text())["samples"]
+        samples_b = json.loads(p_b.read_text())["samples"]
+        samples_c = json.loads(p_c.read_text())["samples"]
+        samples_u = json.loads(p_u.read_text())["samples"]
+
+        assert samples_a == samples_b
+        assert samples_a != samples_c
+        assert len(samples_u) == len(samples_a)
+
+    @pytest.mark.parametrize("algo_name", _DETERMINISTIC_ALGORITHMS)
+    def test_deterministic_algorithms_accept_seed_without_altering_matrix(
+        self, algo_name: str, tmp_path: Path
+    ) -> None:
+        algo_s1 = AlgorithmRegistry.get(algo_name)
+        algo_s2 = AlgorithmRegistry.get(algo_name)
+        algo_none = AlgorithmRegistry.get(algo_name)
+
+        vars_doc = _variables_for_algorithm(algo_name)
+        p_s1 = algo_s1.generate_samples(vars_doc, n_samples=6, seed=11, outdir=tmp_path / "s1")
+        p_s2 = algo_s2.generate_samples(vars_doc, n_samples=6, seed=99, outdir=tmp_path / "s2")
+        p_none = algo_none.generate_samples(
+            vars_doc, n_samples=6, seed=None, outdir=tmp_path / "none"
+        )
+
+        samples_s1 = json.loads(p_s1.read_text())["samples"]
+        samples_s2 = json.loads(p_s2.read_text())["samples"]
+        samples_none = json.loads(p_none.read_text())["samples"]
+
+        assert len(samples_s1) > 0
+        assert samples_s1 == samples_s2 == samples_none
+
+    @pytest.mark.parametrize(
+        "algo_name",
+        ("lhs", "sobol", "halton", "morris", "random", "grid", "full_factorial"),
+    )
+    def test_campaign_step_generate_samples_passes_seed_and_invalidates_cache(
+        self, algo_name: str, tmp_path: Path
+    ) -> None:
+        import yaml
+
+        from osimflow import Campaign, CampaignConfig
+        from osimflow.executors import LocalExecutor
+
+        template_pkg = tmp_path / "template"
+        template_pkg.mkdir()
+        (template_pkg / "workflow.osw").write_text("{}")
+
+        var_path = tmp_path / "variables.yml"
+        var_path.write_text(yaml.safe_dump(_variables_for_algorithm(algo_name, seed=42)))
+
+        outdir = tmp_path / "out"
+        cfg = CampaignConfig(
+            input_variables=var_path,
+            template_sim_package=template_pkg,
+            n_samples=8,
+            outdir=outdir,
+            openstudio_version="3.11.0",
+            algorithm=algo_name,
+        )
+        campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+        algo = AlgorithmRegistry.get(algo_name)
+
+        seen_seeds: list[int | None] = []
+        orig_generate = algo.generate_samples
+
+        def _spy_generate(
+            variables: dict[str, Any],
+            n_samples: int,
+            seed: int | None = None,
+            outdir: Path | None = None,
+        ) -> Path:
+            seen_seeds.append(seed)
+            assert outdir is not None
+            return orig_generate(variables=variables, n_samples=n_samples, seed=seed, outdir=outdir)
+
+        algo.generate_samples = _spy_generate  # type: ignore[method-assign]
+        samples_1 = campaign.step_generate_samples(algo)
+        assert seen_seeds == [42]
+        assert campaign.trace.steps[-1].cache == "MISS"
+
+        # Re-running with identical variables.yml (including seed: 42) is a cache hit.
+        samples_warm = campaign.step_generate_samples(algo)
+        assert campaign.trace.steps[-1].cache == "HIT"
+        assert samples_warm == samples_1
+        assert seen_seeds == [42]
+
+        # Changing only seed in variables.yml causes a GENERATE_<ALGO>_SAMPLES cache miss.
+        var_path.write_text(yaml.safe_dump(_variables_for_algorithm(algo_name, seed=99)))
+        samples_2 = campaign.step_generate_samples(algo)
+        assert campaign.trace.steps[-1].cache == "MISS"
+        assert seen_seeds == [42, 99]
+        if algo_name in _STOCHASTIC_ALGORITHMS:
+            assert samples_2 != samples_1
+        else:
+            assert samples_2 == samples_1
+
+    @pytest.mark.parametrize("bad_seed", [True, False, 1.5, "42", "abc", [1], {"a": 1}])
+    def test_campaign_step_generate_samples_rejects_invalid_seed(
+        self, bad_seed: Any, tmp_path: Path
+    ) -> None:
+        import yaml
+
+        from osimflow import Campaign, CampaignConfig
+        from osimflow.executors import LocalExecutor
+
+        template_pkg = tmp_path / "template"
+        template_pkg.mkdir()
+        (template_pkg / "workflow.osw").write_text("{}")
+
+        var_path = tmp_path / "variables.yml"
+        doc = _variables_for_algorithm("lhs")
+        doc["seed"] = bad_seed
+        var_path.write_text(yaml.safe_dump(doc))
+
+        cfg = CampaignConfig(
+            input_variables=var_path,
+            template_sim_package=template_pkg,
+            n_samples=4,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+        algo = AlgorithmRegistry.get("lhs")
+        with pytest.raises(ValueError, match="seed"):
+            campaign.step_generate_samples(algo)

@@ -79,6 +79,18 @@ class CampaignStepsMixin:
             """Attribute surface provided by ``Campaign`` (typing only)."""
             ...
 
+    @staticmethod
+    def _resolve_sampling_seed(variables: dict[str, Any]) -> int | None:
+        """Resolve and validate top-level ``seed`` from ``variables.yml``."""
+        raw_seed = variables.get("seed")
+        if raw_seed is None:
+            return None
+        if isinstance(raw_seed, bool):
+            raise ValueError(f"variables.yml 'seed' must be an integer, got boolean {raw_seed!r}")
+        if isinstance(raw_seed, int):
+            return int(raw_seed)
+        raise ValueError(f"variables.yml 'seed' must be an integer, got {raw_seed!r}")
+
     def step_generate_samples(
         self,
         algo: BaseAlgorithm,
@@ -114,6 +126,8 @@ class CampaignStepsMixin:
                 raw = _c.yaml.safe_load(fh)
                 if isinstance(raw, dict):
                     variables = raw
+
+        resolved_seed = self._resolve_sampling_seed(variables)
 
         inputs_hash = _c.sha256_of_files([self.cfg.input_variables])
         # Issue #1636: fold the resolved algorithm implementation's own
@@ -176,7 +190,7 @@ class CampaignStepsMixin:
             result_path = algo.generate_samples(
                 variables=variables,
                 n_samples=self.cfg.n_samples,
-                seed=None,
+                seed=resolved_seed,
                 outdir=out_dir,
             )
         try:

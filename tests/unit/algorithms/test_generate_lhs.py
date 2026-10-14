@@ -24,6 +24,7 @@ from generate_lhs import (  # type: ignore[import-untyped]
     SUPPORTED_DISTRIBUTIONS,
     _apply_distribution,
 )
+from osimflow._work_scripts.generate_lhs import _resolve_seed
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -456,3 +457,58 @@ class TestMixedDistributionTypes:
         for sample in data["samples"]:
             assert isinstance(sample["values"]["x"], float)
             assert isinstance(sample["values"]["y"], float)
+
+
+class TestSeedResolutionInGenerateLhs:
+    """Issue #2030: generate_lhs.py honors and validates top-level seed."""
+
+    def test_resolve_seed_defaults_to_zero(self) -> None:
+        assert _resolve_seed(None) == 0
+        assert _resolve_seed({}) == 0
+        assert _resolve_seed({"seed": None}) == 0
+
+    def test_resolve_seed_accepts_int(self) -> None:
+        assert _resolve_seed({"seed": 0}) == 0
+        assert _resolve_seed({"seed": 42}) == 42
+
+    @pytest.mark.parametrize("bad_seed", [True, False, 1.5, 3.0, "42", "abc", [], {}])
+    def test_resolve_seed_rejects_invalid(self, bad_seed: Any) -> None:
+        with pytest.raises(ValueError, match="seed"):
+            _resolve_seed({"seed": bad_seed})
+
+    def test_cli_honors_seed_and_omitted_matches_zero(self, tmp_path: Path) -> None:
+        variables = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0}]
+        script = str(Path(__file__).resolve().parents[3] / "bin" / "generate_lhs.py")
+
+        def _run_with_doc(doc: dict[str, Any], tag: str) -> dict[str, Any]:
+            var_path = tmp_path / f"variables_{tag}.yml"
+            out_path = tmp_path / f"out_{tag}.json"
+            var_path.write_text(yaml.safe_dump(doc))
+            res = subprocess.run(
+                [
+                    sys.executable,
+                    script,
+                    "--variables_yml",
+                    str(var_path),
+                    "--n_samples",
+                    "8",
+                    "--out",
+                    str(out_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert res.returncode == 0
+            return json.loads(out_path.read_text())
+
+        omitted = _run_with_doc({"variables": variables}, "omitted")
+        seed0 = _run_with_doc({"seed": 0, "variables": variables}, "seed0")
+        seed42_a = _run_with_doc({"seed": 42, "variables": variables}, "seed42_a")
+        seed42_b = _run_with_doc({"seed": 42, "variables": variables}, "seed42_b")
+        seed99 = _run_with_doc({"seed": 99, "variables": variables}, "seed99")
+
+        assert omitted["samples"] == seed0["samples"]
+        assert seed42_a["samples"] == seed42_b["samples"]
+        assert seed42_a["samples"] != seed99["samples"]
+        assert seed42_a["samples"] != seed0["samples"]

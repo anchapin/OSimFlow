@@ -85,7 +85,10 @@ def test_import_writes_campaigns_and_manifest(tmp_path: Path) -> None:
     assert args["flag"] is True and args["n"] == 3
     assert args["floor_area"] == 5  # varied argument is left to the sweep
     variables = yaml.safe_load((out / "Batch1_base/variables.yml").read_text())
+    assert variables["seed"] == 7
     assert variables["variables"][0]["name"] == "bar.floor_area"
+    variables_b2 = yaml.safe_load((out / "Batch2_alt/variables.yml").read_text())
+    assert "seed" not in variables_b2
 
 
 def test_batch_filter_and_errors(tmp_path: Path) -> None:
@@ -147,3 +150,74 @@ def test_partial_reimport_preserves_manifest(tmp_path: Path) -> None:
     import_gem_project(proj, tmp_path / "o")
     manifest = import_gem_project(proj, tmp_path / "o", batches=["Batch2_alt"])
     assert set(manifest["batches"]) == {"Batch1_base", "Batch2_alt"}
+
+
+def test_seed_precedence_and_omission(tmp_path: Path) -> None:
+    """Issue #2030: seed precedence configs.yml -> osa_workflow -> parametric_space."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "configs.yml").write_text(
+        yaml.safe_dump(
+            {
+                "osa_settings": {
+                    "analysis_settings": {
+                        "algorithm_settings": {"seed": 11},
+                    }
+                }
+            }
+        )
+    )
+    # Batch1: only configs.yml sets seed -> 11
+    (proj / "parametric_space_Batch1_cfg.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    # Batch2: osa_workflow overrides configs.yml -> 22
+    (proj / "parametric_space_Batch2_osa.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "osa_workflowBatch2_osa.json").write_text(
+        json.dumps({"analysis": {"problem": {"algorithm": {"seed": 22}}}})
+    )
+    # Batch3: parametric_space algorithm_setting overrides both -> 33
+    (proj / "parametric_space_Batch3_space.json").write_text(
+        json.dumps({"algorithm_setting": {"seed": 33}, "bar": {"x": [0, 1]}})
+    )
+    (proj / "osa_workflowBatch3_space.json").write_text(
+        json.dumps({"analysis": {"problem": {"algorithm": {"seed": 22}}}})
+    )
+
+    out = tmp_path / "out"
+    manifest = import_gem_project(proj, out)
+    assert manifest["batches"]["Batch1_cfg"]["seed"] == 11
+    assert manifest["batches"]["Batch2_osa"]["seed"] == 22
+    assert manifest["batches"]["Batch3_space"]["seed"] == 33
+
+    v1 = yaml.safe_load((out / "Batch1_cfg/variables.yml").read_text())
+    v2 = yaml.safe_load((out / "Batch2_osa/variables.yml").read_text())
+    v3 = yaml.safe_load((out / "Batch3_space/variables.yml").read_text())
+    assert v1["seed"] == 11
+    assert v2["seed"] == 22
+    assert v3["seed"] == 33
+
+    # When no seed is configured anywhere, variables.yml omits seed.
+    proj_no_seed = tmp_path / "proj_no_seed"
+    proj_no_seed.mkdir()
+    (proj_no_seed / "parametric_space_Batch1_none.json").write_text(
+        json.dumps({"bar": {"x": [0, 1]}})
+    )
+    out_none = tmp_path / "out_none"
+    manifest_none = import_gem_project(proj_no_seed, out_none)
+    assert manifest_none["batches"]["Batch1_none"]["seed"] is None
+    v_none = yaml.safe_load((out_none / "Batch1_none/variables.yml").read_text())
+    assert "seed" not in v_none
+
+
+@pytest.mark.parametrize(
+    "bad_seed",
+    [True, False, 1.5, 3.0, "42", "abc", "", [], {}],
+)
+def test_invalid_seed_rejected(tmp_path: Path, bad_seed: object) -> None:
+    """Issue #2030: booleans, floats, and invalid strings raise ValueError."""
+    proj = tmp_path / "proj_bad"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1_bad.json").write_text(
+        json.dumps({"algorithm_setting": {"seed": bad_seed}, "bar": {"x": [0, 1]}})
+    )
+    with pytest.raises(ValueError, match="seed must be an integer"):
+        import_gem_project(proj, tmp_path / "out_bad")
