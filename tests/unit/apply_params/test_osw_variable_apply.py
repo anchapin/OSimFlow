@@ -11,7 +11,7 @@ from osimflow.campaign import cast_samples
 from osimflow.work import default_apply_parameters
 
 
-def _gem_package(root: Path) -> Path:
+def _template_package(root: Path) -> Path:
     pkg = root / "pkg"
     (pkg / "measures" / "RubyMeasure").mkdir(parents=True)
     (pkg / "workflow.osw").write_text(
@@ -38,7 +38,7 @@ def _steps(out: Path) -> list[dict[str, object]]:
 
 
 def test_measure_arguments_applied_without_osm_or_bindings(tmp_path: Path) -> None:
-    out = _gem_package(tmp_path)
+    out = _template_package(tmp_path)
     default_apply_parameters(
         out,
         {"RubyMeasure.r_value": 3.5, "window_type": {"label": "double", "index": 1}},
@@ -51,13 +51,13 @@ def test_measure_arguments_applied_without_osm_or_bindings(tmp_path: Path) -> No
 
 
 def test_epw_reserved_key_sets_weather_file(tmp_path: Path) -> None:
-    out = _gem_package(tmp_path)
+    out = _template_package(tmp_path)
     default_apply_parameters(out, {"__epw_file__": "files/a.epw"}, "0001", out)
     assert json.loads((out / "workflow.osw").read_text())["weather_file"] == "files/a.epw"
 
 
 def test_unmapped_parameter_without_osm_still_fails(tmp_path: Path) -> None:
-    out = _gem_package(tmp_path)
+    out = _template_package(tmp_path)
     with pytest.raises(FileNotFoundError):
         default_apply_parameters(out, {"not_an_argument": 1.0}, "0001", out)
 
@@ -87,7 +87,7 @@ def test_custom_csv_emits_per_sample_overrides(tmp_path: Path) -> None:
 def test_external_epw_override_is_staged_into_sample_package(tmp_path: Path) -> None:
     from osimflow.campaign import Campaign, _package_content_digest
 
-    pkg = _gem_package(tmp_path)
+    pkg = _template_package(tmp_path)
     ext = tmp_path / "ext" / "site.epw"
     ext.parent.mkdir()
     ext.write_text("epw")

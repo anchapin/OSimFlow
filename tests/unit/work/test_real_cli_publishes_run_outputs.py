@@ -83,7 +83,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                         },
                     },
                     {
-                        "measure_dir_name": "ServerDirectoryCleanup",
+                        "measure_dir_name": "CleanupRunDirectory",
                         "result": {
                             "step_result": "Fail",
                             "step_errors": ["cleanup crashed"],
@@ -127,7 +127,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
                         },
                     },
                     {
-                        "measure_dir_name": "ServerDirectoryCleanup",
+                        "measure_dir_name": "CleanupRunDirectory",
                         "result": {"step_result": "Success", "step_values": []},
                     },
                 ],
@@ -138,7 +138,7 @@ def test_has_valid_osw_completion_all_cases(tmp_path: Path) -> None:
 
 
 def test_real_cli_succeeds_with_valid_out_osw_when_sql_deleted(tmp_path: Path) -> None:
-    """Issue #2051: _run_real_openstudio succeeds when ServerDirectoryCleanup deleted eplusout.sql but out.osw is valid."""
+    """Issue #2051: _run_real_openstudio succeeds when CleanupRunDirectory deleted eplusout.sql but out.osw is valid."""
     import json
 
     import pytest

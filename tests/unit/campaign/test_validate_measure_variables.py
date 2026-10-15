@@ -30,15 +30,15 @@ def _make_campaign_cfg(
     )
 
 
-def test_step_validate_measure_variables_gem_package_and_mixed_osm(tmp_path: Path) -> None:
+def test_step_validate_measure_variables_template_package_and_mixed_osm(tmp_path: Path) -> None:
     """step_validate_measure_variables accepts XML args, Ruleset args, __SKIP__, __epw_file__, and .osm attrs."""
-    pkg = tmp_path / "gem_pkg"
+    pkg = tmp_path / "template_pkg"
     pkg.mkdir(parents=True)
     (pkg / "workflow.osw").write_text('{"steps": []}\n', encoding="utf-8")
     (pkg / "model.osm").write_text("OS:Version,\n  {00000000-0000-0000-0000-000000000000};\n")
 
     # 1. Measure with measure.xml only (dynamic loop style)
-    cleanup_dir = pkg / "measures" / "ServerDirectoryCleanup"
+    cleanup_dir = pkg / "measures" / "CleanupRunDirectory"
     cleanup_dir.mkdir(parents=True)
     (cleanup_dir / "measure.xml").write_text(
         """<?xml version="1.0"?>
@@ -88,8 +88,8 @@ end
                 "values": [True, False],
             },
             {
-                "name": "ServerDirectoryCleanup.Sizing Run Directories",
-                "measure_argument": "ServerDirectoryCleanup.Sizing Run Directories",
+                "name": "CleanupRunDirectory.Sizing Run Directories",
+                "measure_argument": "CleanupRunDirectory.Sizing Run Directories",
                 "distribution": "categorical",
                 "values": [True, False],
             },
