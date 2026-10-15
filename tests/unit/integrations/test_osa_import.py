@@ -1387,3 +1387,161 @@ def test_cartesian_count_with_static_and_nonfinite_weights() -> None:
     )
     with pytest.raises(OSAImportError, match="non-negative"):
         _map_distribution({"type": "discrete", "values": [1, 2], "weights": [float("inf"), 1]})
+
+
+class TestMeasureAliasesAndOutputs:
+    @staticmethod
+    def _data(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "problem": {
+                "algorithm": {"type": "lhs", "number_of_samples": 4},
+                "workflow": [
+                    {
+                        "name": "increase_insulation_r_value_for_roofs",
+                        "measure_definition_directory": "./measures/IncreaseInsulationRValueForRoofs",
+                        "measure_definition_class_name": "IncreaseInsulationRValueForRoofs",
+                        "arguments": [{"name": "keep", "value": 1.0}],
+                    }
+                ],
+                "variables": [
+                    {
+                        "name": "roof_r",
+                        "measure": {
+                            "name": "increase_insulation_r_value_for_roofs",
+                            "argument": "r_value",
+                        },
+                        "distribution": {"type": "uniform", "minimum": 5, "maximum": 30},
+                    },
+                    {
+                        "name": "roof_r2",
+                        "measure": {
+                            "display_name": "IncreaseInsulationRValueForRoofs",
+                            "argument": "r_value2",
+                        },
+                        "distribution": {"type": "uniform", "minimum": 5, "maximum": 30},
+                    },
+                    {
+                        "name": "roof_r3",
+                        "measure_definition_class_name": "IncreaseInsulationRValueForRoofs",
+                        "measure": {"name": "unknown_alias", "argument": "r_value3"},
+                        "distribution": {"type": "uniform", "minimum": 5, "maximum": 30},
+                    },
+                ],
+            }
+        }
+        if extra:
+            data.update(extra)
+        return data
+
+    def test_variable_prefixes_normalized_to_measure_dir_name(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import _collect_varied_measure_args
+
+        out = tmp_path / "variables.yml"
+        data = self._data()
+        osa_to_variables_yml(data, out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        refs = [v["measure_argument"] for v in yml["variables"]]
+        assert refs == [
+            "IncreaseInsulationRValueForRoofs.r_value",
+            "IncreaseInsulationRValueForRoofs.r_value2",
+            "IncreaseInsulationRValueForRoofs.r_value3",
+        ]
+        varied = _collect_varied_measure_args(data)
+        assert ("IncreaseInsulationRValueForRoofs", "r_value") in varied
+        assert all(m == "IncreaseInsulationRValueForRoofs" for m, _ in varied)
+
+    def test_ambiguous_alias_not_rewritten(self) -> None:
+        from osimflow.importers.osa import _build_step_alias_map
+
+        alias = _build_step_alias_map(
+            [
+                {"name": "dup", "measure_definition_directory": "./m/A"},
+                {"name": "dup", "measure_definition_directory": "./m/B"},
+            ]
+        )
+        assert "dup" not in alias
+        assert alias["A"] == "A" and alias["B"] == "B"
+
+    def test_output_variables_preserved_and_objective_derived(self, tmp_path: Path) -> None:
+        outputs = [
+            {
+                "name": "eui",
+                "display_name": "EUI",
+                "units": "kWh/m2",
+                "objective_function": True,
+                "objective_function_index": 0,
+                "objective_function_target": 50,
+                "extra": "dropped",
+            },
+            {"name": "cost", "objective_function": False},
+        ]
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(self._data({"output_variables": outputs}), out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert yml["_metadata"]["outputs"][0] == {
+            "name": "eui",
+            "display_name": "EUI",
+            "units": "kWh/m2",
+            "objective_function": True,
+            "objective_function_index": 0,
+            "objective_function_target": 50,
+        }
+        assert len(yml["_metadata"]["outputs"]) == 2
+        assert yml["objective"] == {"name": "eui", "target": 50.0}
+
+    def test_problem_outputs_and_explicit_objective(self, tmp_path: Path) -> None:
+        data = self._data()
+        data["problem"]["outputs"] = [{"name": "eui", "objective_function": True}]
+        data["problem"]["algorithm"]["objective"] = {"name": "cost", "direction": "minimize"}
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert yml["_metadata"]["outputs"] == [{"name": "eui", "objective_function": True}]
+        assert yml["objective"] == {"name": "cost", "direction": "minimize"}
+
+    def test_no_outputs_no_metadata_key(self, tmp_path: Path) -> None:
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(self._data(), out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert "outputs" not in yml["_metadata"]
+        assert "objective" not in yml
+
+    def test_staged_osw_overlay_skips_varied_via_alias(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import _build_osw_from_osa
+
+        data = self._data()
+        data["problem"]["workflow"][0]["variables"] = [
+            {"variable": False, "argument": {"name": "r_value"}, "static_value": 1.0}
+        ]
+        osw = _build_osw_from_osa(data)
+        assert osw["steps"][0]["measure_dir_name"] == "IncreaseInsulationRValueForRoofs"
+
+    def test_repeated_measure_directory_keeps_instance_names(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "lhs", "number_of_samples": 2},
+                "workflow": [
+                    {"name": "FirstInstance", "measure_definition_directory": "./m/Shared"},
+                    {"name": "SecondInstance", "measure_definition_directory": "./m/Shared"},
+                ],
+                "variables": [
+                    {
+                        "name": "a",
+                        "measure": {"name": "FirstInstance", "argument": "x"},
+                        "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+                    },
+                    {
+                        "name": "b",
+                        "measure": {"name": "SecondInstance", "argument": "x"},
+                        "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+                    },
+                ],
+            }
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert [v["measure_argument"] for v in yml["variables"]] == [
+            "FirstInstance.x",
+            "SecondInstance.x",
+        ]

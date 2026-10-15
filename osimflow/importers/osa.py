@@ -602,6 +602,115 @@ def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
     return extracted
 
 
+_STEP_ALIAS_KEYS = (
+    "name",
+    "display_name",
+    "measure_definition_name",
+    "measure_definition_class_name",
+)
+
+
+def _build_step_alias_map(workflow: Any) -> dict[str, str]:
+    """Map every identifier of each workflow step to its canonical ``measure_dir_name``.
+
+    Identifiers that resolve to more than one distinct step are dropped as ambiguous.
+    """
+    aliases: dict[str, set[str]] = {}
+    if not isinstance(workflow, list):
+        return {}
+    steps = [s for s in workflow if isinstance(s, dict)]
+    dir_counts: dict[str, int] = {}
+    for step in steps:
+        c = _measure_step_name(step)
+        if c:
+            dir_counts[c] = dir_counts.get(c, 0) + 1
+    for step in steps:
+        canonical = _measure_step_name(step)
+        # Repeated directories keep per-instance names so apply_params can disambiguate.
+        if not canonical or dir_counts[canonical] > 1:
+            continue
+        candidates = [canonical] + [step.get(k) for k in _STEP_ALIAS_KEYS]
+        for cand in candidates:
+            if isinstance(cand, str) and cand.strip():
+                aliases.setdefault(cand.strip(), set()).add(canonical)
+    return {a: next(iter(c)) for a, c in aliases.items() if len(c) == 1}
+
+
+def _normalize_variable_measures(
+    osa_vars: list[dict[str, Any]], alias_map: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Rewrite variable measure references to the canonical workflow ``measure_dir_name``."""
+    if not alias_map:
+        return osa_vars
+    out: list[dict[str, Any]] = []
+    for var in osa_vars:
+        new = dict(var)
+        measure = var.get("measure")
+        if isinstance(measure, dict):
+            ids = [
+                measure.get("name"),
+                measure.get("display_name"),
+                measure.get("measure_definition_class_name"),
+                var.get("measure_definition_class_name"),
+            ]
+            canonical = next(
+                (alias_map[i] for i in ids if isinstance(i, str) and i in alias_map), None
+            )
+            if canonical:
+                new["measure"] = {**measure, "name": canonical}
+        elif isinstance(var.get("name"), str) and "." in var["name"]:
+            prefix, arg = var["name"].split(".", 1)
+            if prefix in alias_map and "measure_argument" not in var:
+                new["measure"] = {"name": alias_map[prefix], "argument": arg}
+        out.append(new)
+    return out
+
+
+_OUTPUT_KEYS = (
+    "name",
+    "display_name",
+    "units",
+    "objective_function",
+    "objective_function_index",
+    "objective_function_target",
+)
+
+
+def _extract_outputs(osa_data: dict[str, Any], problem: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect ``output_variables`` / ``outputs`` declarations from the analysis."""
+    raw: Any = None
+    for container, key in (
+        (osa_data, "output_variables"),
+        (problem, "output_variables"),
+        (problem, "outputs"),
+    ):
+        if isinstance(container.get(key), list) and container[key]:
+            raw = container[key]
+            break
+    outputs: list[dict[str, Any]] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        kept = {k: item[k] for k in _OUTPUT_KEYS if item.get(k) is not None}
+        if kept.get("name") or kept.get("display_name"):
+            outputs.append(kept)
+    return outputs
+
+
+def _objective_from_outputs(outputs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Derive an ``objective`` section from the first ``objective_function: true`` output."""
+    flagged = [o for o in outputs if o.get("objective_function") is True]
+    if not flagged:
+        return None
+    flagged.sort(key=lambda o: o.get("objective_function_index", 0))
+    first = flagged[0]
+    objective: dict[str, Any] = {"name": first.get("name") or first.get("display_name")}
+    target = first.get("objective_function_target")
+    if isinstance(target, (int, float)) and not isinstance(target, bool):
+        objective["target"] = float(target)
+    return objective
+
+
 def _extract_seed(algorithm: dict[str, Any]) -> int | None:
     """Extract and validate an optional integer ``seed`` from an OSA algorithm block."""
     raw_seed = algorithm.get("seed")
@@ -679,6 +788,9 @@ def _extract_problem_variables(
         workflow_raw = problem.get("workflow", [])
         if isinstance(workflow_raw, list):
             osa_variables = _extract_workflow_variables(workflow_raw)
+    osa_variables = _normalize_variable_measures(
+        osa_variables, _build_step_alias_map(problem.get("workflow"))
+    )
 
     if not osa_variables:
         if not raw_problem_vars and _supports_prebuilt_workflow(problem, allow_empty):
@@ -713,6 +825,21 @@ def _resolve_problem_algorithm_dict(problem: dict[str, Any]) -> dict[str, Any]:
     if "type" not in algorithm and "analysis_type" in problem:
         algorithm["type"] = problem["analysis_type"]
     return algorithm
+
+
+def _resolve_objective(
+    algorithm: dict[str, Any], outputs: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    explicit = algorithm.get("objective")
+    if isinstance(explicit, dict):
+        objective = {
+            k: explicit[k]
+            for k in ("name", "direction", "weight", "target", "scaling_factor")
+            if k in explicit
+        }
+        if objective:
+            return objective
+    return _objective_from_outputs(outputs)
 
 
 def osa_to_variables_yml(
@@ -770,6 +897,9 @@ def osa_to_variables_yml(
             metadata["n_samples"] = cartesian
     if seed is not None:
         metadata["seed"] = seed
+    outputs = _extract_outputs(osa_data, problem)
+    if outputs:
+        metadata["outputs"] = outputs
 
     variables_yml: dict[str, Any] = {
         "_metadata": metadata,
@@ -779,6 +909,9 @@ def osa_to_variables_yml(
         variables_yml["seed"] = seed
     if is_prebuilt:
         variables_yml["prebuilt_workflow"] = True
+    objective = _resolve_objective(algorithm, outputs)
+    if objective:
+        variables_yml["objective"] = objective
     variables_yml["variables"] = converted
 
     output_path = Path(output_path)
@@ -923,6 +1056,9 @@ def _collect_varied_measure_args(osa_data: dict[str, Any]) -> set[tuple[str, str
         ]
     if not osa_variables and isinstance(problem.get("workflow"), list):
         osa_variables = _extract_workflow_variables(problem["workflow"])
+    osa_variables = _normalize_variable_measures(
+        osa_variables, _build_step_alias_map(problem.get("workflow"))
+    )
 
     varied: set[tuple[str, str]] = set()
     for osa_var in osa_variables:
