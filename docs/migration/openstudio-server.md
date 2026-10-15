@@ -983,7 +983,9 @@ batches:
 ```
 
 `osimflow run-batches --manifest batches.yml --root ./batches` runs each batch as
-its own campaign (`Batch1_baseline`, ...) under a submit lock, stops after the
+its own campaign (`baseline`, `retrofit`, ...) under a submit lock, stops after the
 first failure unless `--continue-on-error`, and writes `batches_summary.json`.
 With `detach-s3` each batch only submits, so follow with
-`osimflow download --from-s3 ... ./batches/Batch1_baseline`.
+`osimflow download --from-s3 ... ./batches/baseline`. The campaign id defaults to
+the batch `name`; set `common.name_template` (e.g. `Batch{id}_{name}`) or a per-batch
+`campaign` to customize it.

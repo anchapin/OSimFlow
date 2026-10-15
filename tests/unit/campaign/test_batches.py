@@ -36,7 +36,55 @@ def _write(tmp_path: Path, text: str = MANIFEST) -> Path:
 
 
 def test_campaign_name_is_stable_and_safe() -> None:
-    assert batch_campaign_name(1, "base line") == "Batch1_base-line"
+    assert batch_campaign_name(1, "base line") == "base-line"
+    assert batch_campaign_name(1, "base line", "Batch{id}_{name}") == "Batch1_base-line"
+
+
+def test_campaign_name_invalid_template() -> None:
+    with pytest.raises(BatchManifestError):
+        batch_campaign_name(1, "a", "{bogus}")
+    with pytest.raises(BatchManifestError):
+        batch_campaign_name(1, "a", "{id!x}")
+
+
+@pytest.mark.parametrize("template", ["{name[0]}", "{name!r}", "{id:>20}", "{}", "{x}"])
+def test_campaign_name_rejects_exotic_template_fields(template: str) -> None:
+    with pytest.raises(BatchManifestError):
+        batch_campaign_name(1, "abc", template)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "batches: [{name: A}, {name: a}]",
+        "batches: [{name: null}]",
+        "batches: [{name: x, campaign: null}]",
+        "common: {name_template: null}\nbatches: [{name: x}]",
+    ],
+)
+def test_invalid_names_and_case_collisions(tmp_path: Path, text: str) -> None:
+    with pytest.raises(BatchManifestError):
+        load_manifest(_write(tmp_path, text))
+
+
+def test_manifest_naming_variants(tmp_path: Path) -> None:
+    text = (
+        "common: {name_template: 'Batch{id}_{name}', executor: local}\n"
+        "batches:\n"
+        "  - {id: 7, name: a}\n"
+        "  - {name: b}\n"
+        "  - {name: c, campaign: custom-c}\n"
+    )
+    common, entries = load_manifest(_write(tmp_path, text))
+    assert [e["campaign"] for e in entries] == ["Batch7_a", "Batch2_b", "custom-c"]
+    argv = build_run_argv(common, entries[2], tmp_path / "o")
+    assert "--name_template" not in argv and "--campaign" not in argv
+    assert "--executor" in argv
+
+
+def test_manifest_default_name_is_neutral(tmp_path: Path) -> None:
+    _, entries = load_manifest(_write(tmp_path, "batches: [{name: only}]"))
+    assert entries[0]["campaign"] == "only"
 
 
 def test_build_argv(tmp_path: Path) -> None:
@@ -50,7 +98,13 @@ def test_build_argv(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["[]", "batches: []", "batches: [{id: 1}]", "batches: [{id: 1, name: a}, {id: 1, name: a}]"],
+    [
+        "[]",
+        "batches: []",
+        "batches: [{id: 1}]",
+        "batches: [{name: a}, {id: 2, name: a}]",
+        "batches: [{id: 1, name: a}, {id: 1, name: a}]",
+    ],
 )
 def test_invalid_manifest(tmp_path: Path, text: str) -> None:
     with pytest.raises(BatchManifestError):
@@ -74,7 +128,7 @@ def test_sequential_order_and_skip_after_failure(tmp_path: Path) -> None:
     assert [r.status for r in res] == ["failed", "skipped"]
     assert len(calls) == 1
     summary = json.loads((tmp_path / "root" / "batches_summary.json").read_text())
-    assert summary[0]["campaign"] == "Batch1_base-line"
+    assert summary[0]["campaign"] == "base-line"
 
 
 def test_continue_on_error(tmp_path: Path) -> None:
@@ -88,7 +142,7 @@ def test_dry_run_does_not_execute(tmp_path: Path, capsys: pytest.CaptureFixture[
     with patch.object(batches.subprocess, "run", side_effect=AssertionError):
         res = run_batches(_write(tmp_path), tmp_path / "root", dry_run=True)
     assert all(r.status == "dry-run" for r in res)
-    assert "Batch2_second" in capsys.readouterr().out
+    assert "second" in capsys.readouterr().out
 
 
 def test_submit_lock_excludes_second_holder(tmp_path: Path) -> None:

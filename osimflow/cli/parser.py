@@ -1427,7 +1427,7 @@ def _add_run_batches_args(rb: argparse.ArgumentParser) -> None:
         "--root",
         type=Path,
         default=Path("batches"),
-        help="Directory holding Batch<id>_<name> campaign dirs, the submit lock and the summary",
+        help="Directory holding the per-batch campaign dirs, the submit lock and the summary",
     )
     rb.add_argument(
         "--continue-on-error",

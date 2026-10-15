@@ -3,9 +3,11 @@
 A general multi-batch sequential campaign driver: a manifest lists N
 named batches; each runs as its own ``osimflow run`` campaign, in order, under
 an exclusive submit lock so concurrent drivers never collide. Each campaign
-lands in ``<root>/Batch<id>_<name>`` (stable, so ``osimflow status|download
+lands in ``<root>/<campaign>`` (stable, so ``osimflow status|download
 --from-s3`` can address it) and a per-batch summary is written to
-``<root>/batches_summary.json``.
+``<root>/batches_summary.json``. The campaign id is the batch's explicit
+``campaign`` key, else ``common.name_template`` rendered with ``{id}`` /
+``{name}`` (default ``{name}``; e.g. ``Batch{id}_{name}``).
 
 Manifest (YAML or JSON)::
 
@@ -13,8 +15,10 @@ Manifest (YAML or JSON)::
       executor: aws_batch
       detach-s3: true
       result-storage-bucket: my-bucket
+      name_template: "{name}"   # optional; consumed by the driver, not a run flag
     batches:
       - {id: 1, name: baseline, n_samples: 10, input_variables: a.yml}
+      - {name: retrofit, campaign: retrofit-v2, n_samples: 20}
 
 Keys are ``osimflow run`` flag names without the leading ``--`` (underscores
 and dashes are used exactly as the flag spells them); ``true`` emits the bare
@@ -30,6 +34,7 @@ except ImportError:  # Windows: POSIX-only module
 import json
 import logging
 import re
+import string
 import subprocess  # nosec
 import sys
 import time
@@ -71,13 +76,37 @@ class BatchResult:
     elapsed_s: float
 
 
-def batch_campaign_name(batch_id: object, name: str) -> str:
-    """Stable campaign id ``Batch<id>_<name>`` (filesystem/S3 safe)."""
-    return f"Batch{_NAME_RE.sub('-', str(batch_id))}_{_NAME_RE.sub('-', name)}"
+DEFAULT_NAME_TEMPLATE = "{name}"
+_DRIVER_KEYS = ("id", "name", "campaign", "name_template")
+
+
+def batch_campaign_name(batch_id: object, name: str, template: str = DEFAULT_NAME_TEMPLATE) -> str:
+    """Stable campaign id (filesystem/S3 safe) from *template* (``{id}``, ``{name}``)."""
+    for _lit, field, spec, conv in string.Formatter().parse(template):
+        if field is not None and (field not in ("id", "name") or spec or conv):
+            raise BatchManifestError(
+                f"invalid name_template {template!r}: only plain {{id}} and {{name}} are allowed"
+            )
+    try:
+        rendered = template.format(
+            id=_NAME_RE.sub("-", str(batch_id)), name=_NAME_RE.sub("-", name)
+        )
+    except (KeyError, IndexError, ValueError, AttributeError) as exc:
+        raise BatchManifestError(
+            f"invalid name_template {template!r} (use only {{id}} and {{name}}): {exc}"
+        ) from exc
+    cname = _NAME_RE.sub("-", rendered).strip(".-")
+    if not cname:
+        raise BatchManifestError(f"name_template {template!r} produced an empty campaign name")
+    return cname
 
 
 def load_manifest(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Parse *path*; return ``(common, batches)`` validating ids/names."""
+    """Parse *path*; return ``(common, batches)`` validating ids/names.
+
+    Each returned entry carries a resolved, unique ``campaign`` id. ``id``
+    defaults to the 1-based position and ``name`` to ``campaign`` when omitted.
+    """
     try:
         data = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as exc:
@@ -87,15 +116,29 @@ def load_manifest(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     common = data.get("common") or {}
     if not isinstance(common, dict):
         raise BatchManifestError("'common' must be a mapping")
+    template = common.get("name_template", DEFAULT_NAME_TEMPLATE)
+    if not isinstance(template, str) or not template:
+        raise BatchManifestError("'name_template' must be a non-empty string")
     batches: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for i, entry in enumerate(data["batches"]):
-        if not isinstance(entry, dict) or "id" not in entry or "name" not in entry:
-            raise BatchManifestError(f"batches[{i}] needs 'id' and 'name'")
-        cname = batch_campaign_name(entry["id"], str(entry["name"]))
-        if cname in seen:
+    for i, raw in enumerate(data["batches"]):
+        if not isinstance(raw, dict) or ("name" not in raw and "campaign" not in raw):
+            raise BatchManifestError(f"batches[{i}] needs 'name' (or 'campaign')")
+        for key in ("name", "campaign"):
+            if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
+                raise BatchManifestError(f"batches[{i}].{key} must be a non-empty string")
+        entry = dict(raw)
+        entry.setdefault("id", i + 1)
+        entry.setdefault("name", entry.get("campaign"))
+        if "campaign" in entry:
+            cname = batch_campaign_name(entry["id"], str(entry["campaign"]), "{name}")
+        else:
+            cname = batch_campaign_name(entry["id"], str(entry["name"]), template)
+        # casefold: campaign dirs collide on case-insensitive filesystems
+        if cname.casefold() in seen:
             raise BatchManifestError(f"duplicate batch {cname!r}")
-        seen.add(cname)
+        seen.add(cname.casefold())
+        entry["campaign"] = cname
         batches.append(entry)
     if not batches:
         raise BatchManifestError("manifest has no batches")
@@ -119,7 +162,10 @@ def build_run_argv(common: dict[str, Any], entry: dict[str, Any], outdir: Path) 
     ``BooleanOptionalAction`` flags emit ``--no-x`` for ``false``.
     """
     actions = _run_actions()
-    merged = {**common, **{k: v for k, v in entry.items() if k not in ("id", "name")}}
+    merged = {
+        **{k: v for k, v in common.items() if k not in _DRIVER_KEYS},
+        **{k: v for k, v in entry.items() if k not in _DRIVER_KEYS},
+    }
     merged.pop("outdir", None)
     argv = [sys.executable, "-m", "osimflow", "run"]
     for key, value in merged.items():
@@ -183,7 +229,7 @@ def run_batches(
     """Run every batch in order; write and return the per-batch summary."""
     common, batches = load_manifest(manifest)
     for entry in batches:  # validate every batch before launching any child
-        build_run_argv(common, entry, root / batch_campaign_name(entry["id"], str(entry["name"])))
+        build_run_argv(common, entry, root / entry["campaign"])
     if dry_run:
         return _execute(common, batches, root, continue_on_error, True)
     with submit_lock(root, lock_timeout_s):
@@ -200,7 +246,7 @@ def _execute(
     results: list[BatchResult] = []
     failed = False
     for entry in batches:
-        cname = batch_campaign_name(entry["id"], str(entry["name"]))
+        cname = entry["campaign"]
         outdir = root / cname
         if failed and not continue_on_error:
             results.append(
