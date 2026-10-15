@@ -86,7 +86,8 @@ _OSIMFLOW_ALGO_TO_OSA: dict[str, str] = {
     "nsga2": "nsga_nrel",
     "spea2": "spea_nrel",
     "pso": "pso",
-    "de": "ga",
+    "de": "de",
+    "ga": "ga",
     "gaisl": "gaisl",
     "rgenoud": "rgenoud",
 }
@@ -173,6 +174,10 @@ class OSAExporter:
         - ``measures/`` (contents of ``template_sim_package/measures/``)
         - ``weather/`` (contents of ``template_sim_package/weather/``)
 
+        ``analysis.json`` and (when a seed is packed) ``seed.osm`` are
+        reserved names: same-named files in ``template_sim_package`` are
+        skipped so the archive never has duplicate members.
+
         If no ``.osm`` file is found, a ``_seed_missing_note`` key is
         added to the ``analysis.json`` inside the archive.  The export
         never fails for missing files.
@@ -192,9 +197,8 @@ class OSAExporter:
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
 
-        # Step 1: export analysis.json to a temporary location.
-        analysis_path = self.export(config, outdir / "_osa_staging")
-        analysis_data = json.loads(analysis_path.read_text(encoding="utf-8"))
+        # Step 1: build analysis.json in memory (no staging directory to leak).
+        analysis_data = self._build_analysis(config)
 
         # Step 2: check for a seed .osm in template_sim_package.
         files = self._resolve_package_files(config)
@@ -227,10 +231,19 @@ class OSAExporter:
                 for f in tsp.rglob("*"):
                     if not f.is_file():
                         continue
-                    # Skip .osm (already handled as seed.osm).
-                    if f.suffix.lower() == ".osm":
+                    # Only the resolved seed is special (packed as seed.osm);
+                    # other .osm files (files/, measures/<m>/tests/) are kept.
+                    if seed_path is not None and f.resolve() == seed_path.resolve():
                         continue
-                    arcname = str(f.relative_to(tsp))
+                    arcname = f.relative_to(tsp).as_posix()
+                    # Generated entries are reserved; a colliding source file
+                    # (stale analysis.json, stray root seed.osm) is skipped.
+                    if arcname == "analysis.json" or (arcname == "seed.osm" and has_seed):
+                        log.warning(
+                            "Skipping %s: archive name is reserved for generated content",
+                            arcname,
+                        )
+                        continue
                     if arcname == "workflow.osw" and files.seed_path is not None:
                         zf.writestr(arcname, self._osw_with_seed(f))
                         continue
@@ -269,7 +282,7 @@ class OSAExporter:
             "problem": {
                 "algorithm": dict(algorithm),
                 "variables": self._build_variables(config),
-                "workflows": [],
+                "workflow": self._build_workflow(config),
                 "file_format_version": 1,
             },
         }
@@ -287,6 +300,45 @@ class OSAExporter:
                 "base_oscli_version": config.openstudio_version or "3.10.0",
             },
         }
+
+    @staticmethod
+    def _build_workflow(config: CampaignConfig) -> list[dict[str, Any]]:
+        """Ordered ``problem.workflow`` steps from ``template_sim_package/workflow.osw``.
+
+        Each step carries ``measure_dir_name``, the per-step ``name`` (when the
+        OSW names it; needed for multi-instance measures), static ``arguments``
+        and an (empty) ``variables`` list — the shape ``OSAImporter`` reads.
+        """
+        tsp = config.template_sim_package
+        osw_path = Path(tsp) / "workflow.osw" if tsp else None
+        if osw_path is None or not osw_path.is_file():
+            return []
+        try:
+            osw = json.loads(osw_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            log.warning("Could not parse %s; exporting empty workflow", osw_path)
+            return []
+        raw_steps = osw.get("steps") if isinstance(osw, dict) else None
+        workflow: list[dict[str, Any]] = []
+        for step in raw_steps if isinstance(raw_steps, list) else []:
+            if not isinstance(step, dict):
+                continue
+            m_dir = step.get("measure_dir_name")
+            if not isinstance(m_dir, str) or not m_dir.strip():
+                continue
+            m_dir = Path(m_dir.strip()).name
+            args = step.get("arguments")
+            entry: dict[str, Any] = {
+                "measure_dir_name": m_dir,
+                "name": m_dir,
+                "arguments": dict(args) if isinstance(args, dict) else {},
+                "variables": [],
+            }
+            name = step.get("name")
+            if isinstance(name, str) and name.strip():
+                entry["name"] = name.strip()
+            workflow.append(entry)
+        return workflow
 
     @staticmethod
     def _load_variables_yml(config: CampaignConfig) -> dict[str, Any]:
@@ -324,6 +376,20 @@ class OSAExporter:
         return outputs
 
     @staticmethod
+    def _fallback_seed(tsp: Path) -> Path | None:
+        """First ``.osm`` in the seed search dirs, else any outside ``measures/``."""
+        for sub in _SEED_SEARCH_DIRS:
+            base = tsp / sub
+            if base.is_dir():
+                found = next((c for c in sorted(base.glob("*.osm")) if c.is_file()), None)
+                if found is not None:
+                    return found
+        for candidate in sorted(tsp.rglob("*.osm")):
+            if candidate.is_file() and "measures" not in candidate.relative_to(tsp).parts[:-1]:
+                return candidate
+        return None
+
+    @staticmethod
     def _resolve_package_files(config: CampaignConfig) -> "_PackageFiles":
         """Locate the seed ``.osm`` and weather file of ``template_sim_package``.
 
@@ -356,10 +422,7 @@ class OSAExporter:
                     result.seed_from_osw = True
                     break
         if result.seed_path is None:
-            for candidate in sorted(tsp.rglob("*.osm")):
-                if candidate.is_file():
-                    result.seed_path = candidate
-                    break
+            result.seed_path = OSAExporter._fallback_seed(tsp)
         if result.seed_path is not None:
             result.seed_arcname = "seed.osm"
 
@@ -475,6 +538,7 @@ class OSAExporter:
             if measure_arg and isinstance(measure_arg, str) and "." in measure_arg:
                 parts = measure_arg.split(".", 1)
                 osa_var["measure"] = {
+                    "name": parts[0],
                     "display_name": parts[0],
                     "argument": parts[1],
                 }
@@ -509,6 +573,7 @@ class OSAExporter:
         if measure_arg and isinstance(measure_arg, str) and "." in measure_arg:
             parts = measure_arg.split(".", 1)
             osa_var["measure"] = {
+                "name": parts[0],
                 "display_name": parts[0],
                 "argument": parts[1],
             }

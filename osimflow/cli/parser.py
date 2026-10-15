@@ -1080,6 +1080,15 @@ def _add_export_args(exp: argparse.ArgumentParser) -> None:
         default="3.10.0",
         help="OpenStudio CLI version (default: 3.10.0)",
     )
+    exp.add_argument(
+        "--template-package",
+        type=Path,
+        default=None,
+        help=(
+            "Template simulation package to bundle (workflow steps, seed, weather, measures) "
+            "into a .osa archive. Defaults to <outdir>/inputs/template_sim_package if present."
+        ),
+    )
     exp.add_argument("--log_level", default="INFO")
 
 

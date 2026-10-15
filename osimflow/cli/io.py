@@ -60,11 +60,22 @@ def _run_export(args: argparse.Namespace) -> int:
         return 1
 
     outdir = Path(args.outdir).resolve()
+    archived_pkg = outdir / "inputs" / "template_sim_package"
+    template_package: Path | None = getattr(args, "template_package", None)
+    if template_package is not None:
+        template_package = Path(template_package).resolve()
+        if not template_package.is_dir():
+            print(f"error: template package not found: {template_package}", file=sys.stderr)
+            return 1
+    elif archived_pkg.is_dir():
+        template_package = archived_pkg
+
     # Build a minimal CampaignConfig for the exporter.
     # The export subcommand only needs a subset of fields.
     cfg = CampaignConfig(
         input_variables=variables_path,
-        template_sim_package=outdir,  # placeholder — not used by export
+        # Without a package the (non-existent) archive path acts as a placeholder.
+        template_sim_package=template_package or archived_pkg,
         n_samples=args.n_samples,
         outdir=outdir,
         openstudio_version=args.openstudio_version,
@@ -74,4 +85,7 @@ def _run_export(args: argparse.Namespace) -> int:
     exporter = OSAExporter()
     path = exporter.export(cfg, outdir)
     print(f"Exported {path}")
+    if template_package is not None:
+        osa_path = exporter.pack_osa(cfg, outdir)
+        print(f"Packed {osa_path}")
     return 0
