@@ -637,8 +637,10 @@ name in this section.
   `run --detach-s3` writes `<campaign>/_handoff.json`
   + `samples.json` to the bucket and exits; `status|list|download
   --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and
-  `download` finalizes locally (KPI extract + aggregate +
-  `download_data.csv`), skipping already-downloaded samples.
+  `download` finalizes locally (KPI extract + aggregate), skipping
+  already-downloaded samples. `download_data.csv` is no longer written by
+  default (`S3CampaignStore.download(write_server_csv=True)` opts in; CLI
+  users run `osimflow export-results --format openstudio-server-csv`).
   Issue #1881 makes the submit crash/concurrency-safe: `SubmitClaim`
   (generation-numbered `<campaign>/_claims/NNNNNN.json`, created via
   `ResultStorage.put_if_absent`, 15-min renewable lease; `claim_submission`

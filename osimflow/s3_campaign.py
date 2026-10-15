@@ -7,7 +7,7 @@ result bucket, then exits. Workers upload each sample's output directory under
 ``_OSIMFLOW_COMPLETE`` marker, so S3 alone is the source of truth for
 status. ``osimflow status|list|download --from-s3`` read that state from any
 machine; ``download`` performs the KPI extraction + aggregation locally (the
-"finalizer") and writes the server-style ``download_data.csv``.
+"finalizer") and optionally writes the server-style ``download_data.csv``.
 """
 
 import hashlib
@@ -557,14 +557,18 @@ class S3CampaignStore:
         *,
         allow_partial: bool = False,
         include_artifacts: bool = False,
+        write_server_csv: bool = False,
     ) -> dict[str, Any]:
-        """Fetch completed samples, then aggregate + write ``download_data.csv``.
+        """Fetch completed samples, then aggregate into the canonical outputs.
+
+        ``download_data.csv`` (OpenStudio-Server layout) is only written when
+        *write_server_csv* is true; otherwise use
+        ``osimflow export-results --format openstudio-server-csv``.
 
         Already-downloaded samples (local marker present) are skipped, and the
         aggregation is only redone when something new arrived or the output is
         missing, so repeated calls are idempotent.
         """
-        from .server_csv import build_server_csv_frame  # noqa: PLC0415
         from .work import aggregate_results, extract_kpis  # noqa: PLC0415
 
         record = self.read_handoff(campaign_id)
@@ -655,15 +659,17 @@ class S3CampaignStore:
                 samples_json=samples_path if samples_path.is_file() else None,
             )
         server_csv = outdir / DOWNLOAD_CSV_NAME
-        frame = build_server_csv_frame(outdir)
-        frame.to_csv(server_csv, index=False)
+        if write_server_csv:
+            from .server_csv import build_server_csv_frame  # noqa: PLC0415
+
+            build_server_csv_frame(outdir).to_csv(server_csv, index=False)
         return {
             "campaign_id": campaign_id,
             "fetched": fetched,
             "completed": len(done),
             "failed": sorted(sid for sid, st in states.items() if st == "failed"),
             "total": len(record.sample_ids),
-            "server_csv": server_csv if server_csv.is_file() else None,
+            "server_csv": server_csv if write_server_csv and server_csv.is_file() else None,
             "aggregated_csv": csv_path,
         }
 

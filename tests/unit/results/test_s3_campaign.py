@@ -185,6 +185,8 @@ def test_download_requires_complete_unless_partial(store: S3CampaignStore, tmp_p
     assert res["fetched"] == ["0000"]
     assert (out / "aggregated_results.csv").is_file()
     assert (out / "failed_simulations.csv").is_file()
+    assert res["server_csv"] is None
+    assert not (out / "download_data.csv").exists()
 
 
 def test_download_skips_existing(store: S3CampaignStore, tmp_path: Path) -> None:
@@ -333,7 +335,7 @@ def test_download_s3_campaign_includes_out_osw_and_sql_kpis(
     (s1 / COMPLETE_MARKER).write_text("")
 
     out = tmp_path / "out"
-    res = store.download("camp1", out)
+    res = store.download("camp1", out, write_server_csv=True)
     assert res["server_csv"] == out / "download_data.csv"
 
     agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
@@ -829,7 +831,7 @@ def test_download_mixed_incremental_and_stale_kpi_for_failed_sample(
     out = tmp_path / "out_mix"
 
     # 1. Empty (0 completed) download with --allow-partial writes download_data.csv with canonical header
-    res0 = store.download("camp_mix", out, allow_partial=True)
+    res0 = store.download("camp_mix", out, allow_partial=True, write_server_csv=True)
     assert res0["completed"] == 0
     assert res0["server_csv"] == out / "download_data.csv"
     df0 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
@@ -853,7 +855,7 @@ def test_download_mixed_incremental_and_stale_kpi_for_failed_sample(
         json.dumps({"sample_id": "0001", "error": "eplusout.sql_missing"})
     )
 
-    res1 = store.download("camp_mix", out, allow_partial=True)
+    res1 = store.download("camp_mix", out, allow_partial=True, write_server_csv=True)
     assert res1["failed"] == ["0001"]
     assert res1["server_csv"] == out / "download_data.csv"
     df1 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
@@ -871,7 +873,7 @@ def test_download_mixed_incremental_and_stale_kpi_for_failed_sample(
     _write_sql(s0 / "eplusout.sql")
     (s0 / COMPLETE_MARKER).write_text("")
 
-    res2 = store.download("camp_mix", out)
+    res2 = store.download("camp_mix", out, write_server_csv=True)
     assert res2["fetched"] == ["0000"]
     df2 = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
     assert len(df2) == 2
@@ -912,7 +914,7 @@ def test_download_all_failed_campaign_writes_canonical_download_data_csv(
     _failed_sample_remote(store, "camp_fail", "0001", "Severe failure 1")
 
     out = tmp_path / "out_fail"
-    res = store.download("camp_fail", out)
+    res = store.download("camp_fail", out, write_server_csv=True)
     assert res["failed"] == ["0000", "0001"]
     assert res["server_csv"] == out / "download_data.csv"
 
@@ -1174,7 +1176,7 @@ def test_download_out_osw_only_completed_sample_without_sql(
 
     # End-to-end S3CampaignStore.download() verification
     out = tmp_path / "out_osw_only"
-    res = store.download("camp_osw_only", out)
+    res = store.download("camp_osw_only", out, write_server_csv=True)
     assert res["completed"] == 1
     assert res["failed"] == []
     assert res["server_csv"] == out / "download_data.csv"
@@ -1518,7 +1520,7 @@ def test_download_propagates_batch_failure_reason_to_failed_simulations_and_down
     (s0 / COMPLETE_MARKER).write_text("")
 
     out = tmp_path / "out_oom_dl"
-    res = store.download("camp_oom_dl", out)
+    res = store.download("camp_oom_dl", out, write_server_csv=True)
     assert res["completed"] == 2
     assert res["failed"] == ["0001"]
     assert sorted(res["fetched"]) == ["0000", "0001"]
@@ -1636,7 +1638,7 @@ def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_
     (s3 / FAILED_MARKER).write_text("Worker died after EnergyPlus finished\n")
 
     out = tmp_path / "out_post_ep"
-    store.download("camp_post_ep", out)
+    store.download("camp_post_ep", out, write_server_csv=True)
 
     # Verify KPI files were NOT generated for 0001, 0002, or 0003
     assert (out / "kpis" / "kpi_0000.json").is_file()
