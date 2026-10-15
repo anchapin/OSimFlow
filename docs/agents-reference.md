@@ -549,7 +549,9 @@ name in this section.
   (multi-instance steps) for `<step_name>.<arg>` validation (issue #2099).
 - `osimflow/measure_resolver.py`, `osimflow/measure_versioning.py`
   — measure internals.
-- `osimflow/weather.py` — `discover_epw_files`, `download_epw`,
+- `osimflow/weather.py` — `discover_epw_files`, `find_weather_file`
+  (searches the package root, in-package `workflow.osw` `file_paths`, `files/`,
+  `weather/`; issue #2094), `download_epw`,
   `validate_epw`, `validate_epw_header`,
   `validate_all_epw_files`, `detect_climate_zone_from_stat`,
   `EPWValidationError`, `EPWDownloadError`.

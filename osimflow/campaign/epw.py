@@ -8,6 +8,7 @@ delegating methods (tests call ``campaign._load_variable_defs()``,
 ``campaign._resolve_epw_targets(...)``, etc. directly).
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,12 @@ import yaml
 
 from ..apply_params import EPW_FILE_KEY
 from ..config import CampaignConfig
-from ..weather import EPWValidationError, validate_all_epw_files, validate_epw
+from ..weather import (
+    EPWValidationError,
+    find_weather_file,
+    validate_all_epw_files,
+    validate_epw,
+)
 
 log = logging.getLogger("osimflow.campaign")
 
@@ -60,7 +66,11 @@ class CampaignEpwResolver:
                 result.append((var["name"], mapping))
         return result
 
-    def preflight_validate_epw_files(self, variable_defs: list[dict[str, Any]]) -> None:
+    def preflight_validate_epw_files(
+        self,
+        variable_defs: list[dict[str, Any]],
+        osw_weather_replaced: bool = False,
+    ) -> None:
         """Pre-flight check: verify all mapped .epw files exist and are valid.
 
         For every variable with ``target: epw_file`` and a ``mapping``
@@ -76,6 +86,11 @@ class CampaignEpwResolver:
         all ``.epw`` files found in the ``weather/`` subdirectory of the
         template package (configurable via ``cfg.weather_dir``).
 
+        The top-level ``weather_file`` of ``workflow.osw`` is also resolved
+        (issue #2094) unless every sample replaces it (``epw_file`` mapping
+        or per-sample ``weather_file`` override, signalled by
+        ``osw_weather_replaced``).
+
         Raises:
             FileNotFoundError: one or more mapped .epw files are missing.
             EPWValidationError: one or more .epw files fail format validation.
@@ -84,22 +99,49 @@ class CampaignEpwResolver:
         epw_mappings = self.collect_epw_mappings(variable_defs)
 
         # Phase 1: check existence of all mapped .epw files.
-        self._check_epw_existence(epw_mappings, template_dir)
+        self._check_epw_existence(epw_mappings, template_dir, self._cfg.weather_dir)
+        osw_weather: Path | None = None
+        if not (osw_weather_replaced or epw_mappings):
+            osw_weather = self._check_osw_weather_file(template_dir)
 
         # Phase 2: validate EPW format for all referenced + discovered files.
-        self._check_epw_format(epw_mappings, template_dir)
+        extra = [osw_weather] if osw_weather is not None else []
+        self._check_epw_format(epw_mappings, template_dir, extra)
+
+    def _check_osw_weather_file(self, template_dir: Path) -> Path | None:
+        """Resolve ``workflow.osw`` ``weather_file``; raise FileNotFoundError if missing."""
+        osw = template_dir / "workflow.osw"
+        if not osw.is_file():
+            return None
+        try:
+            data = json.loads(osw.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        weather = data.get("weather_file") if isinstance(data, dict) else None
+        if not isinstance(weather, str) or not weather.strip():
+            return None
+        found = find_weather_file(template_dir, weather, self._cfg.weather_dir)
+        if found is None:
+            raise FileNotFoundError(
+                "PRE-FLIGHT EPW VALIDATION FAILED: workflow.osw weather_file "
+                f"{weather!r} was not found in template_sim_package={template_dir} "
+                "(searched the package root, workflow.osw file_paths, files/ and "
+                f"{self._cfg.weather_dir}/)"
+            )
+        return found
 
     @staticmethod
     def _check_epw_existence(
         epw_mappings: list[tuple[str, dict[str, Any]]],
         template_dir: Path,
+        weather_dir: str = "weather",
     ) -> None:
         """Raise FileNotFoundError if any mapped .epw file is missing."""
         missing: list[str] = []
         for var_name, mapping in epw_mappings:
             for cat_value, epw_rel_path in mapping.items():
-                epw_abs = template_dir / str(epw_rel_path)
-                if not epw_abs.is_file():
+                if find_weather_file(template_dir, str(epw_rel_path), weather_dir) is None:
+                    epw_abs = template_dir / str(epw_rel_path)
                     missing.append(
                         f"  variable={var_name!r} value={cat_value!r} -> {epw_abs} (missing)"
                     )
@@ -114,12 +156,20 @@ class CampaignEpwResolver:
         self,
         epw_mappings: list[tuple[str, dict[str, Any]]],
         template_dir: Path,
+        extra_files: list[Path] | None = None,
     ) -> None:
         """Raise EPWValidationError if any .epw file has invalid format."""
         format_errors: list[str] = []
+        for extra in extra_files or []:
+            try:
+                validate_epw(extra)
+            except EPWValidationError as exc:
+                format_errors.append(f"  {exc}")
         for _var_name, mapping in epw_mappings:
             for _cat_value, epw_rel_path in mapping.items():
-                epw_abs = template_dir / str(epw_rel_path)
+                epw_abs = find_weather_file(
+                    template_dir, str(epw_rel_path), self._cfg.weather_dir
+                ) or template_dir / str(epw_rel_path)
                 try:
                     validate_epw(epw_abs)
                 except EPWValidationError as exc:
