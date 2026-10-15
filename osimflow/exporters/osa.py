@@ -174,6 +174,10 @@ class OSAExporter:
         - ``measures/`` (contents of ``template_sim_package/measures/``)
         - ``weather/`` (contents of ``template_sim_package/weather/``)
 
+        ``analysis.json`` and (when a seed is packed) ``seed.osm`` are
+        reserved names: same-named files in ``template_sim_package`` are
+        skipped so the archive never has duplicate members.
+
         If no ``.osm`` file is found, a ``_seed_missing_note`` key is
         added to the ``analysis.json`` inside the archive.  The export
         never fails for missing files.
@@ -231,7 +235,17 @@ class OSAExporter:
                     # other .osm files (files/, measures/<m>/tests/) are kept.
                     if seed_path is not None and f.resolve() == seed_path.resolve():
                         continue
-                    arcname = str(f.relative_to(tsp))
+                    arcname = f.relative_to(tsp).as_posix()
+                    # Generated entries are reserved; a colliding source file
+                    # (stale analysis.json, stray root seed.osm) is skipped.
+                    if arcname == "analysis.json" or (
+                        arcname == "seed.osm" and has_seed
+                    ):
+                        log.warning(
+                            "Skipping %s: archive name is reserved for generated content",
+                            arcname,
+                        )
+                        continue
                     if arcname == "workflow.osw" and files.seed_path is not None:
                         zf.writestr(arcname, self._osw_with_seed(f))
                         continue

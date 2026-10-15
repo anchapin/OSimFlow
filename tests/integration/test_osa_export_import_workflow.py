@@ -161,3 +161,28 @@ def test_ga_exported_as_ga_not_lhs(tmp_path: Path) -> None:
     with zipfile.ZipFile(osa) as zf:
         assert json.loads(zf.read("analysis.json"))["analysis"]["algorithm"]["type"] == "ga"
     assert not (tmp_path / "pack" / "_osa_staging").exists()
+
+
+def test_export_skips_stale_analysis_and_stray_seed(tmp_path: Path) -> None:
+    pkg = _make_package(tmp_path)
+    (pkg / "analysis.json").write_text('{"stale": true}\n', encoding="utf-8")
+    (pkg / "seed.osm").write_text("STRAY\n", encoding="utf-8")
+    outdir = tmp_path / "out"
+    rc = main(
+        [
+            "export",
+            "--target", "pat",
+            "--variables", str(_variables(tmp_path)),
+            "--outdir", str(outdir),
+            "--template-package", str(pkg),
+            "--n_samples", "9",
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    with zipfile.ZipFile(_osa_in(outdir)) as zf:
+        names = zf.namelist()
+        assert len(names) == len(set(names))
+        analysis = json.loads(zf.read("analysis.json"))
+        assert "stale" not in analysis
+        assert analysis["analysis"]["problem"]["algorithm"]["number_of_samples"] == 9
+        assert zf.read("seed.osm") != b"STRAY\n"
