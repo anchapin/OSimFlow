@@ -682,6 +682,16 @@ class BaseExecutor(abc.ABC):
         """
         return False
 
+    @property
+    def python_steps_use_openstudio_image(self) -> bool:
+        """Whether Python-only steps (e.g. ``APPLY_PARAMETERS``) must run in the OpenStudio image.
+
+        ``True`` for substrates whose job definition is pinned to the
+        ``nrel/openstudio`` image (AWS Batch), so the orchestrator must not
+        dispatch ``scientific_python_image`` work to them (issue #2118).
+        """
+        return False
+
     #: Whether this executor signs ``OSIMFLOW_TASK_PAYLOAD`` with the
     #: orchestrator's HMAC secret via ``build_signature_env``. The health
     #: check (issue #1404) warns when an executor requires the payload
