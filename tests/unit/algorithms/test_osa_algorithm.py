@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from osimflow.algorithms import AlgorithmRegistry, GridSamplingAlgorithm, LHSAlgorithm
+from osimflow.algorithms.factorial import FullFactorialAlgorithm
 from osimflow.importers.osa import (
     _OSA_ALGORITHM_MAP,
     OSAImportError,
@@ -82,15 +83,18 @@ class TestResolveAlgorithm:
         algo = _resolve_algorithm({"type": "latin_hypercube"})
         assert isinstance(algo, LHSAlgorithm)
 
-    def test_doe_maps_to_grid(self) -> None:
+    def test_doe_maps_to_full_factorial(self) -> None:
         algo = _resolve_algorithm({"type": "doe"})
-        assert isinstance(algo, GridSamplingAlgorithm)
-        assert algo.name() == "grid"
+        assert isinstance(algo, FullFactorialAlgorithm)
+        assert algo.name() == "full_factorial"
 
-    def test_full_factorial_maps_to_grid(self) -> None:
+    def test_full_factorial_maps_to_full_factorial(self) -> None:
         algo = _resolve_algorithm({"type": "full_factorial"})
+        assert isinstance(algo, FullFactorialAlgorithm)
+
+    def test_grid_maps_to_grid(self) -> None:
+        algo = _resolve_algorithm({"type": "grid"})
         assert isinstance(algo, GridSamplingAlgorithm)
-        assert algo.name() == "grid"
 
     def test_case_insensitive(self) -> None:
         algo = _resolve_algorithm({"type": "LHS"})
@@ -385,3 +389,33 @@ class TestHypotheticalRegisteredAlgorithm:
                 AlgorithmRegistry._registry["sobol"] = saved_sobol
             else:
                 AlgorithmRegistry._registry.pop("sobol", None)
+
+
+def test_full_factorial_honors_top_level_pmf(tmp_path: Path) -> None:
+    variables = {
+        "variables": [
+            {
+                "name": "x",
+                "distribution": "discrete",
+                "values": [1, 2],
+                "pmf": {1: 0.9, 2: 0.1},
+            }
+        ]
+    }
+    path = FullFactorialAlgorithm().generate_samples(variables, 200, 1, tmp_path)
+    drawn = [s["values"]["x"] for s in json.loads(path.read_text())["samples"]]
+    assert len(drawn) == 200
+    assert drawn.count(1) > drawn.count(2) * 3
+
+
+def test_full_factorial_handles_static_variable(tmp_path: Path) -> None:
+    variables = {
+        "variables": [
+            {"name": "x", "distribution": "discrete", "values": [1, 2]},
+            {"name": "locked", "distribution": "static", "value": 9},
+        ]
+    }
+    path = FullFactorialAlgorithm().generate_samples(variables, 2, 1, tmp_path)
+    samples = json.loads(path.read_text())["samples"]
+    assert [s["values"]["locked"] for s in samples] == [9, 9]
+    assert sorted(s["values"]["x"] for s in samples) == [1, 2]

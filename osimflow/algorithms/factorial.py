@@ -49,6 +49,8 @@ log = logging.getLogger("osimflow.algorithms.factorial")
 def _resolve_var_levels(var_def: dict[str, Any], var_name: str) -> list[Any]:
     """Return a non-empty list of factorial levels for *var_def*."""
     levels = var_def.get("levels")
+    if levels is None and var_def.get("distribution") == "static" and "value" in var_def:
+        return [var_def["value"]]
     if levels is None:
         values = var_def.get("values")
         if isinstance(values, list) and len(values) > 0:
@@ -106,6 +108,8 @@ def _fullfact_samples(
         pmf: dict[Any, float] | None = None
         if discrete_dist is not None and isinstance(discrete_dist, dict):
             pmf = discrete_dist.get("pmf")
+        if pmf is None and isinstance(var_def.get("pmf"), dict):
+            pmf = var_def["pmf"]
         if pmf is not None:
             has_pmf.append(True)
             level_lists.append(list(pmf.keys()))

@@ -48,7 +48,7 @@ uniform       uniform               min, max
 normal        normal                mean, sigma
 lognormal     lognormal             mean, sigma
 triangular    triangular            min, max, mode (optional)
-discrete      discrete              values
+discrete      discrete              values, pmf (optional)
 categorical   categorical           values, mapping (optional)
 pivot         categorical           values, mapping (optional)    pivot: true
 (none)        static                value                         locked variables
@@ -68,6 +68,7 @@ pivot                 pivot=true              mapped to categorical + flag
 
 import json
 import logging
+import math
 import shutil
 import zipfile
 from collections.abc import Callable
@@ -154,11 +155,43 @@ def _map_triangular(osa_dist: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _build_pmf(osimflow_type: str, values: list[Any], weights: Any) -> dict[Any, float] | None:
+    """Return ``{value: weight}`` when *weights* are present and non-uniform, else ``None``."""
+    if weights is None:
+        return None
+    if not isinstance(weights, list) or len(weights) != len(values):
+        raise OSAImportError(
+            f"{osimflow_type} 'weights' must be a list with one weight per value "
+            f"({len(values)} values, got {weights!r})"
+        )
+    try:
+        numeric = [float(w) for w in weights]
+    except (TypeError, ValueError) as exc:
+        raise OSAImportError(f"{osimflow_type} weights must be numeric, got {weights!r}") from exc
+    if any(w < 0 for w in numeric) or not math.isfinite(sum(numeric)) or sum(numeric) <= 0:
+        raise OSAImportError(
+            f"{osimflow_type} weights must be non-negative with a positive sum, got {weights!r}"
+        )
+    if len(set(numeric)) == 1:
+        return None
+    if len(set(map(str, values))) != len(values):
+        raise OSAImportError(f"{osimflow_type} weighted values must be unique, got {values!r}")
+    return dict(zip(values, numeric, strict=True))
+
+
 def _map_discrete_or_categorical(osimflow_type: str, osa_dist: dict[str, Any]) -> dict[str, Any]:
     values = osa_dist.get("values") or osa_dist.get("discrete_values")
+    weights = osa_dist.get("weights")
+    vaw = osa_dist.get("values_and_weights")
+    if not values and isinstance(vaw, list):
+        values = [item["value"] for item in vaw if isinstance(item, dict) and "value" in item]
+        weights = [item.get("weight") for item in vaw if isinstance(item, dict) and "value" in item]
     if not values or not isinstance(values, list):
         raise OSAImportError(f"{osimflow_type} distribution requires a non-empty 'values' list")
     result: dict[str, Any] = {"values": values}
+    pmf = _build_pmf(osimflow_type, values, weights)
+    if pmf is not None:
+        result["pmf"] = pmf
     mapping = osa_dist.get("mapping")
     if mapping and isinstance(mapping, dict):
         result["mapping"] = mapping
@@ -291,8 +324,15 @@ def _normalize_uncertainty_description(unc: dict[str, Any]) -> dict[str, Any]:
             if attr.get("value") is not None:
                 dist["mean"] = attr.get("value")
         elif name == "discrete":
-            vaw = attr.get("values_and_weights", [])
-            dist["values"] = [item["value"] for item in vaw if "value" in item]
+            vaw = [i for i in attr.get("values_and_weights", []) if isinstance(i, dict)]
+            vaw = [item for item in vaw if "value" in item]
+            dist["values"] = [item["value"] for item in vaw]
+            if vaw and all(item.get("weight") is not None for item in vaw):
+                dist["weights"] = [item["weight"] for item in vaw]
+        elif name == "weights" and isinstance(attr.get("value"), list):
+            dist["weights"] = attr["value"]
+        elif name in ("values", "discrete_values") and isinstance(attr.get("value"), list):
+            dist["values"] = attr["value"]
     return dist
 
 
@@ -345,8 +385,8 @@ _OSA_ALGORITHM_MAP: dict[str, str] = {
     "sobol": "sobol",
     "morris": "morris",
     "fast99": "fast99",
-    "doe": "grid",
-    "full_factorial": "grid",
+    "doe": "full_factorial",
+    "full_factorial": "full_factorial",
     "grid": "grid",
     "single_run": "lhs",
     "preflight": "lhs",
@@ -586,6 +626,27 @@ def _extract_n_samples(algorithm: dict[str, Any]) -> int | None:
     return int(raw_n)
 
 
+def _cartesian_sample_count(variables: list[dict[str, Any]]) -> int | None:
+    """Product of per-variable level counts (``values`` or ``[min, max]``), or ``None``."""
+    count = 1
+    seen = False
+    for var in variables:
+        if var.get("distribution") == "conditional":
+            continue
+        if var.get("distribution") == "static":
+            seen = True
+            continue
+        values = var.get("values")
+        if isinstance(values, list) and values:
+            count *= len(values)
+        elif var.get("min") is not None and var.get("max") is not None:
+            count *= 2
+        else:
+            return None
+        seen = True
+    return count if seen else None
+
+
 def _supports_prebuilt_workflow(problem: dict[str, Any], allow_empty: bool) -> bool:
     """Return True when a 0-variable OSA problem represents a valid prebuilt workflow."""
     if allow_empty:
@@ -703,6 +764,10 @@ def osa_to_variables_yml(
         metadata["n_samples"] = n_samples
     elif is_prebuilt:
         metadata["n_samples"] = 1
+    elif algorithm_name == "full_factorial":
+        cartesian = _cartesian_sample_count(converted)
+        if cartesian is not None:
+            metadata["n_samples"] = cartesian
     if seed is not None:
         metadata["seed"] = seed
 
