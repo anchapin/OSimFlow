@@ -15,6 +15,7 @@ __all__ = ["ValidationError"]
 
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Callable
@@ -347,6 +348,20 @@ def _validate_discrete_categorical(var: dict[str, Any], prefix: str) -> None:
             f"{prefix}: 'values' list must not be empty",
             field=prefix,
         )
+    pmf = var.get("pmf")
+    if pmf is None:
+        return
+    if not isinstance(pmf, dict) or not pmf:
+        raise ValidationError(f"{prefix}: 'pmf' must be a non-empty mapping", field=prefix)
+    weights = list(pmf.values())
+    if not all(isinstance(w, (int, float)) and not isinstance(w, bool) and w >= 0 for w in weights):
+        raise ValidationError(f"{prefix}: 'pmf' weights must be non-negative numbers", field=prefix)
+    if not math.isfinite(sum(weights)) or sum(weights) <= 0:
+        raise ValidationError(
+            f"{prefix}: 'pmf' weights must be finite with a positive sum", field=prefix
+        )
+    if {str(k) for k in pmf} != {str(v) for v in values}:
+        raise ValidationError(f"{prefix}: 'pmf' keys must match 'values'", field=prefix)
 
 
 def _validate_beta(var: dict[str, Any], prefix: str) -> None:

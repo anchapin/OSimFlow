@@ -132,6 +132,12 @@ osimflow import-osa analysis.json --output variables.yml \
   --template-package ./seed_package --package-output ./template_sim_package
 ```
 
+`doe` and `full_factorial` analyses import as `algorithm: full_factorial`
+(`grid` stays `grid`). When `number_of_samples` is absent,
+`_metadata.n_samples` is the Cartesian product of the variables' level
+counts. Non-uniform `values_and_weights` / `weights` on discrete variables
+are preserved as `pmf: {value: weight}`.
+
 The staged package always contains a canonical `workflow.osw` (a single
 alternate `*.osw` from the archive is overlaid and written to that name).
 At run time the seed `.osm` is taken from `workflow.osw`'s `seed_file`

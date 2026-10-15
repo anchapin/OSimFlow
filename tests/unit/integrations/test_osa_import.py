@@ -4,6 +4,7 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -428,17 +429,20 @@ class TestResolveAlgorithm:
         algo = _resolve_algorithm({"type": "sobol"})
         assert algo.name() == "sobol"
 
-    def test_doe_maps_to_grid(self) -> None:
+    def test_doe_maps_to_full_factorial(self) -> None:
         from osimflow.importers.osa import _resolve_algorithm
 
-        algo = _resolve_algorithm({"type": "doe"})
-        assert algo.name() == "grid"
+        assert _resolve_algorithm({"type": "doe"}).name() == "full_factorial"
 
-    def test_full_factorial_maps_to_grid(self) -> None:
+    def test_full_factorial_maps_to_full_factorial(self) -> None:
         from osimflow.importers.osa import _resolve_algorithm
 
-        algo = _resolve_algorithm({"type": "full_factorial"})
-        assert algo.name() == "grid"
+        assert _resolve_algorithm({"type": "full_factorial"}).name() == "full_factorial"
+
+    def test_grid_stays_grid(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        assert _resolve_algorithm({"type": "grid"}).name() == "grid"
 
     def test_single_run_maps_to_lhs(self) -> None:
         from osimflow.importers.osa import _resolve_algorithm
@@ -732,7 +736,7 @@ class TestOsaToVariablesYmlAdditional:
         assert yml["_metadata"]["seed"] == 123
         assert yml["_metadata"]["algorithm"] == "lhs"
 
-    def test_metadata_preserves_seed_n_samples_and_doe_grid_mapping(self, tmp_path: Path) -> None:
+    def test_metadata_preserves_seed_n_samples_and_doe_mapping(self, tmp_path: Path) -> None:
         data = {
             "problem": {
                 "algorithm": {
@@ -751,10 +755,10 @@ class TestOsaToVariablesYmlAdditional:
         out = tmp_path / "variables.yml"
         osa_to_variables_yml(data, out)
         yml = yaml.safe_load(out.read_text(encoding="utf-8"))
-        assert yml["algorithm"] == "grid"
+        assert yml["algorithm"] == "full_factorial"
         assert yml["seed"] == 1973
         assert yml["_metadata"] == {
-            "algorithm": "grid",
+            "algorithm": "full_factorial",
             "n_samples": 16,
             "seed": 1973,
         }
@@ -1259,3 +1263,127 @@ class TestImportersPublicAPI:
 def _write_json(path: Path, data: dict) -> Path:
     path.write_text(json.dumps(data))
     return path
+
+
+class TestDoeFullFactorialImport:
+    @staticmethod
+    def _problem(algo: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "problem": {
+                "algorithm": algo,
+                "variables": [
+                    {
+                        "name": "A.x",
+                        "uncertainty_description": {
+                            "type": "discrete",
+                            "attributes": [
+                                {
+                                    "name": "discrete",
+                                    "values_and_weights": [
+                                        {"value": 1.0, "weight": 0.7},
+                                        {"value": 2.0, "weight": 0.2},
+                                        {"value": 3.0, "weight": 0.1},
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "name": "B.y",
+                        "uncertainty_description": {
+                            "type": "discrete",
+                            "attributes": [
+                                {
+                                    "name": "discrete",
+                                    "values_and_weights": [
+                                        {"value": "a", "weight": 0.5},
+                                        {"value": "b", "weight": 0.5},
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                ],
+            }
+        }
+
+    @pytest.mark.parametrize("algo_type", ["doe", "full_factorial"])
+    def test_cartesian_n_samples_and_pmf(self, tmp_path: Path, algo_type: str) -> None:
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(self._problem({"type": algo_type}), out)
+        yml = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert yml["algorithm"] == "full_factorial"
+        assert yml["_metadata"]["n_samples"] == 6
+        x, y = yml["variables"]
+        assert x["pmf"] == {1.0: 0.7, 2.0: 0.2, 3.0: 0.1}
+        assert x["values"] == [1.0, 2.0, 3.0]
+        assert "pmf" not in y  # uniform weights are dropped
+
+    def test_explicit_number_of_samples_wins(self, tmp_path: Path) -> None:
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(self._problem({"type": "doe", "number_of_samples": 12}), out)
+        assert yaml.safe_load(out.read_text())["_metadata"]["n_samples"] == 12
+
+    def test_weights_attribute_and_validation(self) -> None:
+        dist = {"type": "discrete", "values": [1, 2], "weights": [3, 1]}
+        assert _map_distribution(dist)["pmf"] == {1: 3.0, 2: 1.0}
+        with pytest.raises(OSAImportError, match="weights"):
+            _map_distribution({"type": "discrete", "values": [1, 2], "weights": [1]})
+        with pytest.raises(OSAImportError, match="non-negative"):
+            _map_distribution({"type": "discrete", "values": [1, 2], "weights": [-1, 2]})
+
+    def test_pmf_accepted_by_variables_validation(self) -> None:
+        from osimflow.validation import ValidationError, _validate_discrete_categorical
+
+        _validate_discrete_categorical({"values": [1, 2], "pmf": {1: 0.3, 2: 0.7}}, "v")
+        with pytest.raises(ValidationError):
+            _validate_discrete_categorical({"values": [1, 2], "pmf": {1: 0.3, 3: 0.7}}, "v")
+
+    def test_campaign_runs_full_factorial_from_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow import Campaign
+        from osimflow.config import load_config
+        from osimflow.executors import LocalExecutor
+
+        monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        data = self._problem({"type": "full_factorial", "seed": 7})
+        for var in data["problem"]["variables"]:
+            for attr in var["uncertainty_description"]["attributes"]:
+                for item in attr["values_and_weights"]:
+                    item["weight"] = 1.0
+                    if isinstance(item["value"], str):
+                        item["value"] = {"a": 1.0, "b": 2.0}[item["value"]]
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text(json.dumps({"steps": []}))
+        (pkg / "model.osm").write_text(json.dumps({"attributes": {"A.x": 1.0, "B.y": 1.0}}))
+        cfg = load_config(
+            {
+                "template_sim_package": str(pkg),
+                "input_variables": str(out),
+                "n_samples": 6,
+                "outdir": str(tmp_path / "out"),
+                "openstudio_version": "3.11.0",
+                "executor": "local",
+            }
+        )
+        Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1)).run()
+        samples = json.loads((cfg.work_dir / "samples.json").read_text())["samples"]
+        assert len(samples) == 6
+
+
+def test_cartesian_count_with_static_and_nonfinite_weights() -> None:
+    from osimflow.importers.osa import _cartesian_sample_count
+
+    assert _cartesian_sample_count([{"distribution": "static", "value": 1}]) == 1
+    assert (
+        _cartesian_sample_count(
+            [{"distribution": "static"}, {"distribution": "discrete", "values": [1, 2, 3]}]
+        )
+        == 3
+    )
+    with pytest.raises(OSAImportError, match="non-negative"):
+        _map_distribution({"type": "discrete", "values": [1, 2], "weights": [float("inf"), 1]})
