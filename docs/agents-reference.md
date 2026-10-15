@@ -725,6 +725,19 @@ name in this section.
   `osimflow/registry/results_db.py`,
   `osimflow/validation.py` (`ValidationError`) — internal
   supporting modules.
+- `apply_params.apply_parameters` / `bin/apply_params_to_model.py` share
+  their OSW/OSM mutation logic with `work.default_apply_parameters` via
+  `osimflow/_work_osm_mutations.py` (issue #2112): categorical
+  `{"label","index"}` unpacking, `__epw_file__`, JSON-stub / OpenStudio
+  `.osm` mutation. `apply_parameters(..., variable_defs=...)` (see
+  `load_variable_defs`; script flag `--input_variables`) adds
+  `measure_argument` aliases and `target: epw_file` resolution.
+  Collision policy is shared: a name that is both an OSW measure argument
+  and an `.osm` attribute is written to the OSW only; the `.osm` receives
+  just the remainder. Narrow documented difference: standalone
+  `apply_parameters` always applies JSON-stub `.osm` mutations, whereas
+  `default_apply_parameters` skips `.osm` mutation under
+  `OSIMFLOW_STUB_SIM=1`.
 - `osimflow/webhook.py` — `WebhookClient` (campaign-completion
   callback POSTs with retry/backoff) + `WebhookSSRFError` +
   `WebhookDeliveryError`.  SSRF validation (issues #1175, #1671):

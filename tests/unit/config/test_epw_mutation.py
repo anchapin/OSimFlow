@@ -185,11 +185,12 @@ class TestApplyParametersEpw:
         # Check the .osw weather_file was mutated
         osw = json.loads((out_dir / "workflow.osw").read_text())
         assert osw["weather_file"] == "weather/USA_NY_New.York.epw"
-        # Note: 'wwr' maps to .osm attribute (not .osw measure argument)
-        # due to _build_mappings collision resolution, so we verify the
-        # .osm was mutated instead.
+        # 'wwr' is both an OSW measure argument and an .osm attribute; as in
+        # work.default_apply_parameters the OSW consumes it and the .osm is
+        # left untouched.
+        assert osw["steps"][0]["arguments"]["wwr"] == 0.35
         osm = json.loads((out_dir / "model.osm").read_text())
-        assert osm["attributes"]["wwr"] == 0.35
+        assert osm["attributes"]["wwr"] == 0.4
 
     def test_epw_file_mutation_single_osw(self, tmp_path: Path) -> None:
         """When template is a single .osw, weather_file is updated."""
