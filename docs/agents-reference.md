@@ -236,7 +236,7 @@ name in this section.
   messages from `out.osw` / `run.log` (issue #1871): `parse_out_osw`,
   `extract_failure_message_from_osw`,
   `collect_failure_message_from_run_log`, `failure_message`,
-  `BENIGN_ERROR_PATTERN`, `MEASURE_RESULTS_TOKEN` (`--kpis`
+  `MEASURE_RESULTS_TOKEN` (`--kpis`
   opt-in token), `SIMULATION_FAILED_KEY`, `OUT_OSW_NAME`,
   `RUN_LOG_NAME`. `work._publish_run_artifacts` copies both files into
   the per-sample sim dir (success or failure); `extract_kpis` includes the
