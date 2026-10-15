@@ -79,6 +79,7 @@ def main() -> int:
     # Lazy import so the OpenStudio binding dependency is optional at
     # import time. AGENTS.md §6 mandates this isolation.
     from osimflow.apply_params import (  # noqa: PLC0415
+        ArgumentCoercionError,
         OpenStudioBindingsMissingError,
         UnmappedParameterError,
         apply_parameters,
@@ -91,7 +92,7 @@ def main() -> int:
             sample_id=args.sample_id,
             out=args.out,
         )
-    except UnmappedParameterError as exc:
+    except (UnmappedParameterError, ArgumentCoercionError) as exc:
         # Pre-flight failure: print the error to stderr and exit non-zero
         # so the work layer's subprocess.run can detect the failure.
         log.error("Pre-flight check failed for sample_id=%s: %s", args.sample_id, exc)
