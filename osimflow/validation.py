@@ -62,6 +62,7 @@ DISTRIBUTION_PARAMS: dict[str, set[str]] = {
     "beta": {"alpha", "beta"},
     "gamma": {"alpha"},
     "exponential": {"rate"},
+    "static": {"value"},
 }
 
 VALID_DISTRIBUTIONS: frozenset[str] = frozenset(DISTRIBUTION_PARAMS)
@@ -397,6 +398,14 @@ def _validate_exponential(var: dict[str, Any], prefix: str) -> None:
         )
 
 
+def _validate_static(var: dict[str, Any], prefix: str) -> None:
+    if var.get("value") is None:
+        raise ValidationError(
+            f"{prefix}: distribution 'static' requires a non-null 'value'",
+            field=prefix,
+        )
+
+
 _DISPATCH_TABLE: dict[str, Callable[[dict[str, Any], str], None]] = {
     "uniform": _validate_uniform,
     "normal": _validate_normal_lognormal,
@@ -407,6 +416,7 @@ _DISPATCH_TABLE: dict[str, Callable[[dict[str, Any], str], None]] = {
     "beta": _validate_beta,
     "gamma": _validate_gamma,
     "exponential": _validate_exponential,
+    "static": _validate_static,
 }
 
 

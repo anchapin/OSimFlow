@@ -161,6 +161,19 @@ class SobolAlgorithm(BaseAlgorithm):
         if not independent_vars:
             return _write_empty_samples(samples_path)
 
+        # Static variables are constants: keep them out of the Sobol design (issue #2095).
+        static_vars = [v for v in independent_vars if v.get("distribution") == "static"]
+        independent_vars = [v for v in independent_vars if v.get("distribution") != "static"]
+        static_values = {v["name"]: v.get("value") for v in static_vars}
+
+        if not independent_vars:
+            static_only = [
+                {"sample_id": f"{i + 1:04d}", "values": dict(static_values)}
+                for i in range(n_samples)
+            ]
+            samples_path.write_text(json.dumps({"samples": static_only}, indent=2))
+            return samples_path
+
         try:
             from SALib.sample.sobol import sample as sobol_sample  # noqa: PLC0415
 
@@ -174,6 +187,7 @@ class SobolAlgorithm(BaseAlgorithm):
             values: dict[str, Any] = {}
             for j, var_def in enumerate(independent_vars):
                 values[var_def["name"]] = float(raw[i, j])
+            values.update(static_values)
             samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
         if conditional_vars:
@@ -257,8 +271,9 @@ class SobolAlgorithm(BaseAlgorithm):
             raise RuntimeError("compute_sensitivity_indices: no variables defined")
 
         independent_vars, _ = _partition_variables(var_list)
+        independent_vars = [v for v in independent_vars if v.get("distribution") != "static"]
         if not independent_vars:
-            raise RuntimeError("compute_sensitivity_indices: no independent variables")
+            raise RuntimeError("compute_sensitivity_indices: no independent variables to vary")
 
         problem = _build_salib_problem(independent_vars)
 
