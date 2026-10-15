@@ -1,5 +1,6 @@
 """Moved from ``osimflow.work`` (issue #1890); re-exported there."""
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,29 @@ def _apply_osw_parameters(osw_path: Path, parameters: dict[str, Any]) -> dict[st
     if epw_file is not None:
         mutate_osw_weather_file(osw_path, str(epw_file))
     return remaining
+
+
+def _apply_json_stub_osm_attributes(osm_path: Path, parameters: dict[str, Any]) -> bool:
+    """Mutate a test-mode JSON ``model.osm`` in place if it starts with ``{``."""
+    try:
+        text = osm_path.read_text()
+    except OSError:
+        return False
+    if not text.lstrip().startswith("{"):
+        return False
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    attrs = data.setdefault("attributes", {})
+    if not isinstance(attrs, dict):
+        return False
+    for name, value in parameters.items():
+        attrs[name] = value
+    osm_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return True
 
 
 def _apply_osm_mutations(

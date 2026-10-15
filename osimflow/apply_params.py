@@ -1184,6 +1184,8 @@ def preflight_validate_osm_paths(
     except ImportError:
         return []
 
+    from ._work_osm_mutations import _resolve_osm_object  # noqa: PLC0415
+
     warnings: list[str] = []
     invalid_paths: list[str] = []
 
@@ -1196,7 +1198,7 @@ def preflight_validate_osm_paths(
         if mapping.object_type is None or mapping.object_name is None:
             continue
         # Dotted path: validate that the object exists in the model.
-        found = _resolve_model_object(model, openstudio, mapping.object_type, mapping.object_name)
+        found = _resolve_osm_object(model, openstudio, mapping.object_type, mapping.object_name)
         if found is None:
             invalid_paths.append(
                 f"{mapping.object_type} '{mapping.object_name}' (from variable '{name}')"
@@ -1210,28 +1212,6 @@ def preflight_validate_osm_paths(
             + ". Check the object_type and object_name in variables.yml."
         )
     return warnings
-
-
-def _resolve_model_object(
-    model: Any,
-    openstudio: Any,
-    object_type: str,
-    object_name: str,
-) -> Any | None:
-    """Resolve an OpenStudio model object by type and name.
-
-    Returns the model object, or ``None`` if no matching object exists.
-    """
-    getter_name = "get" + object_type + "s"
-    getter = getattr(model, getter_name, None)
-    if getter is None:
-        log.warning("Unsupported .osm object type %r — skipping validation", object_type)
-        return None
-    objects = getter()
-    for obj in objects:
-        if obj.nameString() == object_name:
-            return obj
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1311,12 +1291,16 @@ def _mutate_osm(
             )
         _mutate_osm_production(osm_path, parameters, mappings)
         return
-    # JSON-mode stub
-    data = json.loads(text)
-    for name, value in parameters.items():
-        if name in mappings and mappings[name].kind == "attribute":
-            data.setdefault("attributes", {})[name] = value
-    osm_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    # JSON-mode stub (shared with work.default_apply_parameters' fallback).
+    from ._work_osm_mutations import _apply_json_stub_osm_attributes  # noqa: PLC0415
+
+    attrs = {
+        name: value
+        for name, value in parameters.items()
+        if name in mappings and mappings[name].kind == "attribute"
+    }
+    if not _apply_json_stub_osm_attributes(osm_path, attrs):
+        raise ValueError(f"Invalid JSON-mode .osm (expected a JSON object): {osm_path}")
 
 
 def _mutate_osm_production(
@@ -1354,164 +1338,23 @@ def _mutate_osm_production(
             "bindings. Install `openstudio` on the executor host."
         ) from exc
 
+    from ._work_osm_mutations import _apply_osm_mutations  # noqa: PLC0415
+
     model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
     if not model_opt.is_initialized():
         raise ValueError(f"OpenStudio failed to load model from {osm_path}")
     model = model_opt.get()
 
-    for name, value in parameters.items():
-        mapping = mappings.get(name)
-        if mapping is None or mapping.kind != "attribute":
-            continue
-        _apply_osm_mutation(model, openstudio, mapping, value)
+    attributes = {
+        name: value
+        for name, value in parameters.items()
+        if name in mappings and mappings[name].kind == "attribute"
+    }
+    _apply_osm_mutations(model, openstudio, attributes)
 
     # Save the mutated model back to the same path.
     model.save(str(osm_path), overwrite=True)
     log.info("Mutated production .osm saved to %s", osm_path)
-
-
-def _apply_osm_mutation(
-    model: Any,
-    openstudio: Any,
-    mapping: MappedParameter,
-    value: Any,
-) -> None:
-    """Apply a single parameter mutation to an OpenStudio model.
-
-    Resolves the target object and attribute, performs type coercion,
-    and calls the appropriate SDK setter.
-
-    Raises:
-        OSMAttributeError: if the object or attribute cannot be resolved.
-    """
-    attribute = mapping.name
-    obj: Any = model  # Default: model-level attribute
-
-    # If dotted name, resolve to the specific model object.
-    if mapping.object_type is not None and mapping.object_name is not None:
-        obj = _resolve_model_object(model, openstudio, mapping.object_type, mapping.object_name)
-        if obj is None:
-            raise OSMAttributeError(
-                f"Cannot resolve {mapping.object_type} "
-                f"'{mapping.object_name}' for variable '{mapping.name}'. "
-                f"The object does not exist in the model."
-            )
-        # For dotted names, use the parsed attribute (the part after the dot).
-        parsed = parse_dotted_name(mapping.name)
-        attribute = parsed.attribute
-
-    # Coerce the value type and apply.
-    coerced = _coerce_value(value)
-    _set_attribute(obj, openstudio, mapping.object_type, attribute, coerced)
-
-
-def _coerce_value(value: Any) -> Any:
-    """Coerce a parameter value for the OpenStudio SDK.
-
-    Rules:
-      * ``int`` → ``float`` (OpenStudio numeric setters expect doubles).
-      * ``float`` → ``float`` (pass-through).
-      * ``str`` → ``str`` (pass-through).
-      * ``bool`` → ``bool`` (pass-through).
-      * Other types → raise ``TypeError``.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    if isinstance(value, str):
-        return value
-    raise TypeError(
-        f"Cannot coerce parameter value of type {type(value).__name__} "
-        f"for OpenStudio SDK: {value!r}"
-    )
-
-
-def _set_attribute(
-    obj: Any,
-    openstudio: Any,
-    object_type: str | None,
-    attribute: str,
-    value: Any,
-) -> None:
-    """Set an attribute on a resolved OpenStudio model object.
-
-    Dispatches to the correct SDK setter based on the object type and
-    attribute name. Falls back to ``obj.setString`` for unknown attributes.
-
-    Raises:
-        OSMAttributeError: if the setter fails or the attribute is
-            not recognized.
-    """
-    setter_map: dict[str, dict[str, Any]] = {
-        "SpaceType": {
-            "lighting_power_density": lambda o, v: o.setLightingPowerPerFloorArea(v),
-        },
-        "ThermalZone": {
-            "cooling_setpoint": lambda o, v: _set_schedule_constant(o, openstudio, v, "cooling"),
-            "heating_setpoint": lambda o, v: _set_schedule_constant(o, openstudio, v, "heating"),
-        },
-        "Construction": {
-            "u_value": lambda o, v: o.setThermalConductance(v),
-        },
-        "Lights": {
-            "lighting_level": lambda o, v: o.setLightingLevel(v),
-        },
-        "People": {
-            "people_per_floor_area": lambda o, v: o.setPeopleperSpaceFloorArea(v),
-        },
-    }
-
-    if object_type is not None and object_type in setter_map:
-        attr_map = setter_map[object_type]
-        setter = attr_map.get(attribute)
-        if setter is not None:
-            try:
-                setter(obj, value)
-            except Exception as exc:
-                raise OSMAttributeError(
-                    f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
-                ) from exc
-            return
-
-    # Fallback: try setString (generic IDD attribute).
-    if isinstance(value, str):
-        obj.setString(attribute, value)
-    elif isinstance(value, (int, float)):
-        obj.setString(attribute, str(value))
-    else:
-        raise OSMAttributeError(
-            f"No setter for {object_type}.{attribute} with value type "
-            f"{type(value).__name__}. Define an explicit setter in "
-            f"osimflow/apply_params.py."
-        )
-
-
-def _set_schedule_constant(
-    zone: Any,
-    openstudio: Any,
-    value: float,
-    kind: str,
-) -> None:
-    """Set a constant temperature schedule on a ThermalZone.
-
-    Creates a :class:`ScheduleConstant` and assigns it as the cooling
-    or heating setpoint schedule on the zone.
-
-    Args:
-        zone: the ThermalZone model object.
-        openstudio: the openstudio module.
-        value: the temperature value (°C).
-        kind: ``"cooling"`` or ``"heating"``.
-    """
-    schedule = openstudio.openstudiomodelcore.ScheduleConstant(zone.model())
-    schedule.setValue(value)
-    if kind == "cooling":
-        zone.setCoolingSetpointTemperatureSchedule(schedule)
-    else:
-        zone.setHeatingSetpointTemperatureSchedule(schedule)
 
 
 def mutate_osw_weather_file(osw_path: Path, epw_path: str) -> None:
@@ -1726,26 +1569,73 @@ def _load_custom_apply(script_path: Path) -> Any:  # noqa: ARG001
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+def load_variable_defs(variables_yml: Path) -> list[dict[str, Any]]:
+    """Load the ``variables`` list from a ``variables.yml`` file."""
+    import yaml  # noqa: PLC0415
+
+    try:
+        data = yaml.safe_load(variables_yml.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise OSimFlowValueError(f"{variables_yml}: invalid YAML: {exc}") from exc
+    variables = data.get("variables") if isinstance(data, dict) else data
+    if not isinstance(variables, list):
+        raise OSimFlowValueError(f"{variables_yml}: expected a 'variables' list")
+    return [v for v in variables if isinstance(v, dict)]
+
+
+def _resolve_variable_defs(
+    parameters: dict[str, Any],
+    variable_defs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply ``variables.yml`` ``epw_file`` targets and ``measure_argument`` aliases.
+
+    ``target: epw_file`` variables become the reserved :data:`EPW_FILE_KEY`
+    (via the variable's ``mapping``); variables with a ``measure_argument``
+    are renamed to that target, mirroring ``Campaign.step_apply_parameters``.
+    """
+    resolved = dict(parameters)
+    for var in variable_defs:
+        name = var.get("name")
+        if var.get("target") != "epw_file" or name not in resolved:
+            continue
+        raw = resolved.pop(name)
+        label = raw["label"] if isinstance(raw, dict) and "label" in raw else raw
+        epw_path = (var.get("mapping") or {}).get(label)
+        if epw_path is None:
+            raise ValueError(f"epw_file variable {name!r}: value {label!r} not in its mapping")
+        resolved[EPW_FILE_KEY] = str(epw_path)
+    return resolve_measure_argument_keys(resolved, build_measure_argument_alias_map(variable_defs))
+
+
 def apply_parameters(
     template: Path,
     parameters: dict[str, Any],
     sample_id: str,
     out: Path,
+    *,
+    variable_defs: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Apply a parameter set to a template and write the per-sample output.
 
+    Shares its OSW/OSM mutation semantics with
+    :func:`osimflow.work.default_apply_parameters` (via
+    ``osimflow._work_osm_mutations``): categorical ``{"label", "index"}``
+    values are written as their label, the reserved :data:`EPW_FILE_KEY`
+    sets ``weather_file``, and ``.osm`` attributes are mutated through the
+    OpenStudio bindings (JSON stub fallback for test-mode ``.osm`` files).
+
     Args:
-        template: the template_sim_package file (.osm or .osw).
+        template: the template_sim_package file (.osm or .osw) or directory.
         parameters: the LHS dict for this sample, e.g. ``{"wwr": 0.4}``.
             May contain the reserved key :data:`EPW_FILE_KEY`
-            (``"__epw_file__"``) when the Campaign has resolved an
-            ``epw_file`` target.  This key is extracted before the
-            pre-flight check (because it does not correspond to a
-            measure argument or .osm attribute) and applied as a
-            top-level ``weather_file`` mutation on the .osw after all
-            normal mutations are complete.
+            (``"__epw_file__"``); it is extracted before the pre-flight
+            check and applied as a top-level ``weather_file`` mutation.
+            The caller's dict is not modified.
         sample_id: the sample's identifier, e.g. ``"0001"``.
         out: the per-sample output directory. Created if missing.
+        variable_defs: optional ``variables.yml`` ``variables`` list (see
+            :func:`load_variable_defs`). Enables ``measure_argument``
+            aliases and ``target: epw_file`` resolution.
 
     Returns:
         The per-sample output directory (``out``).
@@ -1762,27 +1652,23 @@ def apply_parameters(
             object type or instance name that does not exist in the
             model. Raised during pre-flight path validation.
     """
+    from ._work_osm_mutations import _apply_osw_parameters  # noqa: PLC0415
+
     original_template = template
-    # Extract the epw_file reserved key BEFORE the pre-flight check.
-    # This key is not a measure argument or .osm attribute — it is
-    # a top-level .osw field handled by mutate_osw_weather_file.
-    epw_file_value: str | None = parameters.pop(EPW_FILE_KEY, None)
-    # Build the union of mappings from BOTH files (if directory).
+    params = (
+        _resolve_variable_defs(parameters, variable_defs) if variable_defs else dict(parameters)
+    )
+    # The epw key is not a measure argument or .osm attribute; keep it out
+    # of the pre-flight check and apply it via the shared OSW path.
+    epw_file_value = params.pop(EPW_FILE_KEY, None)
     mappings = _build_mappings(template)
-    # The file we will mutate (or that the user_ctx references).
     target_file = _select_template_file(template)
     template_type = detect_template_type(target_file)
 
-    # Pre-flight.
-    preflight_check(parameters, mappings)
+    preflight_check(params, mappings)
 
-    # Default path: copy all template artifacts into the per-sample
-    # output, then mutate BOTH files (when applicable) so every
-    # mapped parameter lands somewhere sensible. We mutate in two
-    # passes: first the .osw (so measure arguments are applied), then
-    # the .osm (so model attributes are applied). Each pass skips
-    # parameters that don't apply to its file.
     _copy_template_artifacts(original_template, out)
+    osm_in_out: Path | None
     if original_template.is_dir():
         osw_in_out = out / "workflow.osw"
         _, template_osm = _resolve_dir_template(original_template)
@@ -1791,32 +1677,24 @@ def apply_parameters(
             if template_osm is not None
             else out / "model.osm"
         )
-        if osw_in_out.is_file():
-            _mutate_osw(osw_in_out, parameters, mappings)
-        if osm_in_out.is_file():
-            _mutate_osm(osm_in_out, parameters, mappings)
+    elif template_type == "osm":
+        osw_in_out = out / "workflow.osw"
+        osm_in_out = out / target_file.name
     else:
-        target_in_out = out / target_file.name
-        if template_type == "osm":
-            _mutate_osm(target_in_out, parameters, mappings)
-        else:
-            _mutate_osw(target_in_out, parameters, mappings)
+        osw_in_out = out / target_file.name
+        osm_in_out = None
 
-    # Apply .epw weather file mutation AFTER normal mutations.
-    # This updates the top-level ``weather_file`` field in the .osw.
+    osw_params = dict(params)
     if epw_file_value is not None:
-        osw_target: Path | None = None
-        if original_template.is_dir():
-            osw_target = out / "workflow.osw"
-        elif template_type == "osw":
-            osw_target = out / target_file.name
-        if osw_target is not None and osw_target.is_file():
-            mutate_osw_weather_file(osw_target, epw_file_value)
-        else:
-            log.warning(
-                "epw_file target specified but no .osw found to mutate "
-                "for sample_id=%s; skipping weather_file update",
-                sample_id,
-            )
+        osw_params[EPW_FILE_KEY] = epw_file_value
+    # OSW pass: measure arguments + weather_file. The .osm pass takes every
+    # parameter mapped to an attribute, even one the OSW also consumed
+    # (a name colliding across both files is mutated in each, as before).
+    _apply_osw_parameters(osw_in_out, osw_params)
+    osm_params = {
+        k: v for k, v in params.items() if k in mappings and mappings[k].kind == "attribute"
+    }
+    if osm_params and osm_in_out is not None and osm_in_out.is_file():
+        _mutate_osm(osm_in_out, osm_params, mappings)
 
     return out

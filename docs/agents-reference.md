@@ -725,6 +725,13 @@ name in this section.
   `osimflow/registry/results_db.py`,
   `osimflow/validation.py` (`ValidationError`) — internal
   supporting modules.
+- `apply_params.apply_parameters` / `bin/apply_params_to_model.py` share
+  their OSW/OSM mutation logic with `work.default_apply_parameters` via
+  `osimflow/_work_osm_mutations.py` (issue #2112): categorical
+  `{"label","index"}` unpacking, `__epw_file__`, JSON-stub / OpenStudio
+  `.osm` mutation. `apply_parameters(..., variable_defs=...)` (see
+  `load_variable_defs`; script flag `--input_variables`) adds
+  `measure_argument` aliases and `target: epw_file` resolution.
 - `osimflow/webhook.py` — `WebhookClient` (campaign-completion
   callback POSTs with retry/backoff) + `WebhookSSRFError` +
   `WebhookDeliveryError`.  SSRF validation (issues #1175, #1671):

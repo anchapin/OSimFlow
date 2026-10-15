@@ -20,16 +20,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from osimflow._work_osm_mutations import _apply_osm_mutations, _resolve_osm_object
 from osimflow.apply_params import (
     DottedName,
     MappedParameter,
     OpenStudioBindingsMissingError,
     OSMAttributeError,
-    _apply_osm_mutation,
-    _coerce_value,
     _mutate_osm,
     _mutate_osm_production,
-    _resolve_model_object,
     apply_parameters,
     parse_dotted_name,
     parse_osm_attributes,
@@ -87,35 +85,6 @@ class TestParseDottedName:
 
 # ---------------------------------------------------------------------------
 # Type coercion
-# ---------------------------------------------------------------------------
-class TestCoerceValue:
-    """Tests for _coerce_value()."""
-
-    def test_int_to_float(self) -> None:
-        assert _coerce_value(42) == 42.0
-        assert isinstance(_coerce_value(42), float)
-
-    def test_float_passthrough(self) -> None:
-        assert _coerce_value(3.14) == 3.14
-
-    def test_string_passthrough(self) -> None:
-        assert _coerce_value("hello") == "hello"
-
-    def test_bool_passthrough(self) -> None:
-        assert _coerce_value(True) is True
-        assert _coerce_value(False) is False
-
-    def test_unsupported_type_raises(self) -> None:
-        with pytest.raises(TypeError, match="Cannot coerce"):
-            _coerce_value([1, 2, 3])
-
-    def test_none_raises(self) -> None:
-        with pytest.raises(TypeError, match="Cannot coerce"):
-            _coerce_value(None)
-
-
-# ---------------------------------------------------------------------------
-# JSON stub mode (no regression)
 # ---------------------------------------------------------------------------
 class TestJsonStubMode:
     """Verify that JSON-mode .osm stubs still work correctly."""
@@ -551,10 +520,10 @@ class TestPreflightValidateOsmPaths:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_model_object
+# _resolve_osm_object
 # ---------------------------------------------------------------------------
 class TestResolveModelObject:
-    """Tests for _resolve_model_object()."""
+    """Tests for _resolve_osm_object()."""
 
     def test_resolves_existing_object(self, mock_openstudio: types.ModuleType) -> None:
         """Finds an object by type and name."""
@@ -562,7 +531,7 @@ class TestResolveModelObject:
         st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
         mock_model.getSpaceTypes.return_value = [st_mock]
-        result = _resolve_model_object(mock_model, mock_openstudio, "SpaceType", "Office")
+        result = _resolve_osm_object(mock_model, mock_openstudio, "SpaceType", "Office")
         assert result is not None
 
     def test_returns_none_for_missing_object(self, mock_openstudio: types.ModuleType) -> None:
@@ -571,13 +540,13 @@ class TestResolveModelObject:
         st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
         mock_model.getSpaceTypes.return_value = [st_mock]
-        result = _resolve_model_object(mock_model, mock_openstudio, "SpaceType", "DoesNotExist")
+        result = _resolve_osm_object(mock_model, mock_openstudio, "SpaceType", "DoesNotExist")
         assert result is None
 
     def test_returns_none_for_unsupported_type(self, mock_openstudio: types.ModuleType) -> None:
         """Returns None for an object type not in the dispatch table."""
         mock_model = MagicMock()
-        result = _resolve_model_object(mock_model, mock_openstudio, "UnsupportedType", "Foo")
+        result = _resolve_osm_object(mock_model, mock_openstudio, "UnsupportedType", "Foo")
         assert result is None
 
 
@@ -585,7 +554,7 @@ class TestResolveModelObject:
 # _apply_osm_mutation
 # ---------------------------------------------------------------------------
 class TestApplyOsmMutation:
-    """Tests for _apply_osm_mutation()."""
+    """Tests for the shared _apply_osm_mutations()."""
 
     def test_applies_dotted_name_mutation(self, mock_openstudio: types.ModuleType) -> None:
         """A dotted name resolves to the correct object and calls its setter."""
@@ -600,7 +569,7 @@ class TestApplyOsmMutation:
             object_type="SpaceType",
             object_name="Office",
         )
-        _apply_osm_mutation(mock_model, mock_openstudio, mapping, 12.0)
+        _apply_osm_mutations(mock_model, mock_openstudio, {mapping.name: 12.0})
         st_mock.setLightingPowerPerFloorArea.assert_called_once_with(12.0)
 
     def test_raises_for_missing_object(self, mock_openstudio: types.ModuleType) -> None:
@@ -616,7 +585,7 @@ class TestApplyOsmMutation:
             object_name="Missing",
         )
         with pytest.raises(OSMAttributeError, match="Cannot resolve"):
-            _apply_osm_mutation(mock_model, mock_openstudio, mapping, 10.0)
+            _apply_osm_mutations(mock_model, mock_openstudio, {mapping.name: 10.0})
 
 
 # ---------------------------------------------------------------------------

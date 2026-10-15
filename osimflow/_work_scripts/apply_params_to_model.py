@@ -14,7 +14,10 @@ a thin wrapper that:
         b. Builds the name→mapping index.
         c. Runs the pre-flight check (fail fast on unmapped variables).
         d. Copies the template into the per-sample dir and mutates the
-           parameters in place.
+           parameters in place, sharing the OSW/OSM mutation helpers of
+           ``work.default_apply_parameters`` (categorical labels,
+           ``--input_variables`` measure_argument aliases / epw_file
+           targets, real .osm via OpenStudio bindings).
 
 BYOS (Bring Your Own Script) is handled at the Campaign level via
 ``CampaignConfig.custom_apply_script`` and ``osimflow.byos.load_user_function``.
@@ -56,6 +59,12 @@ def main() -> int:
     parser.add_argument("--parameter_set", required=True, type=Path)
     parser.add_argument("--sample_id", required=True)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--input_variables",
+        type=Path,
+        default=None,
+        help="Optional variables.yml enabling measure_argument aliases and epw_file targets",
+    )
     args = parser.parse_args()
 
     try:
@@ -83,7 +92,16 @@ def main() -> int:
         OpenStudioBindingsMissingError,
         UnmappedParameterError,
         apply_parameters,
+        load_variable_defs,
     )
+
+    variable_defs = None
+    if args.input_variables is not None:
+        try:
+            variable_defs = load_variable_defs(args.input_variables)
+        except (OSError, ValueError) as exc:
+            log.error("Failed to read variables file %s: %s", args.input_variables, exc)
+            return 2
 
     try:
         apply_parameters(
@@ -91,6 +109,7 @@ def main() -> int:
             parameters=parameters,
             sample_id=args.sample_id,
             out=args.out,
+            variable_defs=variable_defs,
         )
     except (UnmappedParameterError, ArgumentCoercionError) as exc:
         # Pre-flight failure: print the error to stderr and exit non-zero

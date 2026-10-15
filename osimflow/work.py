@@ -51,6 +51,7 @@ from osimflow._work_heartbeat import (  # noqa: F401
     check_container_health,
 )
 from osimflow._work_osm_mutations import (  # noqa: F401
+    _apply_json_stub_osm_attributes,
     _apply_osm_mutations,
     _apply_osw_parameters,
     _apply_single_osm_mutation,
@@ -272,29 +273,6 @@ def default_apply_parameters(
 #: Consumed and removed by :func:`run_openstudio_sim` inside the
 #: ``nrel/openstudio`` worker container before ``openstudio.cli run``.
 _PENDING_OSM_PARAMS_FILE = ".osimflow_pending_osm_params.json"
-
-
-def _apply_json_stub_osm_attributes(osm_path: Path, parameters: dict[str, Any]) -> bool:
-    """Mutate a test-mode JSON ``model.osm`` in place if it starts with ``{``."""
-    try:
-        text = osm_path.read_text()
-    except OSError:
-        return False
-    if not text.lstrip().startswith("{"):
-        return False
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(data, dict):
-        return False
-    attrs = data.setdefault("attributes", {})
-    if not isinstance(attrs, dict):
-        return False
-    for name, value in parameters.items():
-        attrs[name] = value
-    osm_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-    return True
 
 
 def _apply_parameters_with_osm_deferral(
