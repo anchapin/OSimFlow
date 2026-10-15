@@ -111,6 +111,9 @@ class CampaignStepsMixin:
         """Resolve and validate top-level ``seed`` from ``variables.yml``."""
         raw_seed = variables.get("seed")
         if raw_seed is None:
+            metadata = variables.get("_metadata")
+            raw_seed = metadata.get("seed") if isinstance(metadata, dict) else None
+        if raw_seed is None:
             return None
         if isinstance(raw_seed, bool):
             raise ValueError(f"variables.yml 'seed' must be an integer, got boolean {raw_seed!r}")

@@ -37,6 +37,7 @@ SUPPORTED_DISTRIBUTIONS = (
     "discrete",
     "categorical",
     "conditional",
+    "static",
 )
 
 
@@ -119,6 +120,11 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
         idx = min(int(u * len(values)), len(values) - 1)
         result: float | dict[str, Any] = values[idx]
         return result
+
+    if dist == "static":
+        if params.get("value") is None:
+            raise ValueError("static distribution requires a non-null 'value'")
+        return params["value"]  # type: ignore[no-any-return]
 
     if dist == "categorical":
         raw_values = params.get("values")
@@ -269,6 +275,9 @@ def _resolve_seed(config: dict[str, Any] | None) -> int:
     if not isinstance(config, dict):
         return 0
     raw_seed = config.get("seed")
+    if raw_seed is None:
+        metadata = config.get("_metadata")
+        raw_seed = metadata.get("seed") if isinstance(metadata, dict) else None
     if raw_seed is None:
         return 0
     if isinstance(raw_seed, bool):

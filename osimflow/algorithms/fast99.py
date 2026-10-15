@@ -66,6 +66,14 @@ class FAST99Algorithm(BaseAlgorithm):
         if not independent_vars:
             return _write_empty_samples(samples_path)
 
+        # Static variables are constants, not SALib dimensions (issue #2095).
+        static_values = {
+            v["name"]: v.get("value") for v in independent_vars if v.get("distribution") == "static"
+        }
+        independent_vars = [v for v in independent_vars if v.get("distribution") != "static"]
+        if not independent_vars:
+            raise RuntimeError(f"{'fast99'} requires at least one non-static variable")
+
         problem = _build_salib_problem(independent_vars)
 
         try:
@@ -79,6 +87,7 @@ class FAST99Algorithm(BaseAlgorithm):
             values: dict[str, Any] = {}
             for j, var_def in enumerate(independent_vars):
                 values[var_def["name"]] = float(raw_samples[i, j])
+            values.update(static_values)
             samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
         if conditional_vars:

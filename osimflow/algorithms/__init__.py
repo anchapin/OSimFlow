@@ -420,6 +420,12 @@ def _apply_distribution(
     # ── string distribution names ───────────────────────────────────────────
     dist_str: str = str(dist)
 
+    # Static variables hold a constant (issue #2095); *u* is ignored.
+    if dist_str == "static":
+        if params.get("value") is None:
+            raise ValueError("static distribution requires a non-null 'value'")
+        return params["value"]  # type: ignore[no-any-return]
+
     # Discrete/categorical handled inline (complex PMF logic).
     if dist_str in ("discrete", "categorical"):
         pmf = params.get("pmf")

@@ -390,6 +390,8 @@ class TestValidateVariablesYml:
                 var[p] = 1.0
             elif p == "values":
                 var[p] = ["a", "b", "c"]
+            elif p == "value":
+                var[p] = 1.5
         # triangular needs mode between min/max
         if dist == "triangular":
             var["mode"] = 5.0

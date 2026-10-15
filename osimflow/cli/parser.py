@@ -321,7 +321,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument("--template_sim_package", required=True)
-    run.add_argument("--n_samples", type=int, required=True)
+    run.add_argument(
+        "--n_samples",
+        type=int,
+        default=None,
+        help=(
+            "Number of samples. Required unless variables.yml provides "
+            "_metadata.n_samples (written by import-osa)."
+        ),
+    )
     run.add_argument("--outdir", required=True)
     run.add_argument("--openstudio_version", default="3.10.0")
     run.add_argument(

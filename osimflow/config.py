@@ -826,7 +826,35 @@ def _parse_chaos_scenarios(raw: object) -> list[str]:
     return names
 
 
-def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
+def _load_variables_metadata(variables_yml: Path) -> dict[str, Any]:
+    """Return the ``_metadata`` mapping of *variables.yml* (``{}`` when absent/invalid).
+
+    ``osimflow import-osa`` writes ``n_samples``, ``seed``, ``algorithm`` and
+    ``outputs`` there; ``load_config`` applies them as fallback defaults.
+    """
+    try:
+        with variables_yml.open() as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError):
+        return {}
+    meta = data.get("_metadata") if isinstance(data, dict) else None
+    return meta if isinstance(meta, dict) else {}
+
+
+def _metadata_output_names(metadata: dict[str, Any]) -> list[str] | None:
+    """KPI names declared in ``_metadata.outputs`` (strings or ``{name: ...}`` dicts)."""
+    outputs = metadata.get("outputs")
+    if not isinstance(outputs, list):
+        return None
+    names: list[str] = []
+    for item in outputs:
+        raw = item.get("name") or item.get("display_name") if isinstance(item, dict) else item
+        if isinstance(raw, str) and raw.strip() and raw.strip() not in names:
+            names.append(raw.strip())
+    return names or None
+
+
+def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912, PLR0915
     """Resolve a config from a flat dict (e.g. argparse namespace -> vars).
 
     Each value is narrowed via ``str()`` / ``bool()`` / ``int()`` because
@@ -900,8 +928,18 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     _validate_script_path(init_script)
     _validate_script_path(finalize_script)
 
-    # 4. Numeric range validation.
-    n_samples = int(str(args["n_samples"]))
+    # 4. Numeric range validation. ``n_samples`` falls back to the
+    #    ``_metadata.n_samples`` written by ``import-osa`` (issue #2095).
+    yml_metadata = _load_variables_metadata(variables_yml)
+    raw_n_samples: object = args.get("n_samples")
+    if raw_n_samples is None:
+        raw_n_samples = yml_metadata.get("n_samples")
+        if isinstance(raw_n_samples, bool) or not isinstance(raw_n_samples, int):
+            raise ValidationError(
+                "--n_samples is required unless variables.yml provides _metadata.n_samples",
+                field="n_samples",
+            )
+    n_samples = int(str(raw_n_samples))
     if n_samples < 1:
         raise ValidationError(
             f"N_samples must be >= 1, got {n_samples}",
@@ -1037,13 +1075,15 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         resolved_algorithm = str(cli_algorithm)
     elif yml_algorithm is not None:
         resolved_algorithm = yml_algorithm
+    elif isinstance(yml_metadata.get("algorithm"), str) and yml_metadata["algorithm"].strip():
+        resolved_algorithm = yml_metadata["algorithm"].strip()
     else:
         resolved_algorithm = "lhs"
 
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
-        n_samples=int(str(args["n_samples"])),
+        n_samples=n_samples,
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
         container_digest=(str(args["container_digest"]) if args.get("container_digest") else None),
@@ -1058,7 +1098,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
         custom_kpi_extractor=Path(str(custom_kpi)).resolve() if custom_kpi else None,
-        kpis=cast(list[str], args["kpis"]) if args.get("kpis") else None,
+        kpis=(
+            cast(list[str], args["kpis"])
+            if args.get("kpis")
+            else (None if args.get("kpis") is not None else _metadata_output_names(yml_metadata))
+        ),
         mlflow_tracking_uri=(
             str(args["mlflow_tracking_uri"]) if args.get("mlflow_tracking_uri") else None
         ),
