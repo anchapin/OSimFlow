@@ -5,7 +5,7 @@ Issue #1871. OpenStudio Server results
 ``openstudio_results.*`` taken from ``out.osw`` step results; OSimFlow's SQL
 extractor never read them. This module ports that logic (and the server's
 ``extract_failure_message_from_osw`` / ``collect_failure_message_from_run_log``
-failure-message helpers, including benign-notice filtering).
+failure-message helpers; benign-notice filtering is opt-in via ``benign_pattern``).
 
 ``out.osw`` / ``run.log`` are published next to ``eplusout.sql`` in the
 per-sample simulation directory by ``osimflow.work.run_openstudio_sim``
@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from re import Pattern
 from typing import Any
 
 log = logging.getLogger("osimflow.osw_results")
@@ -27,11 +28,6 @@ RETRYING_STATE = "retrying"
 MEASURE_RESULTS_TOKEN = "measure_results"
 SIMULATION_FAILED_KEY = "simulation_failed_message"
 
-# Non-fatal notices emitted even on passing runs; never a failure message.
-BENIGN_ERROR_PATTERN = re.compile(
-    r"UseWeatherFile' is selected in YearDescription"
-    r"|This Curve, Object of type 'OS:Curve:Biquadratic' and named"
-)
 _TS_PREFIX = re.compile(r"^\[[^\]]+\]\s*")
 _ERROR_LINE = re.compile(r"^\[[^\]]+ERROR")
 _MODEL_FAIL = re.compile(r"\[openstudio\.model\.Model\].*did not finish.*errors:", re.IGNORECASE)
@@ -123,8 +119,14 @@ def has_valid_osw_completion(osw_path: Path) -> bool:
     return bool(parse_out_osw(osw_path))
 
 
-def extract_failure_message_from_osw(osw_content: str) -> str | None:
-    """First failed step -> ``"<measure>: <first error line>"`` from ``out.osw`` ``steps``."""
+def extract_failure_message_from_osw(
+    osw_content: str, benign_pattern: Pattern[str] | None = None
+) -> str | None:
+    """First failed step -> ``"<measure>: <first error line>"`` from ``out.osw`` ``steps``.
+
+    Errors matching the optional caller-supplied *benign_pattern* are skipped;
+    by default nothing is filtered.
+    """
     try:
         osw = json.loads(osw_content)
     except json.JSONDecodeError:
@@ -139,18 +141,21 @@ def extract_failure_message_from_osw(osw_content: str) -> str | None:
         measure = step.get("measure_dir_name") or step.get("name") or "unknown"
         lines = str(errors[0]).splitlines()
         first = lines[0].strip() if lines else ""
-        if BENIGN_ERROR_PATTERN.search(first):
+        if benign_pattern is not None and benign_pattern.search(first):
             continue
         return f"{measure}: {first}"
     return None
 
 
-def collect_failure_message_from_run_log(content: str) -> str | None:
+def collect_failure_message_from_run_log(
+    content: str, benign_pattern: Pattern[str] | None = None
+) -> str | None:
     """Most informative failure message from ``run.log``.
 
     Priority: model "did not finish" error + following ERROR lines, then the
     first OSRunner ERROR + following ERROR lines, then the first FATAL line.
-    The failing measure name (from the OSWorkflow line) is prepended.
+    The failing measure name (from the OSWorkflow line) is prepended. Lines
+    matching the optional caller-supplied *benign_pattern* are dropped.
     """
     lines = content.splitlines()
     measure_name = None
@@ -164,7 +169,7 @@ def collect_failure_message_from_run_log(content: str) -> str | None:
         text = "\n".join(
             stripped
             for stripped in (_TS_PREFIX.sub("", ln).strip() for ln in collected)
-            if stripped and not BENIGN_ERROR_PATTERN.search(stripped)
+            if stripped and not (benign_pattern and benign_pattern.search(stripped))
         )
         if not text:
             return None

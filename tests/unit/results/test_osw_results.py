@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from osimflow._work_scripts import extract_kpis as extract_kpis_mod
 from osimflow._work_scripts.aggregate_results import extract_failure
 from osimflow._work_scripts.extract_kpis import run_extract_kpis
 from osimflow.osw_results import (
-    BENIGN_ERROR_PATTERN,
     SIMULATION_FAILED_KEY,
     collect_failure_message_from_run_log,
     extract_failure_message_from_osw,
@@ -73,21 +73,41 @@ def test_osw_failure_message() -> None:
     assert extract_failure_message_from_osw("garbage") is None
 
 
-def test_run_log_failure_message_filters_benign() -> None:
+def test_run_log_failure_message_does_not_filter_by_default() -> None:
     msg = collect_failure_message_from_run_log(RUN_LOG)
     assert msg is not None and msg.startswith("win: ")
-    assert "zone too small" in msg and "UseWeatherFile" not in msg
+    assert "zone too small" in msg and "UseWeatherFile" in msg
     assert collect_failure_message_from_run_log(
         "[t ERROR] x [openstudio.measure.OSRunner] boom"
     ) == ("x [openstudio.measure.OSRunner] boom")
     assert collect_failure_message_from_run_log("[t FATAL] crash") == "crash"
     assert collect_failure_message_from_run_log("[t INFO] fine") is None
-    # Verify measure-specific strings are not hardcoded in BENIGN_ERROR_PATTERN
-    assert not BENIGN_ERROR_PATTERN.search("run_all_orientation flag is set to False")
-    assert BENIGN_ERROR_PATTERN.search("UseWeatherFile' is selected in YearDescription")
-    assert BENIGN_ERROR_PATTERN.search(
-        "This Curve, Object of type 'OS:Curve:Biquadratic' and named"
+
+
+def test_run_log_failure_message_custom_benign_pattern() -> None:
+    pattern = re.compile(r"UseWeatherFile' is selected in YearDescription")
+    msg = collect_failure_message_from_run_log(RUN_LOG, benign_pattern=pattern)
+    assert msg is not None
+    assert "zone too small" in msg and "UseWeatherFile" not in msg
+
+
+def test_osw_failure_message_custom_benign_pattern() -> None:
+    osw = {
+        "steps": [
+            {
+                "measure_dir_name": "m",
+                "result": {
+                    "step_result": "Fail",
+                    "step_errors": ["UseWeatherFile' is selected in YearDescription"],
+                },
+            }
+        ]
+    }
+    content = json.dumps(osw)
+    assert extract_failure_message_from_osw(content) == (
+        "m: UseWeatherFile' is selected in YearDescription"
     )
+    assert extract_failure_message_from_osw(content, re.compile("YearDescription")) is None
 
 
 def test_failure_message_prefers_run_log(tmp_path: Path) -> None:
