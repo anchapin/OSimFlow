@@ -35,6 +35,7 @@ PRD references
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import importlib
 import importlib.util
@@ -118,6 +119,14 @@ class MappedParameter:
         measure_name: for .osw arguments, the ``measure_dir_name`` of
             the step this argument belongs to.  ``None`` for .osm
             attributes.
+        step_name: for .osw arguments, the per-step ``"name"`` of the
+            targeted step instance (``None`` when the step is unnamed).
+            Lets ``<step_name>.<arg>`` target one instance when several
+            steps share a ``measure_dir_name``.
+        ambiguous_steps: labels of every step instance a
+            ``<measure_dir_name>.<arg>`` key could refer to when more than
+            one step shares that ``measure_dir_name`` and defines the
+            argument. Empty for unambiguous mappings.
         object_type: for .osm attributes that use dotted notation
             (e.g. ``SpaceType_Office.lighting_power_density``), the
             OpenStudio object type (e.g. ``"SpaceType"``).
@@ -134,6 +143,8 @@ class MappedParameter:
     measure_name: str | None = None
     object_type: str | None = None
     object_name: str | None = None
+    step_name: str | None = None
+    ambiguous_steps: tuple[str, ...] = ()
 
 
 class UnmappedParameterError(OSimFlowValueError):
@@ -761,6 +772,13 @@ def read_measure_xml_aliases(xml_path: Path) -> list[str]:
     return aliases
 
 
+def _step_label(param: MappedParameter) -> str:
+    """Human-readable label for the step instance a mapping targets."""
+    if param.step_name:
+        return param.step_name
+    return f"step[{param.step_index}]"
+
+
 def _register_osw_argument(
     result: dict[str, MappedParameter],
     *,
@@ -769,8 +787,13 @@ def _register_osw_argument(
     step_idx: int,
     measure_name: str,
     aliases: tuple[str, ...] = (),
+    step_name: str | None = None,
 ) -> None:
     """Register plain (first-match) and dotted (per-measure) OSW argument mappings.
+
+    When a later step shares *measure_name* with an earlier step that already
+    registered the same dotted key, that key is marked ambiguous
+    (``MappedParameter.ambiguous_steps``); step-name aliases stay precise.
 
     *aliases* are extra measure identifiers (``measure.xml`` ``<name>`` /
     ``<class_name>``) that also resolve to this step as ``<alias>.<arg>``.
@@ -781,14 +804,21 @@ def _register_osw_argument(
         default=default,
         step_index=step_idx,
         measure_name=str(measure_name) if measure_name else None,
+        step_name=step_name or None,
     )
     plain_key = str(arg_name)
     if plain_key not in result:
         result[plain_key] = param
     if measure_name:
         dotted_key = f"{measure_name}.{arg_name}"
-        if dotted_key not in result:
+        existing = result.get(dotted_key)
+        if existing is None:
             result[dotted_key] = param
+        elif existing.step_index != step_idx and existing.measure_name == param.measure_name:
+            labels = existing.ambiguous_steps or (_step_label(existing),)
+            result[dotted_key] = dataclasses.replace(
+                existing, ambiguous_steps=(*labels, _step_label(param))
+            )
     for alias in aliases:
         alias_key = f"{alias}.{arg_name}"
         if alias and alias != measure_name and alias_key not in result:
@@ -868,6 +898,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
         # Resolve the measure name from measure_dir_name or name field.
         measure_dir_name = step.get("measure_dir_name")
         measure_name = str(measure_dir_name or step.get("name") or "")
+        step_name = str(step["name"]) if step.get("name") else None
         xml_path = (
             _locate_step_measure_xml(str(measure_dir_name), search_dirs)
             if measure_dir_name
@@ -882,6 +913,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
                 step_idx=step_idx,
                 measure_name=measure_name,
                 aliases=aliases,
+                step_name=step_name,
             )
         if xml_path is not None:
             for xml_arg_name, _xml_arg_type, xml_default in _parse_measure_xml_arg_info(xml_path):
@@ -893,6 +925,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
                         step_idx=step_idx,
                         measure_name=measure_name,
                         aliases=aliases,
+                        step_name=step_name,
                     )
         if "__SKIP__" not in arguments:
             _register_osw_argument(
@@ -902,6 +935,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
                 step_idx=step_idx,
                 measure_name=measure_name,
                 aliases=aliases,
+                step_name=step_name,
             )
     return result
 
@@ -1004,11 +1038,36 @@ def preflight_check(
     # more than one step's arguments in the same .osw. The caller must
     # disambiguate by switching to the dotted form.
     _check_ambiguous_parameters(parameters, mappings)
+    _check_ambiguous_step_targets(parameters, mappings)
     # Detect colliding parameter targets (e.g., an unqualified `<arg>`
     # combined with `<Measure>.<arg>`, or dotted keys that lack distinct
     # OSW step isolation). Disambiguated `<MeasureA>.<arg>` and
     # `<MeasureB>.<arg>` targeting distinct OSW steps are allowed (#2065).
     _check_cross_measure_conflicts(parameters, mappings)
+
+
+def _check_ambiguous_step_targets(
+    parameters: dict[str, Any],
+    mappings: dict[str, MappedParameter],
+) -> None:
+    """Reject ``<measure_dir_name>.<arg>`` keys shared by several step instances.
+
+    When multiple ``.osw`` steps share a ``measure_dir_name`` and define the
+    argument, the unqualified dotted key cannot pick one instance; the user
+    must qualify with the step's ``"name"`` (``<step_name>.<arg>``).
+    """
+    lines = [
+        f"  {key!r} matches multiple steps: {', '.join(mappings[key].ambiguous_steps)}"
+        for key in parameters
+        if key in mappings and mappings[key].ambiguous_steps
+    ]
+    if lines:
+        raise AmbiguousParameterError(
+            "Pre-flight check failed: the following measure arguments are ambiguous "
+            "because several workflow steps share the same measure_dir_name. Qualify "
+            "them with the step 'name' (e.g. '<step_name>.<argument>'; give each step a "
+            'unique "name" in workflow.osw):\n' + "\n".join(lines)
+        )
 
 
 def _check_ambiguous_parameters(
@@ -1484,6 +1543,21 @@ def _coerce_osw_argument_value(
     return value
 
 
+def _resolve_step_index(steps: list[Any], mapping: MappedParameter) -> int | None:
+    """Locate the step instance *mapping* targets, preferring its step ``name``."""
+    idx = mapping.step_index
+    if idx is None:
+        return None
+    if mapping.step_name:
+        in_range = idx < len(steps) and isinstance(steps[idx], dict)
+        if in_range and steps[idx].get("name") == mapping.step_name:
+            return idx
+        for i, step in enumerate(steps):
+            if isinstance(step, dict) and step.get("name") == mapping.step_name:
+                return i
+    return idx if idx < len(steps) else None
+
+
 def _mutate_osw(
     osw_path: Path,
     parameters: dict[str, Any],
@@ -1498,6 +1572,7 @@ def _mutate_osw(
     break the mutation. The mapping's ``name`` field holds the
     *plain* argument name (the key inside ``step["arguments"]``).
     """
+    _check_ambiguous_step_targets(parameters, mappings)
     data = json.loads(osw_path.read_text())
     steps = data.setdefault("steps", [])
     search_dirs = _measure_search_dirs(osw_path, data if isinstance(data, dict) else {})
@@ -1506,8 +1581,8 @@ def _mutate_osw(
         mapping = mappings.get(param_key)
         if mapping is None or mapping.kind != "measure_argument":
             continue
-        step_index = mapping.step_index
-        if step_index is None or step_index >= len(steps):
+        step_index = _resolve_step_index(steps, mapping)
+        if step_index is None:
             continue
         step_obj = steps[step_index]
         step_args = step_obj.setdefault("arguments", {})

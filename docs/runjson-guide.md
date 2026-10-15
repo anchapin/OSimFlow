@@ -457,7 +457,7 @@ jq '.per_sample[] | select(.status == "failed") | {sample_id, error_summary, sim
 |---|---|
 | `sim_exit_code: 1` + `error_summary` mentions `openstudio.cli` | EnergyPlus simulation error. Check the per-sample `stderr_log`. |
 | `apply_exit_code: 1` + `error_summary` mentions `UnmappedParameterError` | A parameter name in `variables.yml` does not exist in the template. Fix the variable name. |
-| `apply_exit_code: 1` + `error_summary` mentions `AmbiguousParameterError` | Parameter name appears in multiple measures. Use the dotted form: `MeasureName.argument_name`. |
+| `apply_exit_code: 1` + `error_summary` mentions `AmbiguousParameterError` | Parameter name appears in multiple measures. Use the dotted form: `MeasureName.argument_name`. When several workflow steps share one `measure_dir_name`, qualify with the step `"name"` (`<step_name>.<arg>`); `<measure_dir_name>.<arg>` is rejected as ambiguous (issue #2117). |
 | `sim_exit_code: 1` + no `eplusout_sql` | Simulation crashed before producing output. Check `stderr_log` for the EnergyPlus error. |
 | `sim_exit_code: 1` + `eplusout_sql` present | Simulation ran but reported a severe error. Check `eplusout.err` for the first "Severe Error" line. |
 

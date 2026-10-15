@@ -197,3 +197,39 @@ def test_osw_parameters_epw_and_no_remaining(tmp_path: Path) -> None:
     out = _apply_osw_parameters(osw, {"__epw_file__": "w.epw"})
     assert out == {}
     assert "w.epw" in osw.read_text()
+
+
+def test_apply_osw_parameters_targets_step_instance_by_name(tmp_path: Path) -> None:
+    osw = tmp_path / "workflow.osw"
+    osw.write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"measure_dir_name": "M", "name": "a", "arguments": {"x": 1}},
+                    {"measure_dir_name": "M", "name": "b", "arguments": {"x": 2}},
+                ]
+            }
+        )
+    )
+    remaining = _apply_osw_parameters(osw, {"b.x": 9, "lighting_power_density": 1.0})
+    assert remaining == {"lighting_power_density": 1.0}
+    steps = json.loads(osw.read_text())["steps"]
+    assert [s["arguments"]["x"] for s in steps] == [1, 9]
+
+
+def test_apply_osw_parameters_rejects_ambiguous_dir_name(tmp_path: Path) -> None:
+    from osimflow.apply_params import AmbiguousParameterError
+
+    osw = tmp_path / "workflow.osw"
+    osw.write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"measure_dir_name": "M", "name": "a", "arguments": {"x": 1}},
+                    {"measure_dir_name": "M", "name": "b", "arguments": {"x": 2}},
+                ]
+            }
+        )
+    )
+    with pytest.raises(AmbiguousParameterError):
+        _apply_osw_parameters(osw, {"M.x": 9})
