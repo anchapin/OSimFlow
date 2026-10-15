@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from ..apply_params import resolve_seed_osm
 from ..config import CampaignConfig
 from ..json_utils import safe_json_dumps
 from ..observability.monitoring import RunTrace
@@ -262,6 +263,10 @@ class CampaignArtifactWriter:
                 if f.is_file():
                     shutil.copy2(f, dst / f.name)
                     log.debug("archived %s -> %s", f, dst / f.name)
+        if any(p.endswith(".osm") for p in patterns):
+            seed = resolve_seed_osm(src)
+            if seed is not None and not (dst / seed.name).exists():
+                shutil.copy2(seed, dst / seed.name)
 
     def maybe_archive_inputs(self) -> None:
         """Archive campaign inputs when ``cfg.archive_intermediates`` is set."""

@@ -55,6 +55,7 @@ from ..algorithms import AlgorithmRegistry, BaseAlgorithm
 from ..apply_params import (
     _build_mappings,
     preflight_check,
+    resolve_seed_osm,
 )
 from ..cache import (
     CacheKey,

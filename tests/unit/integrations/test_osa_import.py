@@ -957,6 +957,43 @@ class TestStageOsaTemplatePackage:
             }
         ]
 
+    def test_stage_alt_osw_writes_canonical_workflow_osw(self, tmp_path: Path) -> None:
+        from osimflow.importers.osa import stage_osa_template_package
+
+        osa_zip = tmp_path / "study.osa"
+        analysis_data = {
+            "analysis": {
+                "problem": {
+                    "algorithm": {"type": "single_run"},
+                    "workflow": [
+                        {
+                            "name": "set_thermostat",
+                            "measure_definition_directory": "./measures/SetThermostat",
+                            "arguments": [{"name": "heating_setpoint", "value": 21.0}],
+                        }
+                    ],
+                },
+            }
+        }
+        seed_osw = {
+            "seed_file": "seeds/baseline.osm",
+            "steps": [{"measure_dir_name": "SetThermostat", "arguments": {}}],
+        }
+        with zipfile.ZipFile(osa_zip, "w") as zf:
+            zf.writestr("analysis.json", json.dumps(analysis_data))
+            zf.writestr("seed_workflow.osw", json.dumps(seed_osw))
+            zf.writestr("seeds/baseline.osm", "OS:Version,3.10.0;\n")
+            zf.writestr("measures/SetThermostat/measure.rb", "# measure\n")
+
+        staged = tmp_path / "staged"
+        stage_osa_template_package(osa_zip, staged)
+
+        canonical = staged / "workflow.osw"
+        assert canonical.is_file()
+        osw = json.loads(canonical.read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "seeds/baseline.osm"
+        assert osw["steps"][0]["arguments"]["heating_setpoint"] == 21.0
+
     def test_stage_rejects_zip_slip(self, tmp_path: Path) -> None:
         from osimflow.importers.osa import stage_osa_template_package
 

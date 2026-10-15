@@ -268,11 +268,44 @@ def _resolve_dir_template(template: Path) -> tuple[Path | None, Path | None]:
     if not template.is_dir():
         raise ValueError(f"_resolve_dir_template requires a directory, got {template}")
     osw_path = template / "workflow.osw"
-    osm_path = template / "model.osm"
-    return (
-        osw_path if osw_path.is_file() else None,
-        osm_path if osm_path.is_file() else None,
-    )
+    osm_path = _resolve_seed_osm(template, osw_path if osw_path.is_file() else None)
+    return (osw_path if osw_path.is_file() else None, osm_path)
+
+
+def resolve_seed_osm(pkg: Path) -> Path | None:
+    """Seed ``.osm`` of a package directory (see :func:`_resolve_seed_osm`)."""
+    osw = pkg / "workflow.osw"
+    return _resolve_seed_osm(pkg, osw if osw.is_file() else None)
+
+
+def _resolve_seed_osm(template: Path, osw_path: Path | None) -> Path | None:
+    """Find the seed ``.osm`` of a template directory.
+
+    Order: ``workflow.osw`` ``seed_file`` (resolved inside the template),
+    then ``model.osm``, then a single top-level ``*.osm``.
+    """
+    root = template.resolve()
+    if osw_path is not None:
+        try:
+            data = json.loads(osw_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        seed = data.get("seed_file") if isinstance(data, dict) else None
+        if isinstance(seed, str) and seed.strip():
+            for base in (root, *(root / p for p in _osw_file_paths(data))):
+                candidate = (base / seed).resolve()
+                if candidate.is_file() and candidate.is_relative_to(root):
+                    return root / candidate.relative_to(root)
+    default = template / "model.osm"
+    if default.is_file():
+        return default
+    osms = sorted(template.glob("*.osm"))
+    return osms[0] if len(osms) == 1 else None
+
+
+def _osw_file_paths(data: dict[str, Any]) -> list[str]:
+    paths = data.get("file_paths")
+    return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
 
 
 def _require_dir_template_files(template: Path) -> tuple[Path | None, Path | None]:
@@ -1663,7 +1696,12 @@ def apply_parameters(
     _copy_template_artifacts(original_template, out)
     if original_template.is_dir():
         osw_in_out = out / "workflow.osw"
-        osm_in_out = out / "model.osm"
+        _, template_osm = _resolve_dir_template(original_template)
+        osm_in_out = (
+            out / template_osm.resolve().relative_to(original_template.resolve())
+            if template_osm is not None
+            else out / "model.osm"
+        )
         if osw_in_out.is_file():
             _mutate_osw(osw_in_out, parameters, mappings)
         if osm_in_out.is_file():

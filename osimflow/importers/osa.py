@@ -1229,23 +1229,25 @@ def stage_osa_template_package(
     parsed_osa = osa_data if osa_data is not None else parse_osa(osa_path)
     varied_pairs = _collect_varied_measure_args(parsed_osa)
 
-    osw_path = package_output / "workflow.osw"
-    if not osw_path.is_file():
+    canonical_osw = package_output / "workflow.osw"
+    source_osw = canonical_osw
+    if not source_osw.is_file():
         alt_osws = sorted(package_output.glob("*.osw"))
         if len(alt_osws) == 1:
-            osw_path = alt_osws[0]
+            source_osw = alt_osws[0]
 
-    if osw_path.is_file():
+    if source_osw.is_file():
         try:
-            osw_raw = json.loads(osw_path.read_text(encoding="utf-8"))
+            osw_raw = json.loads(source_osw.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise OSAImportError(f"Invalid JSON in {osw_path}: {exc}") from exc
+            raise OSAImportError(f"Invalid JSON in {source_osw}: {exc}") from exc
         if not isinstance(osw_raw, dict):
-            raise OSAImportError(f"{osw_path} must contain a JSON object")
+            raise OSAImportError(f"{source_osw} must contain a JSON object")
         _overlay_osa_workflow_onto_osw(osw_raw, parsed_osa, varied_pairs)
     else:
         osw_raw = _build_osw_from_osa(parsed_osa)
-        osw_path = package_output / "workflow.osw"
+    # Always emit the canonical workflow.osw that validate_template_package requires.
+    osw_path = canonical_osw
 
     _normalize_osw_paths(osw_raw, package_output, source_root=template_package)
     osw_path.write_text(json.dumps(osw_raw, indent=2) + "\n", encoding="utf-8")
