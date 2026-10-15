@@ -214,6 +214,7 @@ EXPORT_INLINE_DESTS: frozenset[str] = frozenset(
         "n_samples",
         "algorithm",
         "openstudio_version",
+        "template_package",
         "log_level",
     }
 )

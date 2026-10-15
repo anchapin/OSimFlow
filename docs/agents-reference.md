@@ -148,7 +148,7 @@ physically live in their executor's config module, not in
   `--read-only`,
   `--read-write`, `--registry`, `--tls-cert`, `--tls-key`, `--ui`;
   `export` — `--algorithm`, `--format`, `--limit`, `--n_samples`,
-  `--openstudio_version`, `--outdir`, `--target`;
+  `--openstudio_version`, `--outdir`, `--target`, `--template-package`;
   `list` — `--format`, `--limit`, `--project`, `--registry`, `--status`;
   `status` / `download` — `--include-intermediates`,
   `--output-dir`; `backup` / `restore` — `--merge`, `--output`,
