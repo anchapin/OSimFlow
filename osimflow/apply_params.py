@@ -40,7 +40,9 @@ import importlib
 import importlib.util
 import json
 import logging
+import math
 import os
+import re
 import shutil
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -165,6 +167,10 @@ class CrossMeasureConflictError(OSimFlowValueError):
 
 class OSMAttributeError(OSimFlowValueError):
     """Raised when a dotted .osm attribute path cannot be resolved."""
+
+
+class ArgumentCoercionError(OSimFlowValueError):
+    """Raised when a value cannot be coerced to its ``measure.xml`` argument type."""
 
 
 # ---------------------------------------------------------------------------
@@ -1525,20 +1531,93 @@ def mutate_osw_weather_file(osw_path: Path, epw_path: str) -> None:
     log.info("mutated .osw weather_file -> %s in %s", epw_path, osw_path)
 
 
+def _normalize_scalar(value: Any) -> Any:
+    """Unwrap NumPy-like scalars (``np.int64``, ``np.bool_``) to Python scalars."""
+    if not isinstance(value, (str, bytes, int, float)) or type(value).__module__ == "numpy":
+        item = getattr(value, "item", None)
+        if callable(item) and getattr(value, "shape", None) == ():
+            try:
+                return item()
+            except (TypeError, ValueError):
+                return value
+    return value
+
+
+def _coerce_boolean(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return {"true": True, "1": True, "false": False, "0": False}.get(value.strip().lower())
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    return None
+
+
+def _coerce_number(value: Any, *, integer: bool) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value.strip()) if isinstance(value, str) else float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if not integer:
+        return number
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        return int(value.strip())
+    return int(number) if number.is_integer() else None
+
+
+def _coerce_typed_osw_value(arg_name: str, value: Any, arg_type: str, measure: str) -> Any:
+    """Coerce *value* to the OpenStudio *arg_type* declared in ``measure.xml``.
+
+    ``Boolean`` -> ``bool``, ``Integer`` -> ``int``, ``Double`` -> ``float``,
+    ``String`` / ``Choice`` -> ``str``. Other types (e.g. ``Path``) and
+    ``None`` pass through. Uncoercible values raise
+    :class:`ArgumentCoercionError`.
+    """
+    value = _normalize_scalar(value)
+    if value is None:
+        return value
+    result: Any
+    if arg_type == "Boolean":
+        result = _coerce_boolean(value)
+    elif arg_type in ("Double", "Integer"):
+        result = _coerce_number(value, integer=arg_type == "Integer")
+    elif arg_type in ("String", "Choice"):
+        return ("true" if value else "false") if isinstance(value, bool) else str(value)
+    else:
+        return value
+    if result is None:
+        raise ArgumentCoercionError(
+            f"measure {measure!r} argument {arg_name!r} expects {arg_type}, got {value!r}"
+        )
+    return result
+
+
 def _coerce_osw_argument_value(
     arg_name: str,
     value: Any,
     *,
     existing_value: Any,
     mapping_default: Any,
-    boolean_xml_args: set[str],
+    arg_types: dict[str, str],
+    measure_name: str = "",
 ) -> Any:
-    """Coerce string boolean literals for ``__SKIP__`` and Boolean OSW arguments."""
+    """Coerce *value* for ``measure.xml``-typed OSW arguments.
+
+    Typed arguments follow :func:`_coerce_typed_osw_value`. Untyped arguments
+    keep the legacy behavior: ``true``/``false`` strings become booleans for
+    ``__SKIP__`` or when the existing/default value is boolean.
+    """
+    arg_type = arg_types.get(arg_name)
+    if arg_type is not None and arg_name != "__SKIP__":
+        return _coerce_typed_osw_value(arg_name, value, arg_type, measure_name)
     if not isinstance(value, str):
         return value
     is_boolean_arg = (
         arg_name == "__SKIP__"
-        or arg_name in boolean_xml_args
         or isinstance(existing_value, bool)
         or isinstance(mapping_default, bool)
     )
@@ -1569,7 +1648,7 @@ def _mutate_osw(
     data = json.loads(osw_path.read_text())
     steps = data.setdefault("steps", [])
     search_dirs = _measure_search_dirs(osw_path, data if isinstance(data, dict) else {})
-    step_bool_args: dict[int, set[str]] = {}
+    step_arg_types: dict[int, dict[str, str]] = {}
     for param_key, value in parameters.items():
         mapping = mappings.get(param_key)
         if mapping is None or mapping.kind != "measure_argument":
@@ -1579,22 +1658,22 @@ def _mutate_osw(
             continue
         step_obj = steps[step_index]
         step_args = step_obj.setdefault("arguments", {})
-        if step_index not in step_bool_args:
-            bool_names: set[str] = {"__SKIP__"}
+        if step_index not in step_arg_types:
+            arg_types: dict[str, str] = {}
             measure_dir_name = step_obj.get("measure_dir_name")
             if isinstance(measure_dir_name, str) and measure_dir_name:
                 xml_path = _locate_step_measure_xml(measure_dir_name, search_dirs)
                 if xml_path is not None:
                     for xml_arg_name, xml_arg_type, _ in _parse_measure_xml_arg_info(xml_path):
-                        if xml_arg_type == "Boolean":
-                            bool_names.add(xml_arg_name)
-            step_bool_args[step_index] = bool_names
+                        arg_types[xml_arg_name] = xml_arg_type
+            step_arg_types[step_index] = arg_types
         coerced = _coerce_osw_argument_value(
             mapping.name,
             value,
             existing_value=step_args.get(mapping.name),
             mapping_default=mapping.default,
-            boolean_xml_args=step_bool_args[step_index],
+            arg_types=step_arg_types[step_index],
+            measure_name=str(step_obj.get("measure_dir_name") or step_obj.get("name") or ""),
         )
         # mapping.name is the plain argument name inside the step's
         # arguments dict (never dotted).
