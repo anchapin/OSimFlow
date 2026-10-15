@@ -613,11 +613,12 @@ osimflow run --executor nomad ...
 Since issues #1449 and #1811, three substrates support delivering the worker-side secret through their
 **native secret stores** instead of the literal job env:
 
-- **AWS Batch**: When the job definition injects `OSIMFLOW_TASK_PAYLOAD_SECRET`
+- **AWS Batch**: The job definition may inject `OSIMFLOW_TASK_PAYLOAD_SECRET`
   via `containerProperties.secrets` (`valueFrom` pointing to Secrets Manager or
-  SSM Parameter Store), the raw secret is never placed in
-  `containerOverrides.environment`. With `--aws-batch-payload-secret-arn`,
-  `AWSBatchExecutor` verifies the job definition maps the secret to that ARN.
+  SSM Parameter Store). Only when `--aws-batch-payload-secret-arn` is passed does
+  `AWSBatchExecutor` verify the job definition maps the secret to that ARN and omit
+  the raw secret from `containerOverrides.environment`; otherwise the local secret
+  is sent as a literal override.
   The orchestrator always needs `OSIMFLOW_TASK_PAYLOAD_SECRET` (or
   `OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`) locally to HMAC-sign task payloads; it
   never fetches the value from Secrets Manager / SSM. Without
