@@ -19,7 +19,6 @@ Extracted from ``osimflow/executors/__init__.py`` (issue #1463).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -44,7 +43,6 @@ from osimflow.executors.transport import (
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SECRET_FILE_ENV,
-    TASK_PAYLOAD_SIG_ENV,
     build_signature_env,
     build_transport_signature_env,
     resolve_payload_secret,
@@ -629,9 +627,6 @@ class AWSBatchExecutor(BaseExecutor):
         self._region_name = region_name
         self._client: Any = None
         self._ec2_client: Any = None
-        self._secrets_client: Any = None
-        self._ssm_client: Any = None
-        self._resolved_payload_secret: str | None = None
         self.job_queue = job_queue
         self.job_definition = job_definition or "osimflow-job-def"
         self.on_demand_job_queue = on_demand_job_queue
@@ -743,18 +738,6 @@ class AWSBatchExecutor(BaseExecutor):
             self._ec2_client = self._make_client("ec2")
         return self._ec2_client
 
-    def _get_secrets_client(self, *, region_name: str | None = None) -> Any:
-        """Lazy boto3 Secrets Manager client for payload-secret retrieval."""
-        if getattr(self, "_secrets_client", None) is None:
-            self._secrets_client = self._make_client("secretsmanager", region_name=region_name)
-        return self._secrets_client
-
-    def _get_ssm_client(self, *, region_name: str | None = None) -> Any:
-        """Lazy boto3 SSM client for payload-secret retrieval."""
-        if getattr(self, "_ssm_client", None) is None:
-            self._ssm_client = self._make_client("ssm", region_name=region_name)
-        return self._ssm_client
-
     def _get_spot_price(self) -> float:
         """Query the current Spot price for the instance type.
 
@@ -858,16 +841,11 @@ class AWSBatchExecutor(BaseExecutor):
         signing_secret: str | None = None
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
-            # Issue #1445/#1633/#2025/#2042: osimflow.remote_runner is fail-closed
+            # Issue #1445/#1633/#2025: osimflow.remote_runner is fail-closed
             # (issue #1205) and rejects unsigned task payloads at container
             # startup. Require a resolvable signing secret on the orchestrator
             # so AWSBatchExecutor never silently submits an unsigned payload.
-            # Resolve the effective ``payload_secret_arn`` from the active job
-            # definition first so omitting ``--aws-batch-payload-secret-arn``
-            # still triggers signature-only mode when the job definition
-            # injects ``OSIMFLOW_TASK_PAYLOAD_SECRET`` via
-            # ``containerProperties.secrets`` (issue #2042).
-            payload_secret_arn = self._resolve_effective_payload_secret_arn()
+            payload_secret_arn = getattr(self, "payload_secret_arn", None)
             signing_secret = self._resolve_signing_secret()
             if not payload_secret_arn and TASK_PAYLOAD_SECRET_ENV in os.environ:
                 # Issue #1633: without a job-definition secret the
@@ -943,225 +921,6 @@ class AWSBatchExecutor(BaseExecutor):
             or self._has_mocked_boto3_seam(getattr(self, "_boto3", None))
         )
 
-    def _query_job_def_for_secret_arn(self, target: str) -> dict[str, Any] | None:
-        """Call ``describe_job_definitions`` for *target*, raising ``RuntimeError`` on AWS errors."""
-        if "_submit_job" in self.__dict__ and getattr(self, "_client", None) is None:
-            return None
-        try:
-            if (
-                getattr(self, "_client", None) is None
-                and ":" in target
-                and getattr(self, "_region_name", None) is None
-            ):
-                jd_region = self._arn_region(target)
-                if jd_region:
-                    self._client = self._make_client("batch", region_name=jd_region)
-            client = self._get_client()
-            if ":" in target:
-                response = client.describe_job_definitions(jobDefinitions=[target])
-            else:
-                response = client.describe_job_definitions(
-                    jobDefinitionName=target, status="ACTIVE"
-                )
-        except Exception as exc:
-            log.error(
-                "AWSBatchExecutor: describe_job_definitions(%r) failed while auto-discovering "
-                "%s secret ARN: %s",
-                target,
-                TASK_PAYLOAD_SECRET_ENV,
-                exc,
-                exc_info=True,
-            )
-            raise RuntimeError(
-                f"Failed to inspect AWS Batch job definition {target!r} via "
-                f"batch:DescribeJobDefinitions ({exc}). Refusing to proceed "
-                f"with an unknown job-definition secret state (which could "
-                f"silently downgrade {TASK_PAYLOAD_SECRET_ENV} into plaintext "
-                f"containerOverrides.environment). Grant batch:DescribeJobDefinitions "
-                f"to the submitter principal or pass --aws-batch-payload-secret-arn "
-                f"explicitly (issue #2042)."
-            ) from exc
-        return response if isinstance(response, dict) else None
-
-    @staticmethod
-    def _extract_secret_arn_from_job_defs(definitions_raw: Any) -> str | None:
-        """Extract the ``OSIMFLOW_TASK_PAYLOAD_SECRET`` ``valueFrom`` ARN from the highest revision."""
-        if not isinstance(definitions_raw, list) or not definitions_raw:
-            return None
-        definition = max(definitions_raw, key=lambda d: int(d.get("revision", 0)))
-        secrets = (definition.get("containerProperties") or {}).get("secrets") or []
-        for entry in secrets:
-            if isinstance(entry, dict) and entry.get("name") == TASK_PAYLOAD_SECRET_ENV:
-                value_from = str(entry.get("valueFrom") or "").strip()
-                if value_from:
-                    return value_from
-        return None
-
-    def _resolve_effective_payload_secret_arn(
-        self,
-        job_definition: str | None = None,
-        *,
-        strict: bool = False,
-    ) -> str | None:
-        """Resolve the effective ``payload_secret_arn`` for task-payload signing (issue #2042).
-
-        When ``self.payload_secret_arn`` is already configured, returns it
-        directly.  Otherwise, inspects the highest active revision of
-        *job_definition* (or ``self.job_definition``) via
-        ``describe_job_definitions``.  If ``containerProperties.secrets``
-        maps ``OSIMFLOW_TASK_PAYLOAD_SECRET``, its exact ``valueFrom`` ARN is
-        adopted onto ``self.payload_secret_arn`` and cached per job
-        definition so ``_build_environment()`` omits the raw secret from
-        ``containerOverrides.environment`` and ``_resolve_signing_secret()``
-        can fetch it from Secrets Manager / SSM Parameter Store.
-        """
-        existing = getattr(self, "payload_secret_arn", None)
-        if existing:
-            return str(existing)
-
-        target = (job_definition or getattr(self, "job_definition", "") or "").strip()
-        if not target or (not self._has_describe_client_seam() and not strict):
-            return None
-
-        cache: dict[str, str | None] = self.__dict__.setdefault("_job_def_secret_arns", {})
-        if target in cache:
-            discovered = cache[target]
-            if discovered:
-                self.payload_secret_arn = discovered
-            return discovered
-
-        response = self._query_job_def_for_secret_arn(target)
-        if response is None:
-            return None
-
-        value_from = self._extract_secret_arn_from_job_defs(response.get("jobDefinitions"))
-        cache[target] = value_from
-        if value_from:
-            self.payload_secret_arn = value_from
-            validated: set[str] = self.__dict__.setdefault("_validated_secret_job_defs", set())
-            validated.add(target)
-        return value_from
-
-    @staticmethod
-    def _validate_fetched_secret(raw_value: str, *, source: str) -> str:
-        """Validate and normalize a secret fetched from Secrets Manager or SSM (issue #2042).
-
-        Strips at most a single trailing newline (``\\r?\\n``) so the
-        submitter signs with the exact bytes injected into the worker
-        container, while rejecting empty/whitespace-only secrets or secrets
-        shorter than 32 UTF-8 bytes.
-        """
-        normalized = raw_value
-        if normalized.endswith("\r\n"):
-            normalized = normalized[:-2]
-        elif normalized.endswith("\n"):
-            normalized = normalized[:-1]
-        if not normalized or not normalized.strip():
-            raise ValueError(
-                f"Secret fetched from {source} is empty or whitespace-only — "
-                f"{TASK_PAYLOAD_SECRET_ENV} must be a non-empty secret of at least "
-                "32 UTF-8 bytes (issue #2042)."
-            )
-        byte_len = len(normalized.encode("utf-8"))
-        if byte_len < 32:
-            raise ValueError(
-                f"Secret fetched from {source} is only {byte_len} UTF-8 bytes — "
-                f"{TASK_PAYLOAD_SECRET_ENV} must be at least 32 UTF-8 bytes "
-                "(issue #2042)."
-            )
-        return normalized
-
-    @staticmethod
-    def _parse_secretsmanager_value_from(
-        arn: str, parts: list[str]
-    ) -> tuple[dict[str, Any], str | None]:
-        """Parse an ECS/Batch Secrets Manager ``valueFrom`` ARN into ``get_secret_value`` kwargs and optional JSON key."""
-        secret_id = arn
-        json_key: str | None = None
-        get_kwargs: dict[str, Any] = {}
-        if len(parts) >= 7 and parts[0] == "arn" and parts[5] == "secret":
-            secret_id = ":".join(parts[:7])
-            if len(parts) >= 8 and parts[7]:
-                json_key = parts[7]
-            if len(parts) >= 9 and parts[8]:
-                get_kwargs["VersionStage"] = parts[8]
-            if len(parts) >= 10 and parts[9]:
-                get_kwargs["VersionId"] = parts[9]
-        get_kwargs["SecretId"] = secret_id
-        return get_kwargs, json_key
-
-    @staticmethod
-    def _extract_json_secret_key(raw_value: str, *, secret_id: str, json_key: str, arn: str) -> str:
-        """Extract *json_key* from a JSON-object ``SecretString``."""
-        try:
-            parsed_json = json.loads(raw_value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Secret {secret_id!r} is referenced with JSON key selector "
-                f"{json_key!r} in {arn!r}, but SecretString is not valid JSON "
-                "(issue #2042)."
-            ) from exc
-        if not isinstance(parsed_json, dict) or json_key not in parsed_json:
-            raise ValueError(
-                f"Secret {secret_id!r} JSON object does not contain key "
-                f"{json_key!r} referenced by {arn!r} (issue #2042)."
-            )
-        selected = parsed_json[json_key]
-        if selected is None:
-            raise ValueError(f"Secret {secret_id!r} JSON key {json_key!r} is null (issue #2042).")
-        return str(selected)
-
-    def _fetch_secret_from_arn(self, arn: str) -> str:
-        """Fetch and validate the HMAC secret from Secrets Manager or SSM Parameter Store."""
-        parts = arn.split(":")
-        service = parts[2] if len(parts) >= 6 and parts[0] == "arn" else "secretsmanager"
-        arn_region = self._arn_region(arn)
-
-        if service == "ssm":
-            ssm_client = self._get_ssm_client(region_name=arn_region)
-            resp = ssm_client.get_parameter(Name=arn, WithDecryption=True)
-            param = resp.get("Parameter") if isinstance(resp, dict) else None
-            if not isinstance(param, dict) or param.get("Value") is None:
-                raise RuntimeError(
-                    f"SSM get_parameter({arn!r}) returned no Parameter.Value "
-                    f"for {TASK_PAYLOAD_SECRET_ENV} (issue #2042)."
-                )
-            return self._validate_fetched_secret(str(param["Value"]), source=arn)
-
-        if service != "secretsmanager":
-            raise ValueError(
-                f"Unsupported ARN service {service!r} in {arn!r}; expected "
-                "'secretsmanager' or 'ssm' (issue #2042)."
-            )
-
-        get_kwargs, json_key = self._parse_secretsmanager_value_from(arn, parts)
-        secret_id = str(get_kwargs["SecretId"])
-        secrets_client = self._get_secrets_client(region_name=arn_region)
-        resp = secrets_client.get_secret_value(**get_kwargs)
-        if not isinstance(resp, dict):
-            raise RuntimeError(
-                f"Secrets Manager get_secret_value({secret_id!r}) returned an invalid "
-                f"response for {TASK_PAYLOAD_SECRET_ENV} (issue #2042)."
-            )
-        if "SecretBinary" in resp and not resp.get("SecretString"):
-            raise ValueError(
-                f"Secret {secret_id!r} returned binary SecretBinary instead of "
-                f"SecretString; {TASK_PAYLOAD_SECRET_ENV} requires a UTF-8 string "
-                "secret of at least 32 bytes (issue #2042)."
-            )
-        secret_string = resp.get("SecretString")
-        if secret_string is None:
-            raise ValueError(
-                f"Secret {secret_id!r} returned no SecretString for "
-                f"{TASK_PAYLOAD_SECRET_ENV} (issue #2042)."
-            )
-        raw_value = str(secret_string)
-        if json_key:
-            raw_value = self._extract_json_secret_key(
-                raw_value, secret_id=secret_id, json_key=json_key, arn=arn
-            )
-        return self._validate_fetched_secret(raw_value, source=arn)
-
     def _resolve_signing_secret(self) -> str:
         """Return the non-empty HMAC secret for signing ``OSIMFLOW_TASK_PAYLOAD``.
 
@@ -1172,46 +931,13 @@ class AWSBatchExecutor(BaseExecutor):
         silent unsigned submission trap where Batch jobs launch only to fail
         immediately at container startup (issue #2025).
 
-        When ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is not set locally on the
-        orchestrator, auto-discovers the secret ARN from the active job
-        definition's ``containerProperties.secrets`` (if not explicitly
-        passed via ``--aws-batch-payload-secret-arn``) and fetches the
-        secret value from AWS Secrets Manager or SSM Parameter Store,
-        caching it on ``self._resolved_payload_secret`` (issue #2042).
+        The orchestrator must hold the secret locally
+        (``OSIMFLOW_TASK_PAYLOAD_SECRET`` or ``..._FILE``); it is never
+        fetched from Secrets Manager / SSM on the submitter host.
         """
         secret = resolve_payload_secret()
         if secret:
             return secret
-        cached = getattr(self, "_resolved_payload_secret", None)
-        if isinstance(cached, str) and cached:
-            return cached
-        payload_secret_arn = self._resolve_effective_payload_secret_arn()
-        if payload_secret_arn:
-            try:
-                fetched = self._fetch_secret_from_arn(payload_secret_arn)
-            except ValueError:
-                raise
-            except Exception as exc:
-                log.error(
-                    "AWSBatchExecutor: failed to fetch %s from %r: %s",
-                    TASK_PAYLOAD_SECRET_ENV,
-                    payload_secret_arn,
-                    exc,
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    f"--aws-batch-payload-secret-arn={payload_secret_arn!r} is configured, "
-                    f"but {TASK_PAYLOAD_SECRET_ENV} is not set on the orchestrator and "
-                    f"fetching the secret from AWS failed ({exc}) — cannot compute "
-                    f"{TASK_PAYLOAD_SIG_ENV}. Refusing to submit an unsigned AWS Batch "
-                    "task payload that osimflow.remote_runner will reject at container "
-                    f"startup. Grant secretsmanager:GetSecretValue (or ssm:GetParameter) "
-                    f"on {payload_secret_arn!r} or export {TASK_PAYLOAD_SECRET_ENV} "
-                    f"(or {TASK_PAYLOAD_SECRET_FILE_ENV}) on the orchestrator "
-                    "(issue #1633, #2025, #2042)."
-                ) from exc
-            self._resolved_payload_secret = fetched
-            return fetched
         raise RuntimeError(
             f"{TASK_PAYLOAD_SECRET_ENV} is not configured — refusing to submit an "
             "unsigned AWS Batch task payload that osimflow.remote_runner will reject "
@@ -1834,9 +1560,6 @@ class AWSBatchExecutor(BaseExecutor):
         # work function in container-local storage.
         step_name = self._infer_step_name(name)
         self.validate_work_fn(step_name, fn)
-        # Resolve the effective job-definition payload secret ARN (issue #2042)
-        # before _resolve_signing_secret() and _build_environment().
-        self._resolve_effective_payload_secret_arn(strict=True)
         # Issue #2025: fail fast before staging inputs or submitting any
         # AWS Batch job when no signing secret is configured.
         self._resolve_signing_secret()

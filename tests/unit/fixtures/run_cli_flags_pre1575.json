@@ -215,7 +215,7 @@
     "const": null,
     "default": null,
     "dest": "aws_batch_payload_secret_arn",
-    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). The job definition injects it via containerProperties.secrets (SubmitJob has no containerOverrides.secrets) so the raw secret is omitted from containerOverrides.environment and DescribeJobs output (issues #1633/#1811). When omitted, AWSBatchExecutor auto-discovers the ARN from the active job definition via DescribeJobDefinitions and fetches the secret value from Secrets Manager / SSM Parameter Store on the submitter unless OSIMFLOW_TASK_PAYLOAD_SECRET is already set locally (issue #2042). See docs/aws-batch-terraform.md and docs/secret-management.md.",
+    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). The job definition injects it via containerProperties.secrets (SubmitJob has no containerOverrides.secrets) so the raw secret is omitted from containerOverrides.environment and DescribeJobs output (issues #1633/#1811). The orchestrator must still export OSIMFLOW_TASK_PAYLOAD_SECRET (or OSIMFLOW_TASK_PAYLOAD_SECRET_FILE) locally to sign task payloads; the secret is never fetched on the submitter. See docs/aws-batch-terraform.md and docs/secret-management.md.",
     "metavar": null,
     "nargs": null,
     "option_strings": [
