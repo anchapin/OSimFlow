@@ -299,14 +299,8 @@ def _resolve_seed_osm(template: Path, osw_path: Path | None) -> Path | None:
             data = None
         seed = data.get("seed_file") if isinstance(data, dict) else None
         if isinstance(seed, str) and seed.strip():
-            seed = seed.strip()
-            bases = [root, *(root / p for p in _osw_file_paths(data))]
-            name = Path(seed).name
-            candidates = [b / seed for b in bases]
-            candidates += [root / "files" / name, root / "seeds" / name]
-            for cand in candidates:
+            for resolved in seed_file_candidates(root, seed.strip(), _osw_file_paths(data)):
                 # Entries escaping the package are ignored: they would not be staged.
-                resolved = cand.resolve()
                 if resolved.is_file() and resolved.is_relative_to(root):
                     return root / resolved.relative_to(root)
     default = template / "model.osm"
@@ -314,6 +308,15 @@ def _resolve_seed_osm(template: Path, osw_path: Path | None) -> Path | None:
         return default
     osms = sorted(template.glob("*.osm"))
     return osms[0] if len(osms) == 1 else None
+
+
+def seed_file_candidates(root: Path, seed: str, file_paths: list[str]) -> list[Path]:
+    """Resolved candidate locations for an OSW ``seed_file``, in OpenStudio precedence order."""
+    root = root.resolve()
+    name = Path(seed).name
+    candidates = [root / seed, *(root / p / seed for p in file_paths)]
+    candidates += [root / "files" / name, root / "seeds" / name]
+    return [c.resolve() for c in candidates]
 
 
 def _osw_file_paths(data: dict[str, Any]) -> list[str]:

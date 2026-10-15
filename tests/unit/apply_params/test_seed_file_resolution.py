@@ -151,3 +151,15 @@ def test_measure_registry_has_osm_uses_seed_resolution(tmp_path: Path) -> None:
     reg = MeasureRegistry()
     reg._indexed_path = pkg
     assert MeasureRegistry._resolve_effective_has_osm(reg, None) is True
+
+
+def test_measure_registry_has_osm_falls_back_to_any_top_level_osm(tmp_path: Path) -> None:
+    from osimflow.measures import MeasureRegistry
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.osm").write_text("{}")
+    (pkg / "b.osm").write_text("{}")
+    reg = MeasureRegistry()
+    reg._indexed_path = pkg
+    assert MeasureRegistry._resolve_effective_has_osm(reg, None) is True

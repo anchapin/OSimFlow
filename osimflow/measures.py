@@ -324,7 +324,12 @@ class MeasureRegistry:
         if has_osm is not None:
             return has_osm
         if target._indexed_path is not None:
-            return resolve_seed_osm(target._indexed_path) is not None
+            root = target._indexed_path
+            return (
+                resolve_seed_osm(root) is not None
+                or (root / "model.osm").is_file()
+                or any(root.glob("*.osm"))
+            )
         return False
 
     @staticmethod
