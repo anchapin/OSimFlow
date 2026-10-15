@@ -144,6 +144,14 @@ At run time the seed `.osm` is taken from `workflow.osw`'s `seed_file`
 (falling back to `model.osm`, then a single top-level `*.osm`) rather than
 a hardcoded `model.osm`.
 
+Variable measure references (`measure.name`, `display_name`, the class name,
+or the directory basename) are normalized to the `workflow.osw`
+`measure_dir_name`, so `measure_argument` always matches a staged step.
+Ambiguous aliases are left untouched. `output_variables` (or
+`problem.outputs`) are preserved under `_metadata.outputs`, and a top-level
+`objective` is derived from the output flagged `objective_function: true`
+unless `problem.algorithm.objective` is given explicitly.
+
 Staging does not rewrite any measure-specific arguments (for example a
 cleanup measure's `sql` flag). Results are read from `out.osw`, so
 `RUN_OPENSTUDIO_SIM` / `EXTRACT_KPIS` still work if a measure deletes
