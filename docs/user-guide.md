@@ -1739,8 +1739,8 @@ See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
 
 | Flag | Description |
 |---|---|
-| `--manifest M` | YAML/JSON with `common:` flags and a `batches:` list (`id`, `name`, run flags without `--`). |
-| `--root DIR` | Parent of the `Batch<id>_<name>` campaign dirs, the submit lock file and `batches_summary.json`. |
+| `--manifest M` | YAML/JSON with `common:` flags and a `batches:` list (`name` or `campaign`, optional `id`, run flags without `--`; optional `common.name_template` with `{id}`/`{name}`). |
+| `--root DIR` | Parent of the per-batch campaign dirs (named by `campaign` / `name_template`, default the batch `name`), the submit lock file and `batches_summary.json`. |
 | `--continue-on-error` | Keep going after a failed batch (default: remaining batches are skipped). |
 | `--submit-lock-timeout-s N` | Seconds to wait for the exclusive submit lock. |
 | `--dry-run` | Print each batch's `osimflow run` command only. |

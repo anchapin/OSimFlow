@@ -657,7 +657,8 @@ name in this section.
   `submit_lock`, `BatchResult`, `BatchManifestError`, `SubmitLockTimeout`.
   Powers `osimflow run-batches --manifest M [--root DIR] [--continue-on-error]
   [--submit-lock-timeout-s N] [--dry-run]`: each batch runs as its own
-  `osimflow run` campaign in `<root>/Batch<id>_<name>` under an exclusive
+  `osimflow run` campaign in `<root>/<campaign>` (explicit `campaign`, else
+  `common.name_template` with `{id}`/`{name}`, default `{name}`) under an exclusive
   flock on `<root>/.submit.lock`; summary in `<root>/batches_summary.json`.
 - `osimflow/handoff_record.py` — `HandoffRecord` +
   `NoHandoffRecordError` + `IDEMPOTENCY_KEY_HEADER` +
