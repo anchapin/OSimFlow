@@ -1301,14 +1301,16 @@ class Campaign(
         """Collect (variable_name, mapping_dict) for all epw_file targets."""
         return CampaignEpwResolver.collect_epw_mappings(variable_defs)
 
-    def _preflight_validate_epw_files(self, variable_defs: list[dict[str, Any]]) -> None:
+    def _preflight_validate_epw_files(
+        self, variable_defs: list[dict[str, Any]], osw_weather_replaced: bool = False
+    ) -> None:
         """Pre-flight check: verify all mapped .epw files exist and are valid.
 
         Raises:
             FileNotFoundError: one or more mapped .epw files are missing.
             EPWValidationError: one or more .epw files fail format validation.
         """
-        self._epw.preflight_validate_epw_files(variable_defs)
+        self._epw.preflight_validate_epw_files(variable_defs, osw_weather_replaced)
 
     def _check_epw_existence(
         self,

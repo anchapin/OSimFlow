@@ -39,6 +39,7 @@ def tmp_template_dir(tmp_path: Path) -> Path:
     weather_dir.mkdir()
     epw_header = "LOCATION,Los Angeles,CA,USA,722950,33.94,-118.41,-8.0,21.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"
     (weather_dir / "USA_CA_Los.Angeles.epw").write_text(epw_header)
+    (weather_dir / "default.epw").write_text(epw_header)
     epw_header_ny = "LOCATION,New York,NY,USA,725030,40.71,-74.01,-5.0,10.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"
     (weather_dir / "USA_NY_New.York.epw").write_text(epw_header_ny)
     epw_header_chi = "LOCATION,Chicago,IL,USA,725300,41.78,-87.75,-6.0,190.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"

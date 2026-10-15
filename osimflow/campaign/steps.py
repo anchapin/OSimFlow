@@ -30,6 +30,7 @@ from ..config import CampaignConfig
 from ..executors import Handle
 from ..observability.monitoring import RunTrace, WorkerRecoveryManager
 from ..s3_campaign import S3CampaignStore, SubmitClaim
+from ..weather import find_weather_file
 from ..work import _PENDING_OSM_PARAMS_FILE, _apply_parameters_with_osm_deferral
 from .dag import SampleDict, SimResult
 from .fanout import BookkeepingOnce
@@ -464,7 +465,10 @@ class CampaignStepsMixin:
             dest_dir.mkdir(parents=True, exist_ok=True)
             _c.shutil.copy2(src, dest_dir / src.name)
             resolved["__epw_file__"] = f"weather/{src.name}"
-        elif not (template_pkg / src).is_file() and not (apply_out_dir / src).is_file():
+        elif (
+            find_weather_file(template_pkg, src) is None
+            and find_weather_file(apply_out_dir, src) is None
+        ):
             raise FileNotFoundError(
                 f"weather override {raw!r} not found in the sample package {template_pkg}"
             )
@@ -524,7 +528,10 @@ class CampaignStepsMixin:
 
         # Pre-flight EPW validation: verify all mapped .epw files exist
         # in the template_sim_package directory.
-        self._preflight_validate_epw_files(variable_defs)
+        self._preflight_validate_epw_files(
+            variable_defs,
+            osw_weather_replaced=bool(samples) and all(s.get("weather_file") for s in samples),
+        )
 
         # Pre-flight validation: validate ALL parameter names
         # against the template before submitting any work. Collect the

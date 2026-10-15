@@ -33,11 +33,13 @@ __all__ = [
     "detect_climate_zone_from_stat",
     "discover_epw_files",
     "download_epw",
+    "find_weather_file",
     "validate_all_epw_files",
     "validate_epw",
     "validate_epw_header",
 ]
 
+import json
 import logging
 import re
 import urllib.parse
@@ -195,6 +197,50 @@ def validate_epw_header(path: Path) -> dict[str, str]:
         "timezone": fields[7].strip(),
         "elevation": fields[8].strip(),
     }
+
+
+def weather_search_dirs(package: Path, weather_subdir: str = "weather") -> list[Path]:
+    """Directories where a relative ``weather_file`` may live.
+
+    Mirrors OpenStudio's lookup: the package root, every ``file_paths`` entry of
+    ``workflow.osw`` (relative to the package and inside it), then ``files/`` and the
+    configured weather subdirectory.
+    """
+    dirs: list[Path] = [package]
+    osw = package / "workflow.osw"
+    if osw.is_file():
+        try:
+            data = json.loads(osw.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        paths = data.get("file_paths") if isinstance(data, dict) else None
+        if isinstance(paths, list):
+            root = package.resolve()
+            # Entries escaping the package are ignored: they would not be staged.
+            dirs.extend(
+                package / p
+                for p in paths
+                if isinstance(p, str) and p and (root / p).resolve().is_relative_to(root)
+            )
+    dirs.extend([package / "files", package / weather_subdir])
+    unique: list[Path] = []
+    for d in dirs:
+        if d not in unique:
+            unique.append(d)
+    return unique
+
+
+def find_weather_file(
+    package: Path, rel: str | Path, weather_subdir: str = "weather"
+) -> Path | None:
+    """Resolve a weather file against the package search dirs; ``None`` if missing."""
+    candidate = Path(rel)
+    if candidate.is_absolute():
+        return candidate if candidate.is_file() else None
+    for base in weather_search_dirs(package, weather_subdir):
+        if (base / candidate).is_file():
+            return base / candidate
+    return None
 
 
 def discover_epw_files(
