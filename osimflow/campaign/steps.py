@@ -308,16 +308,16 @@ class CampaignStepsMixin:
         re-execute the simulation.  The cache key includes the template
         package hash and the OpenStudio version.
 
-        Skipped when ``cfg.skip_preflight`` or ``cfg.detach_s3`` is
-        ``True`` (the ``--skip-preflight`` or ``--detach-s3`` CLI flags).
+        Skipped only when ``cfg.skip_preflight`` is ``True`` (the
+        ``--skip-preflight`` CLI flag); ``--detach-s3`` does not imply it
+        (issue #2118).
 
         Raises:
             SevereEnergyPlusError: the seed model has errors that would
                 cause every sample to fail.
         """
-        if self.cfg.skip_preflight or self.cfg.detach_s3:
-            reason = "--skip-preflight" if self.cfg.skip_preflight else "--detach-s3"
-            _c.log.info("PREFLIGHT_RUN_MODEL: skipped (%s)", reason)
+        if self.cfg.skip_preflight:
+            _c.log.info("PREFLIGHT_RUN_MODEL: skipped (--skip-preflight)")
             self.trace.step_finished(
                 "PREFLIGHT_RUN_MODEL",
                 cache="SKIPPED",
@@ -691,7 +691,7 @@ class CampaignStepsMixin:
                         apply_out_dir,
                     )
                 else:
-                    if self.executor.name == "aws_batch":
+                    if self.executor.python_steps_use_openstudio_image:
                         apply_container = self._os_digest_ref or _c.CONTAINER_OS.format(
                             version=self.cfg.openstudio_version
                         )

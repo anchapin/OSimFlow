@@ -528,6 +528,10 @@ class AWSBatchExecutor(BaseExecutor):
     def requires_remote_runner_payload(self) -> bool:
         return True
 
+    @property
+    def python_steps_use_openstudio_image(self) -> bool:
+        return True
+
     signs_task_payload = True
 
     # Default pricing estimates (USD per vCPU-hour). Conservative defaults
