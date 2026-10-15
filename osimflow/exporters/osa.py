@@ -238,9 +238,7 @@ class OSAExporter:
                     arcname = f.relative_to(tsp).as_posix()
                     # Generated entries are reserved; a colliding source file
                     # (stale analysis.json, stray root seed.osm) is skipped.
-                    if arcname == "analysis.json" or (
-                        arcname == "seed.osm" and has_seed
-                    ):
+                    if arcname == "analysis.json" or (arcname == "seed.osm" and has_seed):
                         log.warning(
                             "Skipping %s: archive name is reserved for generated content",
                             arcname,
