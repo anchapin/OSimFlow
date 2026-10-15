@@ -1237,7 +1237,7 @@ def _normalize_osw_paths(
         osw["seed_file"] = _resolve_file_in_package(
             pkg_dir,
             seed_file.strip(),
-            ("", "seeds", "seed", "seed_models", "models"),
+            ("", "files", "seeds", "seed", "seed_models", "models"),
             "seed_file",
             source_root=source_root,
         )

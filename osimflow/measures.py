@@ -39,6 +39,7 @@ from .apply_params import (
     _infer_osm_attribute_mapping,
     _measure_search_dirs,
     read_measure_xml_aliases,
+    resolve_seed_osm,
 )
 from .errors import OSimFlowValueError
 
@@ -323,9 +324,7 @@ class MeasureRegistry:
         if has_osm is not None:
             return has_osm
         if target._indexed_path is not None:
-            return (target._indexed_path / "model.osm").is_file() or any(
-                target._indexed_path.glob("*.osm")
-            )
+            return resolve_seed_osm(target._indexed_path) is not None
         return False
 
     @staticmethod

@@ -920,6 +920,36 @@ class TestStageOsaTemplatePackage:
         # Measure-specific arguments are left untouched by import-osa.
         assert cleanup_step["arguments"]["sql"] is True
 
+    def test_stage_seed_under_files_stays_resolvable(self, tmp_path: Path) -> None:
+        from osimflow.apply_params import resolve_seed_osm
+        from osimflow.importers.osa import stage_osa_template_package
+
+        pkg = tmp_path / "seed_pkg"
+        (pkg / "files").mkdir(parents=True)
+        (pkg / "files" / "baseline.osm").write_text("OS:Version,3.10.0;\n", encoding="utf-8")
+        (pkg / "measures" / "SetThermostat").mkdir(parents=True)
+        (pkg / "workflow.osw").write_text(
+            json.dumps(
+                {
+                    "seed_file": "baseline.osm",
+                    "file_paths": ["files"],
+                    "measure_paths": ["measures"],
+                    "steps": [{"measure_dir_name": "SetThermostat", "arguments": {}}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        analysis = _write_json(
+            tmp_path / "analysis.json",
+            {"analysis": {"problem": {"algorithm": {"type": "single_run"}, "workflow": []}}},
+        )
+        staged = tmp_path / "staged"
+        stage_osa_template_package(analysis, staged, template_package=pkg)
+
+        osw = json.loads((staged / "workflow.osw").read_text(encoding="utf-8"))
+        assert osw["seed_file"] == "files/baseline.osm"
+        assert resolve_seed_osm(staged) == staged.resolve() / "files" / "baseline.osm"
+
     def test_stage_directly_from_osa_zip(self, tmp_path: Path) -> None:
         from osimflow.importers.osa import stage_osa_template_package
 
