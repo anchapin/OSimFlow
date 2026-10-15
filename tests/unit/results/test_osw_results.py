@@ -14,10 +14,12 @@ from osimflow._work_scripts.aggregate_results import extract_failure
 from osimflow._work_scripts.extract_kpis import run_extract_kpis
 from osimflow.osw_results import (
     SIMULATION_FAILED_KEY,
+    OswResults,
     collect_failure_message_from_run_log,
     extract_failure_message_from_osw,
     failure_message,
     parse_out_osw,
+    read_out_osw,
 )
 
 OK_OSW = {
@@ -213,15 +215,17 @@ def test_extract_kpis_collision_precedence(
     (tmp_path / "out.osw").write_text(json.dumps(OK_OSW))
     monkeypatch.setattr(
         extract_kpis_mod,
-        "parse_out_osw",
-        lambda _p: {
-            "eui_kwh_m2_yr": 999.0,
-            "sample_id": "hijacked",
-            "openstudio_version": "0.0.0",
-            "units": "bad",
-            "quality": "bad",
-            "openstudio_results.out_total_electricity_gj": 12.5,
-        },
+        "read_out_osw",
+        lambda _p: OswResults(
+            step_values={
+                "eui_kwh_m2_yr": 999.0,
+                "sample_id": "hijacked",
+                "openstudio_version": "0.0.0",
+                "units": "bad",
+                "quality": "bad",
+                "openstudio_results.out_total_electricity_gj": 12.5,
+            }
+        ),
     )
     out = tmp_path / "k.json"
     with caplog.at_level(logging.WARNING, logger="extract_kpis"):
@@ -357,3 +361,84 @@ def test_reused_simulation_publishes_artifacts(tmp_path: Path) -> None:
     (pkg / "out.osw").write_text(json.dumps(OK_OSW))
     work.run_openstudio_sim(pkg, "0001", "3.10.0", sim)
     assert (sim / "0001" / "out.osw").is_file()
+
+
+META_OSW = {
+    "completed_status": "Success",
+    "steps": [
+        {
+            "measure_dir_name": "openstudio_results",
+            "result": {
+                "step_result": "Success",
+                "step_values": [
+                    {
+                        "name": "eui",
+                        "value": 12.5,
+                        "units": "kBtu/ft^2",
+                        "display_name": "EUI",
+                        "short_name": "eui_s",
+                    },
+                    {"name": "label", "value": "x"},
+                ],
+                "step_warnings": ["w1", "w2"],
+                "step_info": ["i1"],
+                "step_initial_condition": "before",
+                "step_FinalCondition": "after",
+            },
+        },
+        {
+            "measure_dir_name": "skipper",
+            "result": {"step_result": "Skip", "step_values": []},
+        },
+        {
+            "measure_dir_name": "na_measure",
+            "result": {"step_result": "NA", "step_errors": ["e1"]},
+        },
+    ],
+}
+
+
+def test_read_out_osw_preserves_step_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "out.osw"
+    path.write_text(json.dumps(META_OSW))
+    res = read_out_osw(path)
+    assert res.completed_status == "Success"
+    assert res.step_values["openstudio_results.eui"] == 12.5
+    assert res.step_units == {
+        "openstudio_results.eui": "kBtu/ft^2",
+        "openstudio_results.label": "",
+    }
+    detail = res.step_value_details["openstudio_results.eui"]
+    assert (detail.display_name, detail.short_name) == ("EUI", "eui_s")
+    assert res.step_value_details["openstudio_results.label"].display_name is None
+    assert [s.step_result for s in res.steps] == ["Success", "Skip", "NA"]
+    first = res.steps[0]
+    assert first.warnings == ("w1", "w2")
+    assert first.info == ("i1",)
+    assert first.initial_condition == "before"
+    assert first.final_condition == "after"
+    assert res.steps[2].errors == ("e1",)
+    assert res.step_errors == ["e1"]
+    assert parse_out_osw(path) == res.step_values
+
+
+def test_read_out_osw_missing_or_invalid(tmp_path: Path) -> None:
+    assert read_out_osw(tmp_path / "nope.osw") == read_out_osw(tmp_path / "nope.osw")
+    assert read_out_osw(tmp_path / "nope.osw").steps == []
+    bad = tmp_path / "out.osw"
+    bad.write_text("{not json")
+    assert read_out_osw(bad).step_values == {}
+
+
+def test_extract_kpis_reports_osw_units(tmp_path: Path) -> None:
+    (tmp_path / "out.osw").write_text(json.dumps(META_OSW))
+    out = tmp_path / "k.json"
+    run_extract_kpis(tmp_path, "0001", out)
+    data = json.loads(out.read_text())
+    assert data["kpis"]["openstudio_results.eui"] == 12.5
+    assert data["kpi_units"] == {
+        "openstudio_results.eui": "kBtu/ft^2",
+        "openstudio_results.label": "",
+    }
+    run_extract_kpis(tmp_path, "0001", out, kpis=["openstudio_results.eui"])
+    assert json.loads(out.read_text())["kpi_units"] == {"openstudio_results.eui": "kBtu/ft^2"}

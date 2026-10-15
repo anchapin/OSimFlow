@@ -234,7 +234,9 @@ name in this section.
   the `osimflow` top-level re-export) keep working.
 - `osimflow/osw_results.py` — measure-reported values and failure
   messages from `out.osw` / `run.log` (issue #1871): `parse_out_osw`,
-  `extract_failure_message_from_osw`,
+  `read_out_osw` / `OswResults` / `OswStepResult` / `OswStepValue` (units,
+  display names, step_result, warnings, conditions; issue #2114; KPI JSON
+  gains `kpi_units`), `extract_failure_message_from_osw`,
   `collect_failure_message_from_run_log`, `failure_message`,
   `MEASURE_RESULTS_TOKEN` (`--kpis`
   opt-in token), `SIMULATION_FAILED_KEY`, `OUT_OSW_NAME`,

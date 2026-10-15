@@ -15,6 +15,7 @@ per-sample simulation directory by ``osimflow.work.run_openstudio_sim``
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from re import Pattern
 from typing import Any
@@ -44,23 +45,117 @@ def _load_osw(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def parse_out_osw(path: Path) -> dict[str, Any]:
-    """Return ``{"<measure_dir_name>.<attribute>": value}`` for every step value.
+@dataclass(frozen=True)
+class OswStepValue:
+    """One ``registerValue`` output of a measure step."""
 
-    Reads ``steps[].result.step_values`` (``registerValue`` outputs). When
-    the same measure directory appears in several steps, the
-    ``<measure_dir_name>.*`` keys hold the last instance (unchanged), and each
-    instance's values are additionally kept under its distinct step ``"name"``
-    (``"<step_name>.<attribute>"``) so earlier instances are not lost. Step
-    names that are not unique or that equal another ``measure_dir_name`` are
-    ambiguous and not emitted.
-    Returns ``{}`` when the file is absent or unparseable.
+    name: str
+    value: Any
+    units: str = ""
+    display_name: str | None = None
+    short_name: str | None = None
+
+
+@dataclass(frozen=True)
+class OswStepResult:
+    """Per-step metadata from ``out.osw`` ``steps[].result``.
+
+    ``step_result`` is one of ``Success``, ``Fail``, ``NA``, ``Skip`` (or ``None``
+    when absent).
+    """
+
+    measure: str
+    step_name: str | None = None
+    step_result: str | None = None
+    values: tuple[OswStepValue, ...] = ()
+    warnings: tuple[str, ...] = ()
+    info: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    initial_condition: str | None = None
+    final_condition: str | None = None
+
+
+@dataclass
+class OswResults:
+    """Structured view of ``out.osw``.
+
+    ``step_values`` / ``step_units`` use the same ``"<prefix>.<name>"`` keys as
+    :func:`parse_out_osw`; ``step_units`` holds the reported units (``""`` when
+    absent) and ``step_value_details`` the full per-value records.
+    """
+
+    completed_status: str | None = None
+    step_values: dict[str, Any] = field(default_factory=dict)
+    step_units: dict[str, str] = field(default_factory=dict)
+    step_value_details: dict[str, OswStepValue] = field(default_factory=dict)
+    step_errors: list[str] = field(default_factory=list)
+    steps: list[OswStepResult] = field(default_factory=list)
+
+
+def _str_list(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(x) for x in raw)
+    return (str(raw),)
+
+
+def _opt_str(raw: Any) -> str | None:
+    return None if raw is None else str(raw)
+
+
+def _first(result: dict[str, Any], *keys: str) -> Any:
+    # OpenStudio emits snake_case; the CamelCase spelling is also accepted.
+    return next((result[k] for k in keys if result.get(k) is not None), None)
+
+
+def _step_value(item: dict[str, Any]) -> OswStepValue:
+    units = item.get("units")
+    return OswStepValue(
+        name=str(item["name"]),
+        value=item["value"],
+        units="" if units is None else str(units),
+        display_name=_opt_str(item.get("display_name")),
+        short_name=_opt_str(item.get("short_name")),
+    )
+
+
+def _key_prefixes(
+    step: dict[str, Any], measure: str, dir_counts: dict[str, int], name_counts: dict[str, int]
+) -> list[str]:
+    prefixes = [measure]
+    step_name = step.get("name")
+    if (
+        step.get("measure_dir_name")
+        and dir_counts.get(measure, 0) > 1
+        and isinstance(step_name, str)
+        and step_name
+        and step_name not in dir_counts
+        and name_counts.get(step_name) == 1
+    ):
+        prefixes.append(step_name)
+    return prefixes
+
+
+def read_out_osw(path: Path) -> OswResults:
+    """Parse ``out.osw`` keeping per-value units/names and per-step metadata.
+
+    Key semantics for ``step_values`` match :func:`parse_out_osw`: when the same
+    measure directory appears in several steps the ``<measure_dir_name>.*`` keys
+    hold the last instance, and each instance's values are also kept under its
+    distinct step ``"name"`` (``"<step_name>.<attribute>"``); step names that
+    are not unique or equal another ``measure_dir_name`` are not emitted.
+    Returns an empty :class:`OswResults` when the file is absent or unparseable.
     """
     if not path.is_file():
-        return {}
+        return OswResults()
     osw = _load_osw(path)
-    values: dict[str, Any] = {}
-    steps = (osw or {}).get("steps") or []
+    if osw is None:
+        return OswResults()
+    out = OswResults(completed_status=_opt_str(osw.get("completed_status")))
+    steps = osw.get("steps") or []
+    if not isinstance(steps, list):
+        steps = []
     dir_counts: dict[str, int] = {}
     name_counts: dict[str, int] = {}
     for step in steps:
@@ -76,22 +171,47 @@ def parse_out_osw(path: Path) -> dict[str, Any]:
         result = step.get("result")
         if not measure or not isinstance(result, dict):
             continue
-        prefixes = [str(measure)]
         step_name = step.get("name")
-        if (
-            step.get("measure_dir_name")
-            and dir_counts.get(str(measure), 0) > 1
-            and isinstance(step_name, str)
-            and step_name
-            and step_name not in dir_counts
-            and name_counts.get(step_name) == 1
-        ):
-            prefixes.append(step_name)
+        prefixes = _key_prefixes(step, str(measure), dir_counts, name_counts)
+        values: list[OswStepValue] = []
         for item in result.get("step_values") or []:
             if isinstance(item, dict) and item.get("name") is not None and "value" in item:
+                detail = _step_value(item)
+                values.append(detail)
                 for prefix in prefixes:
-                    values[f"{prefix}.{item['name']}"] = item["value"]
-    return values
+                    key = f"{prefix}.{detail.name}"
+                    out.step_values[key] = detail.value
+                    out.step_units[key] = detail.units
+                    out.step_value_details[key] = detail
+        errors = _str_list(result.get("step_errors"))
+        out.step_errors.extend(errors)
+        out.steps.append(
+            OswStepResult(
+                measure=str(measure),
+                step_name=step_name if isinstance(step_name, str) else None,
+                step_result=_opt_str(result.get("step_result")),
+                values=tuple(values),
+                warnings=_str_list(result.get("step_warnings")),
+                info=_str_list(result.get("step_info")),
+                errors=errors,
+                initial_condition=_opt_str(
+                    _first(result, "step_initial_condition", "step_InitialCondition")
+                ),
+                final_condition=_opt_str(
+                    _first(result, "step_final_condition", "step_FinalCondition")
+                ),
+            )
+        )
+    return out
+
+
+def parse_out_osw(path: Path) -> dict[str, Any]:
+    """Return ``{"<measure_dir_name>.<attribute>": value}`` for every step value.
+
+    Thin wrapper over :func:`read_out_osw` (see it for key semantics); returns
+    ``{}`` when the file is absent or unparseable.
+    """
+    return read_out_osw(path).step_values
 
 
 def has_osw_or_marker_failure(sim_dir: Path) -> bool:
