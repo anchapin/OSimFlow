@@ -208,3 +208,52 @@ def test_json_stub_helper_rejects_non_stub(tmp_path: Path, content: str | None) 
     if content is not None:
         osm.write_text(content)
     assert _apply_json_stub_osm_attributes(osm, {"x": 1.0}) is False
+
+
+def _collision_template(root: Path) -> Path:
+    pkg = _template(root)
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {"r_value": 5.0, "lpd": 8.0}}))
+    return pkg
+
+
+def test_collision_key_osw_only_matches_work(tmp_path: Path) -> None:
+    template = _collision_template(tmp_path)
+    standalone = tmp_path / "standalone"
+    apply_parameters(template, {"RubyMeasure.r_value": 2.0, "lpd": 9.0}, "1", standalone)
+    work_out = tmp_path / "work"
+    shutil.copytree(template, work_out)
+    with patch.dict(sys.modules, {"openstudio": None}):
+        _apply_parameters_with_osm_deferral(
+            template, {"RubyMeasure.r_value": 2.0, "lpd": 9.0}, "1", work_out
+        )
+    _assert_same_package(standalone, work_out)
+    assert json.loads((standalone / "model.osm").read_text())["attributes"] == {
+        "r_value": 5.0,
+        "lpd": 9.0,
+    }
+
+
+def test_default_apply_parameters_collision_osw_only(tmp_path: Path) -> None:
+    template = _collision_template(tmp_path)
+    standalone = tmp_path / "standalone"
+    apply_parameters(template, {"RubyMeasure.r_value": 2.0}, "1", standalone)
+    work_out = tmp_path / "work"
+    shutil.copytree(template, work_out)
+    default_apply_parameters(template, {"RubyMeasure.r_value": 2.0}, "1", work_out)
+    _assert_same_package(standalone, work_out)
+
+
+def test_stub_mode_difference_documented(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+    template = _template(tmp_path)
+    standalone = tmp_path / "standalone"
+    apply_parameters(template, {"lighting_power_density": 11.5}, "1", standalone)
+    work_out = tmp_path / "work"
+    shutil.copytree(template, work_out)
+    default_apply_parameters(template, {"lighting_power_density": 11.5}, "1", work_out)
+    assert json.loads((standalone / "model.osm").read_text())["attributes"] == {
+        "lighting_power_density": 11.5
+    }
+    assert json.loads((work_out / "model.osm").read_text())["attributes"] == {
+        "lighting_power_density": 8.0
+    }

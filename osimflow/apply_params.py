@@ -1687,12 +1687,18 @@ def apply_parameters(
     osw_params = dict(params)
     if epw_file_value is not None:
         osw_params[EPW_FILE_KEY] = epw_file_value
-    # OSW pass: measure arguments + weather_file. The .osm pass takes every
-    # parameter mapped to an attribute, even one the OSW also consumed
-    # (a name colliding across both files is mutated in each, as before).
-    _apply_osw_parameters(osw_in_out, osw_params)
+    # Same policy as work.default_apply_parameters: the OSW pass consumes
+    # every key it recognises (measure arguments, weather_file); only the
+    # returned remainder is mutated in the .osm. A name that is both an OSW
+    # measure argument and an .osm attribute is therefore written to the OSW
+    # only. Narrow difference: unlike default_apply_parameters this never
+    # skips JSON-stub .osm mutation under OSIMFLOW_STUB_SIM=1.
+    osw_params = dict(params)
+    if epw_file_value is not None:
+        osw_params[EPW_FILE_KEY] = epw_file_value
+    remaining = _apply_osw_parameters(osw_in_out, osw_params)
     osm_params = {
-        k: v for k, v in params.items() if k in mappings and mappings[k].kind == "attribute"
+        k: v for k, v in remaining.items() if k in mappings and mappings[k].kind == "attribute"
     }
     if osm_params and osm_in_out is not None and osm_in_out.is_file():
         _mutate_osm(osm_in_out, osm_params, mappings)
