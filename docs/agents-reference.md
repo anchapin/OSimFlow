@@ -638,6 +638,13 @@ name in this section.
   `S3CampaignStore.sample_states` treats either marker as terminal
   (unless `retrying`) and a success marker wins; `AWSBatchHandle` also
   materializes those files on the controller when a job fails).
+  The store is a pure storage layer (issue #2119): no boto3/Batch calls and
+  `status()` never writes to S3. `osimflow status|download --from-s3` resolve
+  FAILED Batch jobs of still-pending samples at the CLI layer
+  (`osimflow/cli/s3.py:_substrate_failures` via
+  `AWSBatchExecutor.describe_job_failures`, credential-resolver validated) and
+  pass them in as `substrate_failures` (in-memory overlay; `download` writes
+  local `_OSIMFLOW_FAILED` markers only).
   `run --detach-s3` writes `<campaign>/_handoff.json`
   + `samples.json` to the bucket and exits; `status|list|download
   --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and

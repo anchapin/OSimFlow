@@ -14,7 +14,10 @@ class _FakeStore:
     def __init__(self, status: dict[str, Any]) -> None:
         self._status = status
 
-    def status(self, cid: str) -> dict[str, Any]:
+    def read_handoff(self, cid: str) -> Any:
+        return argparse.Namespace(executor="local")
+
+    def status(self, cid: str, **_kw: Any) -> dict[str, Any]:
         return {"campaign_id": cid, **self._status}
 
 

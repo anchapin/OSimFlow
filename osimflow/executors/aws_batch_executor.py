@@ -410,6 +410,39 @@ def _validate_submitter_credentials(creds: Any) -> Any:
     )
 
 
+_DESCRIBE_JOBS_LIMIT = 100
+
+
+def _format_batch_failure_reason(job_id: str, job: dict[str, Any]) -> str:
+    """Format a single-line failure diagnostic from a ``describe_jobs`` entry."""
+    resolved_id = str(job.get("jobId") or job_id)
+    container = job.get("container")
+    if not isinstance(container, dict):
+        container = {}
+    attempts = job.get("attempts")
+    if not container and isinstance(attempts, list) and attempts:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict) and isinstance(last_attempt.get("container"), dict):
+            container = last_attempt["container"]
+    exit_code = container.get("exitCode")
+    status_reason = " ".join(str(job.get("statusReason") or "").split())
+    container_reason = " ".join(str(container.get("reason") or "").split())
+    header = f"AWS Batch job {resolved_id} FAILED"
+    if exit_code is not None:
+        header = f"{header} (exit_code={exit_code})"
+    reasons: list[str] = []
+    if container_reason:
+        reasons.append(container_reason)
+    if status_reason and status_reason not in container_reason:
+        if container_reason and container_reason in status_reason:
+            reasons = [status_reason]
+        else:
+            reasons.append(status_reason)
+    if reasons:
+        return f"{header}: {'; '.join(reasons)}"
+    return header
+
+
 class _SubmitterCredentialResolver:
     """Botocore credential resolver wrapper that validates resolved submitter credentials.
 
@@ -731,6 +764,27 @@ class AWSBatchExecutor(BaseExecutor):
         if self._client is None:
             self._client = self._make_client("batch")
         return self._client
+
+    def describe_job_failures(self, job_ids: list[str]) -> dict[str, str] | None:
+        """Map each terminally ``FAILED`` Batch job id to a one-line diagnostic.
+
+        Read-only (``describe_jobs`` in chunks of 100) through the credential-
+        validated, adaptive-retry client. Returns ``None`` when the substrate
+        cannot be queried, so callers can degrade to "unknown" (issues #2058, #2119).
+        """
+        failures: dict[str, str] = {}
+        try:
+            client = self._get_client()
+            for i in range(0, len(job_ids), _DESCRIBE_JOBS_LIMIT):
+                response = client.describe_jobs(jobs=job_ids[i : i + _DESCRIBE_JOBS_LIMIT])
+                for job in response.get("jobs", []) if isinstance(response, dict) else []:
+                    if isinstance(job, dict) and job.get("jobId") and job.get("status") == "FAILED":
+                        jid = str(job["jobId"])
+                        failures[jid] = _format_batch_failure_reason(jid, job)
+        except Exception:
+            log.warning("describe_jobs failed during failure reconciliation", exc_info=True)
+            return None
+        return failures
 
     def _get_ec2_client(self) -> Any:
         """Lazy boto3 EC2 client for Spot price queries."""

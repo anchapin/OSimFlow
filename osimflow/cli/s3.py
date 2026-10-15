@@ -37,6 +37,32 @@ def _s3_store(args: argparse.Namespace, scratch: Path) -> Any:
     return S3CampaignStore(storage, scratch)
 
 
+def _substrate_failures(args: argparse.Namespace, store: Any, cid: str) -> dict[str, str]:
+    """Sample id -> reason for pending samples whose AWS Batch job already FAILED.
+
+    Routed through ``AWSBatchExecutor`` (credential resolver, adaptive retries)
+    at the CLI layer; the store itself never talks to a substrate (issue #2119).
+    Any lookup problem degrades to "no overlay".
+    """
+    record = store.read_handoff(cid)
+    if record.executor != "aws_batch":
+        return {}
+    job_to_sids = store.pending_job_ids(record)
+    if not job_to_sids:
+        return {}
+    try:
+        executor = AWSBatchExecutor(
+            allow_long_lived_credentials=bool(
+                getattr(args, "aws_batch_allow_long_lived_credentials", False)
+            )
+        )
+    except Exception:
+        log.warning("AWS Batch reconciliation unavailable", exc_info=True)
+        return {}
+    failed = executor.describe_job_failures(list(job_to_sids)) or {}
+    return {sid: failed[jid] for jid, sids in job_to_sids.items() if jid in failed for sid in sids}
+
+
 def _cmd_s3(args: argparse.Namespace, action: str) -> int:
     """Handle ``list|status|download --from-s3`` (issue #1873)."""
     import json as json_mod  # noqa: PLC0415
@@ -60,10 +86,16 @@ def _cmd_s3(args: argparse.Namespace, action: str) -> int:
                 return 0
             cid = args.outdir.name
             if action == "status":
-                print(json_mod.dumps(store.status(cid), indent=2))
+                failures = _substrate_failures(args, store, cid)
+                print(json_mod.dumps(store.status(cid, substrate_failures=failures), indent=2))
                 return 0
             dest = args.output_dir or args.outdir
-            result = store.download(cid, dest, allow_partial=args.allow_partial)
+            result = store.download(
+                cid,
+                dest,
+                allow_partial=args.allow_partial,
+                substrate_failures=_substrate_failures(args, store, cid),
+            )
             print(
                 f"downloaded {cid}: {result['completed']}/{result['total']} samples, "
                 f"{len(result['fetched'])} new, {len(result['failed'])} failed -> {dest}"
