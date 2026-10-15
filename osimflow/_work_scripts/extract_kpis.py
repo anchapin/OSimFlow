@@ -35,7 +35,7 @@ from typing import Any
 from osimflow.osw_results import (
     MEASURE_RESULTS_TOKEN,
     OUT_OSW_NAME,
-    parse_out_osw,
+    read_out_osw,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -666,6 +666,8 @@ def _merge_osw_kpis(
     osw_values: dict[str, Any],
     *,
     sample_id: str,
+    osw_units: dict[str, str] | None = None,
+    units_out: dict[str, str] | None = None,
 ) -> set[str]:
     """Merge *osw_values* into *extracted_kpis* without clobbering built-in or metadata keys."""
     merged_keys: set[str] = set()
@@ -679,6 +681,8 @@ def _merge_osw_kpis(
             continue
         extracted_kpis[key] = value
         merged_keys.add(key)
+        if units_out is not None:
+            units_out[key] = (osw_units or {}).get(key, "")
     return merged_keys
 
 
@@ -725,6 +729,8 @@ def run_extract_kpis(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sql_path = simulation_dir / "eplusout.sql"
     osw_path = simulation_dir / OUT_OSW_NAME
+    osw = read_out_osw(osw_path)
+    kpi_units: dict[str, str] = {}
 
     extracted_kpis: dict[str, Any] = {}
 
@@ -778,8 +784,10 @@ def run_extract_kpis(
         if kpis is None:
             _merge_osw_kpis(
                 extracted_kpis,
-                parse_out_osw(osw_path),
+                osw.step_values,
                 sample_id=sample_id,
+                osw_units=osw.step_units,
+                units_out=kpi_units,
             )
 
     # Issue #1082: filter to user-requested KPIs when --kpis is set.
@@ -791,8 +799,10 @@ def run_extract_kpis(
         if MEASURE_RESULTS_TOKEN in kpis or patterns:
             merged_osw_keys = _merge_osw_kpis(
                 extracted_kpis,
-                parse_out_osw(osw_path),
+                osw.step_values,
                 sample_id=sample_id,
+                osw_units=osw.step_units,
+                units_out=kpi_units,
             )
         _desired = set(kpis)
         all_osw = MEASURE_RESULTS_TOKEN in _desired
@@ -810,12 +820,15 @@ def run_extract_kpis(
     for f in quality["failures"]:
         log.error("Quality failure for sample %s: %s", sample_id, f)
 
-    output = {
+    output: dict[str, Any] = {
         "sample_id": sample_id,
         "openstudio_version": openstudio_version,
         "kpis": extracted_kpis,
         "quality": quality,
     }
+    # Units reported in out.osw step_values for the surviving measure KPIs.
+    if kpi_units:
+        output["kpi_units"] = {k: u for k, u in kpi_units.items() if k in extracted_kpis}
 
     out_path.write_text(json.dumps(output, indent=2))
     log.info(

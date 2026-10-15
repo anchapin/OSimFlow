@@ -79,7 +79,9 @@ OSimFlow equivalent.
 | `lhs` algorithm | `--algorithm lhs` (default) | Latin Hypercube Sampling |
 | `nsga_nrel` algorithm | `--algorithm nsga2` | Multi-objective optimisation (requires `pip install osimflow[optimization]` in addition to base install) |
 | `pso` algorithm | `--algorithm pso` | Particle Swarm Optimisation (requires `pip install osimflow[optimization]` in addition to base install) |
-| `doe` / `ga` algorithm | `--algorithm de` | Differential Evolution |
+| `doe` algorithm | `--algorithm custom` | Explicit design points (`import-osa` maps full-factorial `doe` analyses to `algorithm: full_factorial`) |
+| `ga` algorithm | `--algorithm ga` | Genetic Algorithm (requires `pip install osimflow[ga]`) |
+| (no server equivalent) | `--algorithm de` | Differential Evolution |
 | `sobol` algorithm | `--algorithm sobol` | Quasi-random sequences |
 | PAT "Seed Model" | `--template_sim_package ./pkg` | Directory containing `.osm`/`.osw` |
 | PAT "Alternatives" | `variables.yml` distributions | Declared as distribution parameters |
@@ -190,8 +192,8 @@ them into a `template_sim_package/` directory:
 
 ```
 template_sim_package/
-├── model.osw            # OpenStudio Workflow file
-├── model.osm            # Seed model (optional; .osw may reference it)
+├── workflow.osw         # OpenStudio Workflow file (required)
+├── model.osm            # Seed model (optional; workflow.osw seed_file may reference it)
 ├── measures/
 │   ├── SetInsulationRValue/
 │   │   ├── measure.rb

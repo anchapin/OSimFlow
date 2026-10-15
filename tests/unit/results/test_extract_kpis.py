@@ -941,3 +941,56 @@ class TestRunExtractKpis:
         )
         multi_data = json.loads(out_multi.read_text())
         assert set(multi_data["kpis"].keys()) == {"eui_kwh_m2_yr", "unmet_hours_heating"}
+
+
+class TestOutOswUnits:
+    """KPI units/step metadata from out.osw (issue #2114)."""
+
+    def _osw(self, tmp_path: Path) -> None:
+        osw = {
+            "steps": [
+                {
+                    "measure_dir_name": "m",
+                    "result": {
+                        "step_result": "Success",
+                        "step_values": [{"name": "a", "value": 1.0, "units": "kWh"}],
+                        "step_warnings": ["careful"],
+                    },
+                },
+                {"measure_dir_name": "skipped", "result": {"step_result": "Skip"}},
+                {
+                    "measure_dir_name": "na",
+                    "result": {
+                        "step_result": "NA",
+                        "step_values": [{"name": "b", "value": 2}],
+                    },
+                },
+            ]
+        }
+        (tmp_path / "out.osw").write_text(json.dumps(osw))
+
+    def test_units_default_empty_and_skip_na_tolerated(self, tmp_path: Path) -> None:
+        from osimflow._work_scripts.extract_kpis import run_extract_kpis
+
+        self._osw(tmp_path)
+        out = tmp_path / "k.json"
+        run_extract_kpis(tmp_path, "s1", out)
+        data = json.loads(out.read_text())
+        assert data["kpis"]["m.a"] == 1.0
+        assert data["kpis"]["na.b"] == 2
+        assert data["kpi_units"] == {"m.a": "kWh", "na.b": ""}
+
+    def test_step_warnings_and_status_available(self, tmp_path: Path) -> None:
+        from osimflow.osw_results import read_out_osw
+
+        self._osw(tmp_path)
+        res = read_out_osw(tmp_path / "out.osw")
+        assert res.steps[0].warnings == ("careful",)
+        assert [s.step_result for s in res.steps] == ["Success", "Skip", "NA"]
+
+    def test_no_osw_no_units_key(self, tmp_path: Path) -> None:
+        from osimflow._work_scripts.extract_kpis import run_extract_kpis
+
+        out = tmp_path / "k.json"
+        run_extract_kpis(tmp_path, "s1", out)
+        assert "kpi_units" not in json.loads(out.read_text())
