@@ -485,6 +485,12 @@ class S3CampaignStore:
             if not local_marker.is_file():
                 local_marker.parent.mkdir(parents=True, exist_ok=True)
                 local_marker.touch()
+            if (
+                not is_complete
+                and sid in failures
+                and not local_marker.read_text(errors="replace").strip()
+            ):
+                local_marker.write_text(f"{failures[sid]}\n")
             fetched.append(sid)
 
         csv_path = outdir / "aggregated_results.csv"

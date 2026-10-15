@@ -1325,6 +1325,41 @@ def test_download_materialises_substrate_failure_locally_only(tmp_path: Path) ->
     assert dl_df[SIMULATION_FAILED_COL].iloc[1] == expected_msg
 
 
+def test_download_keeps_substrate_reason_with_partial_artifacts_and_no_s3_marker(
+    tmp_path: Path,
+) -> None:
+    from osimflow.s3_campaign import FAILED_MARKER
+
+    storage = FakeStorage(tmp_path / "bucket")
+    store = S3CampaignStore(storage, tmp_path / "scratch")
+    samples = tmp_path / "samples.json"
+    samples.write_text(json.dumps({"samples": [{"sample_id": "0000", "values": {"a": 1.0}}]}))
+    rec = new_handoff(
+        "camp_partial",
+        ["0000"],
+        openstudio_version="3.11.0",
+        kpis=None,
+        job_ids={"0000": "job-0000"},
+    )
+    store.write_handoff(rec, samples)
+    run_dir = storage.root / "camp_partial" / "work" / "sim" / "0000" / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.log").write_text("partial log")
+
+    reason = "AWS Batch job job-0000 FAILED (exit_code=137): OutOfMemoryError"
+    out = tmp_path / "out_partial"
+    res = store.download(
+        "camp_partial", out, write_server_csv=True, substrate_failures={"0000": reason}
+    )
+    assert res["failed"] == ["0000"]
+    sim = out / "work" / "sim" / "0000"
+    assert (sim / "run" / "run.log").read_text() == "partial log"
+    assert (sim / FAILED_MARKER).read_text().strip() == reason
+
+    failed_df = pd.read_csv(out / "failed_simulations.csv", dtype=str, keep_default_na=False)
+    assert failed_df["error_summary"].iloc[0] == reason
+
+
 def test_download_detects_post_energyplus_reporting_measure_and_severe_failures_when_sql_exists(
     store: S3CampaignStore, tmp_path: Path
 ) -> None:
