@@ -247,20 +247,18 @@ terraform destroy
 
 > **Warning:** this deletes all created resources. Set `s3_force_destroy = true` to remove the S3 bucket even if it contains objects.
 
-## Task-payload HMAC secret (issues #1811, #2042)
+## Task-payload HMAC secret (issue #1811)
 
-`SubmitJob` has no `containerOverrides.secrets` field, and when the job definition injects `OSIMFLOW_TASK_PAYLOAD_SECRET` via `containerProperties.secrets` (or `--aws-batch-payload-secret-arn` is set), the raw HMAC secret is never placed in `containerOverrides.environment`:
+`SubmitJob` has no `containerOverrides.secrets` field, and when `--aws-batch-payload-secret-arn` is passed and validated against the job definition's `containerProperties.secrets`, the raw HMAC secret is never placed in `containerOverrides.environment`:
 
 1. **Container secret injection (Terraform / Job Definition):** Set the Terraform variable `payload_secret_arn` (Secrets Manager secret ARN or SSM Parameter Store `SecureString` ARN, plus optional `payload_secret_kms_key_arn` for customer-managed KMS keys) to inject `OSIMFLOW_TASK_PAYLOAD_SECRET` into the worker container via the job definition's `containerProperties.secrets`. The **Batch execution role** uses `secretsmanager:GetSecretValue` / `ssm:GetParameter` (and `kms:Decrypt`) to inject the secret at container startup.
-2. **Auto-discovery and submitter HMAC signing (issue #2042):**
-   - When `--aws-batch-payload-secret-arn` is omitted (for example when invoked from a workstation or CI runner), `AWSBatchExecutor` inspects the active job definition via `batch:DescribeJobDefinitions` and auto-discovers the `valueFrom` ARN for the `OSIMFLOW_TASK_PAYLOAD_SECRET` entry in `containerProperties.secrets`. If `--aws-batch-payload-secret-arn` is explicitly passed, the executor verifies that the job definition references the matching ARN before submitting.
-   - Unless `OSIMFLOW_TASK_PAYLOAD_SECRET` is already exported in the submitter's local environment, `AWSBatchExecutor` automatically fetches the secret value from AWS Secrets Manager (`secretsmanager:GetSecretValue`, supporting optional `:json-key:version-stage:version-id` suffixes) or AWS Systems Manager Parameter Store (`ssm:GetParameter` with `WithDecryption=True`) using the submitter's AWS session, caches it in-memory on the executor instance, and uses it to HMAC-sign each submitted task payload while omitting the raw secret from `containerOverrides.environment`. (If a custom job definition omits `containerProperties.secrets` and no `--aws-batch-payload-secret-arn` is configured, `AWSBatchExecutor` logs a warning and falls back to shipping a locally exported `OSIMFLOW_TASK_PAYLOAD_SECRET` in `containerOverrides.environment`.)
+2. **Submitter HMAC signing (issues #1633, #2025):** The orchestrator must export `OSIMFLOW_TASK_PAYLOAD_SECRET` (or `OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`) locally; it is used to HMAC-sign each task payload and is never fetched from Secrets Manager / SSM by the submitter. When `--aws-batch-payload-secret-arn` is passed, `AWSBatchExecutor` verifies via `batch:DescribeJobDefinitions` that the job definition's `containerProperties.secrets` maps `OSIMFLOW_TASK_PAYLOAD_SECRET` to that ARN and omits the secret from `containerOverrides.environment`. (Without `--aws-batch-payload-secret-arn`, the executor logs a warning and ships the locally exported secret in `containerOverrides.environment`.)
 
 ### IAM Permissions Breakdown
 
 | Identity | Purpose | Required IAM Permissions |
 |---|---|---|
-| **1. Submitter identity** *(workstation, CI runner, or automated caller)* | Stages inputs to S3, inspects job definition, fetches HMAC key to sign task payloads, submits/monitors Batch jobs, and downloads results | `batch:SubmitJob`, `batch:DescribeJobs`, `batch:DescribeJobDefinitions`, `batch:TerminateJob`; S3 read/write (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`) on the campaign bucket; `secretsmanager:GetSecretValue` or `ssm:GetParameter` (plus `kms:Decrypt` if encrypted with a customer-managed KMS key) on `payload_secret_arn` |
+| **1. Submitter identity** *(workstation, CI runner, or automated caller)* | Stages inputs to S3, signs task payloads with the locally held HMAC key, submits/monitors Batch jobs, and downloads results | `batch:SubmitJob`, `batch:DescribeJobs`, `batch:DescribeJobDefinitions`, `batch:TerminateJob`; S3 read/write (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`) on the campaign bucket |
 | **2. Batch execution role** *(`executionRoleArn` on the job definition)* | Pulls container image, writes container startup logs, and injects `OSIMFLOW_TASK_PAYLOAD_SECRET` into the container environment | ECR image pull (`AmazonECSTaskExecutionRolePolicy`), CloudWatch Logs (`logs:CreateLogStream`, `logs:PutLogEvents`), and `secretsmanager:GetSecretValue` / `ssm:GetParameter` (plus `kms:Decrypt` if customer-managed KMS key) on `payload_secret_arn` |
 | **3. Batch task role** *(`jobRoleArn` on the job definition)* | Used by the running OpenStudio worker inside the container to download staged inputs and upload simulation outputs | S3 read/write (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`) scoped to the campaign bucket and CloudWatch Logs (`logs:CreateLogStream`, `logs:PutLogEvents`) |
 
@@ -324,7 +322,7 @@ Checklist:
 - **Roles:** *execution role* (ECR pull, CloudWatch Logs, `secretsmanager:GetSecretValue`
   / `ssm:GetParameter` and optional `kms:Decrypt` for the payload secret); *task/job role* (S3 get/put on the campaign bucket
   only); *submitter* (`batch:SubmitJob`, `DescribeJobs`, `TerminateJob`,
-  `DescribeJobDefinitions`, S3 access to stage inputs/download results, and `secretsmanager:GetSecretValue` / `ssm:GetParameter` + optional `kms:Decrypt` on `payload_secret_arn` when `OSIMFLOW_TASK_PAYLOAD_SECRET` is not set locally). The job definition
+  `DescribeJobDefinitions`, S3 access to stage inputs/download results). The job definition
   needs `platformCapabilities: ["FARGATE"]`, `resourceRequirements`,
   `networkConfiguration.assignPublicIp`, `fargatePlatformConfiguration`, and the
   `awslogs` log configuration.

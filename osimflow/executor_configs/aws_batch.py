@@ -42,13 +42,12 @@ class AWSBatchConfig:
         executor validates before submission that the job definition's
         ``containerProperties.secrets`` maps
         ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to this ARN (SubmitJob has no
-        ``containerOverrides.secrets``; issue #1811). When omitted, the
-        executor auto-discovers the ARN from the active job definition's
-        ``containerProperties.secrets`` and fetches the secret value
-        from Secrets Manager / SSM Parameter Store on the submitter
-        unless ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is already set locally
-        (issue #2042). Both the job's *execution* role and the submitter
-        identity need ``secretsmanager:GetSecretValue`` or
+        ``containerOverrides.secrets``; issue #1811) and the raw secret is
+        omitted from ``containerOverrides.environment``. The orchestrator
+        must still export ``OSIMFLOW_TASK_PAYLOAD_SECRET`` (or
+        ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE``) locally to compute the HMAC
+        signature; it is never fetched from AWS on the submitter. Only the
+        job's *execution* role needs ``secretsmanager:GetSecretValue`` or
         ``ssm:GetParameter`` (+ ``kms:Decrypt`` if customer-managed KMS
         key) on it.
     allow_long_lived_credentials
@@ -182,12 +181,10 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "definition injects it via containerProperties.secrets "
             "(SubmitJob has no containerOverrides.secrets) so the raw "
             "secret is omitted from containerOverrides.environment and "
-            "DescribeJobs output (issues #1633/#1811). When omitted, "
-            "AWSBatchExecutor auto-discovers the ARN from the active job "
-            "definition via DescribeJobDefinitions and fetches the secret "
-            "value from Secrets Manager / SSM Parameter Store on the "
-            "submitter unless OSIMFLOW_TASK_PAYLOAD_SECRET is already set "
-            "locally (issue #2042). See docs/aws-batch-terraform.md and "
+            "DescribeJobs output (issues #1633/#1811). The "
+            "orchestrator must still export OSIMFLOW_TASK_PAYLOAD_SECRET "
+            "(or OSIMFLOW_TASK_PAYLOAD_SECRET_FILE) locally to sign task "
+            "payloads; the secret is never fetched on the submitter. See docs/aws-batch-terraform.md and "
             "docs/secret-management.md."
         ),
     )

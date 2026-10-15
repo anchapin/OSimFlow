@@ -91,7 +91,7 @@ gate) and the per-module readings were::
     osimflow/campaign/types.py              100.00%
     osimflow/campaign/sharding.py            86.05%
     osimflow/executors/__init__.py            91.91%
-    osimflow/executors/aws_batch_executor.py  95.15%
+    osimflow/executors/aws_batch_executor.py  91.76%
     osimflow/executors/azure_batch_executor.py 83.19%
     osimflow/executors/base.py                94.57%
     osimflow/executors/dask_jobqueue_executor.py 81.73%
@@ -266,7 +266,7 @@ FLOORS: dict[str, float] = {
     # --- osimflow/executors/*.py ---
     "osimflow/executors/__init__.py": 90.91,  # measured 91.91%
     "osimflow/executors/_rate_limiter.py": 95.00,  # measured 96.00% (issue #1563; shared token bucket)
-    "osimflow/executors/aws_batch_executor.py": 94.15,  # measured 95.15%
+    "osimflow/executors/aws_batch_executor.py": 90.76,  # measured 91.76% after #2115 removed covered secret-fetch code
     "osimflow/executors/azure_batch_executor.py": 82.19,  # measured 83.19%
     "osimflow/executors/base.py": 93.57,  # measured 94.57%
     "osimflow/executors/dask_jobqueue_executor.py": 80.73,  # measured 81.73%

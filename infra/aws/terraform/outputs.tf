@@ -67,7 +67,7 @@ output "osimflow_run_command" {
     --executor aws_batch \
     --aws-batch-queue ${aws_batch_job_queue.osimflow.name} \
     --aws-batch-job-definition ${aws_batch_job_definition.osimflow.name} \
-    --openstudio_version ${var.openstudio_version} \
+    ${var.payload_secret_arn != null ? "--aws-batch-payload-secret-arn ${var.payload_secret_arn} \\\n    " : ""}    --openstudio_version ${var.openstudio_version} \
     --input_variables variables.yml \
     --template_sim_package ./example_package \
     --n_samples 100 \
@@ -82,7 +82,7 @@ output "osimflow_spot_command" {
     --executor aws_batch \
     --aws-batch-queue ${aws_batch_job_queue.osimflow.name} \
     --aws-batch-job-definition ${aws_batch_job_definition.osimflow.name} \
-    --aws-batch-max-spot-price-usd 0.05 \
+    ${var.payload_secret_arn != null ? "--aws-batch-payload-secret-arn ${var.payload_secret_arn} \\\n    " : ""}    --aws-batch-max-spot-price-usd 0.05 \
     --aws-batch-fallback-to-on-demand \
     --aws-batch-max-retries 3 \
     --openstudio_version ${var.openstudio_version} \

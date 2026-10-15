@@ -45,7 +45,6 @@ def _make_executor(
         ex._submit_rps = None
         ex._submit_limiter = MagicMock()
         ex._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
-        ex._resolved_payload_secret = "test-hmac-secret"
     return ex
 
 

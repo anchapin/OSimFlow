@@ -610,21 +610,21 @@ export OSIMFLOW_TASK_PAYLOAD_SECRET="$(openssl rand -hex 32)"
 osimflow run --executor nomad ...
 ```
 
-Since issues #1449, #1811, and #2042, three substrates support delivering the worker-side secret through their
+Since issues #1449 and #1811, three substrates support delivering the worker-side secret through their
 **native secret stores** instead of the literal job env:
 
-- **AWS Batch**: When the job definition injects `OSIMFLOW_TASK_PAYLOAD_SECRET`
+- **AWS Batch**: The job definition may inject `OSIMFLOW_TASK_PAYLOAD_SECRET`
   via `containerProperties.secrets` (`valueFrom` pointing to Secrets Manager or
-  SSM Parameter Store), the raw secret is never placed in
-  `containerOverrides.environment`. When `--aws-batch-payload-secret-arn` is
-  omitted, `AWSBatchExecutor` auto-discovers the secret ARN from the active job
-  definition and fetches the secret value from Secrets Manager / SSM Parameter
-  Store on the submitter unless `OSIMFLOW_TASK_PAYLOAD_SECRET` is already set
-  locally (issue #2042). If a custom job definition omits
-  `containerProperties.secrets` and no `--aws-batch-payload-secret-arn` is set,
-  `AWSBatchExecutor` logs a warning and falls back to placing a locally exported
-  `OSIMFLOW_TASK_PAYLOAD_SECRET` in `containerOverrides.environment`. See
-  [AWS Batch Terraform Guide — Task-payload HMAC secret](aws-batch-terraform.md#task-payload-hmac-secret-issues-1811-2042).
+  SSM Parameter Store). Only when `--aws-batch-payload-secret-arn` is passed does
+  `AWSBatchExecutor` verify the job definition maps the secret to that ARN and omit
+  the raw secret from `containerOverrides.environment`; otherwise the local secret
+  is sent as a literal override.
+  The orchestrator always needs `OSIMFLOW_TASK_PAYLOAD_SECRET` (or
+  `OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`) locally to HMAC-sign task payloads; it
+  never fetches the value from Secrets Manager / SSM. Without
+  `--aws-batch-payload-secret-arn`, the locally exported secret ships in
+  `containerOverrides.environment` (with a warning). See
+  [AWS Batch Terraform Guide — Task-payload HMAC secret](aws-batch-terraform.md#task-payload-hmac-secret-issues-1811).
 - **Kubernetes**: `KubernetesExecutor(payload_secret_ref="<secret-name>")`
   emits the `OSIMFLOW_TASK_PAYLOAD_SECRET` env entry as a `secretKeyRef`; the
   kubelet resolves it at pod admission and the raw value never appears in the

@@ -68,7 +68,7 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/campaign/sample_trace.py": 90.43,
     "osimflow/campaign/sharding.py": 86.05,
     "osimflow/executors/__init__.py": 91.91,
-    "osimflow/executors/aws_batch_executor.py": 95.15,
+    "osimflow/executors/aws_batch_executor.py": 91.76,
     "osimflow/executors/azure_batch_executor.py": 83.19,
     "osimflow/executors/base.py": 94.57,
     "osimflow/executors/dask_jobqueue_executor.py": 81.73,

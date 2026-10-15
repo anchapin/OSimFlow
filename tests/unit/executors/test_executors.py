@@ -471,7 +471,6 @@ class TestAWSBatchSubmit:
         ex._submit_limiter = MagicMock()
         ex._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
         ex._retry_config = MagicMock()
-        ex._resolved_payload_secret = "test-hmac-secret"
         return ex
 
     def test_submit_succeeds(self) -> None:
