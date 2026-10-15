@@ -518,7 +518,7 @@ def validate_kpis(
         forwards that section through the ``--quality_thresholds`` CLI flag.
     osw_only_valid:
         When ``True``, ``eplusout.sql`` was unavailable (e.g. deleted by
-        ``ServerDirectoryCleanup``) but ``out.osw`` passed strict completion
+        ``CleanupRunDirectory``) but ``out.osw`` passed strict completion
         validation.  Skips SQL-critical KPI checks and records a warning.
 
     Returns

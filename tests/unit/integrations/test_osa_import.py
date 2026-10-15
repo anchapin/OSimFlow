@@ -830,7 +830,7 @@ class TestStageOsaTemplatePackage:
         (pkg_dir / "weather").mkdir()
         (pkg_dir / "weather" / "USA_CO_Golden.epw").write_text("LOCATION,...\n", encoding="utf-8")
         (pkg_dir / "measures" / "SetThermostat").mkdir(parents=True)
-        (pkg_dir / "measures" / "ServerDirectoryCleanup").mkdir(parents=True)
+        (pkg_dir / "measures" / "CleanupRunDirectory").mkdir(parents=True)
         osw = {
             "seed_file": "../../seeds/baseline.osm",
             "weather_file": "../../weather/USA_CO_Golden.epw",
@@ -846,7 +846,7 @@ class TestStageOsaTemplatePackage:
                     },
                 },
                 {
-                    "measure_dir_name": "ServerDirectoryCleanup",
+                    "measure_dir_name": "CleanupRunDirectory",
                     "arguments": {
                         "sql": True,
                     },

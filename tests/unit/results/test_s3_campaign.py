@@ -1109,7 +1109,7 @@ def test_cli_list_and_status_from_s3_json_stdout_purity(
 def test_download_out_osw_only_completed_sample_without_sql(
     store: S3CampaignStore, tmp_path: Path
 ) -> None:
-    """Issue #2051: out.osw-only completed sample (ServerDirectoryCleanup deleted eplusout.sql) succeeds end-to-end."""
+    """Issue #2051: out.osw-only completed sample (CleanupRunDirectory deleted eplusout.sql) succeeds end-to-end."""
     from osimflow._work_scripts.aggregate_results import extract_failure
     from osimflow._work_scripts.extract_kpis import run_extract_kpis
 
@@ -1154,7 +1154,7 @@ def test_download_out_osw_only_completed_sample_without_sql(
                         },
                     },
                     {
-                        "measure_dir_name": "ServerDirectoryCleanup",
+                        "measure_dir_name": "CleanupRunDirectory",
                         "result": {"step_result": "Success", "step_values": []},
                     },
                 ],
