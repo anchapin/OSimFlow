@@ -1091,12 +1091,11 @@ def test_cli_list_and_status_from_s3_json_stdout_purity(
             assert "error: S3 AccessDenied" in cap_st.err
 
 
-def test_download_out_osw_only_completed_sample_without_sql(
+def test_download_out_osw_only_sample_without_sql_fails(
     store: S3CampaignStore, tmp_path: Path
 ) -> None:
-    """Issue #2051: out.osw-only completed sample (CleanupRunDirectory deleted eplusout.sql) succeeds end-to-end."""
+    """Issue #2116: a sample whose eplusout.sql is missing fails even when out.osw reports Success (no fabricated KPIs)."""
     from osimflow._work_scripts.aggregate_results import extract_failure
-    from osimflow._work_scripts.extract_kpis import run_extract_kpis
 
     samples = tmp_path / "samples.json"
     samples.write_text(
@@ -1148,41 +1147,16 @@ def test_download_out_osw_only_completed_sample_without_sql(
     )
     (s0 / COMPLETE_MARKER).write_text("")
 
-    # Direct check on run_extract_kpis and extract_failure
-    direct_kpi_path = tmp_path / "direct_kpi_0000.json"
-    run_extract_kpis(s0, "0000", direct_kpi_path, openstudio_version="3.11.0")
-    kpi_doc = json.loads(direct_kpi_path.read_text())
-    assert "error" not in kpi_doc["kpis"]
-    assert kpi_doc["kpis"]["openstudio_results.total_site_energy_kbtu"] == 45000.0
-    assert kpi_doc["kpis"]["openstudio_results.building_area_sqft"] == 10000.0
-    assert kpi_doc["quality"]["valid"] is True
-    assert any("SQL-derived quality checks skipped" in w for w in kpi_doc["quality"]["warnings"])
-    assert extract_failure(s0) is None
+    assert extract_failure(s0) is not None
 
-    # End-to-end S3CampaignStore.download() verification
     out = tmp_path / "out_osw_only"
     res = store.download("camp_osw_only", out, write_server_csv=True)
     assert res["completed"] == 1
     assert res["failed"] == []
-    assert res["server_csv"] == out / "download_data.csv"
 
-    failed_df = pd.read_csv(out / "failed_simulations.csv")
-    assert failed_df.empty
-
-    agg_df = pd.read_csv(out / "aggregated_results.csv", dtype={"sample_id": str})
-    assert agg_df["sample_id"].tolist() == ["0000"]
-    assert agg_df["openstudio_results.total_site_energy_kbtu"].iloc[0] == pytest.approx(45000.0)
-    assert agg_df["openstudio_results.building_area_sqft"].iloc[0] == pytest.approx(10000.0)
-
-    dl_df = pd.read_csv(out / "download_data.csv", dtype=str, keep_default_na=False)
-    assert len(dl_df) == 1
-    assert dl_df["name"].tolist() == ["0000"]
-    assert dl_df["status"].tolist() == ["completed"]
-    assert dl_df["status_message"].tolist() == ["completed normal"]
-    assert float(dl_df["openstudio_results.total_site_energy_kbtu"].iloc[0]) == pytest.approx(
-        45000.0
-    )
-    assert float(dl_df["openstudio_results.building_area_sqft"].iloc[0]) == pytest.approx(10000.0)
+    failed_df = pd.read_csv(out / "failed_simulations.csv", dtype={"sample_id": str})
+    assert failed_df["sample_id"].tolist() == ["0000"]
+    assert "eplusout.sql" in failed_df["error_summary"].iloc[0]
 
 
 def test_handoff_from_json_normalizes_non_dict_job_ids() -> None:

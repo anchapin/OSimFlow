@@ -120,31 +120,6 @@ def has_osw_or_marker_failure(sim_dir: Path) -> bool:
     )
 
 
-def has_valid_osw_completion(osw_path: Path) -> bool:
-    """Return ``True`` when *osw_path* proves a clean, value-bearing ``out.osw`` run.
-
-    Strict completion gate (issue #2051): returns ``True`` only when:
-    1. *osw_path* exists and parses as a JSON object,
-    2. top-level ``completed_status == "Success"``,
-    3. no step in ``steps`` has ``result.step_result == "Fail"``, and
-    4. :func:`parse_out_osw` returns at least one measure-registered step value.
-    """
-    if not osw_path.is_file():
-        return False
-    osw = _load_osw(osw_path)
-    if osw is None or osw.get("completed_status") != "Success":
-        return False
-    steps = osw.get("steps")
-    if isinstance(steps, list):
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            result = step.get("result")
-            if isinstance(result, dict) and result.get("step_result") == "Fail":
-                return False
-    return bool(parse_out_osw(osw_path))
-
-
 def extract_failure_message_from_osw(
     osw_content: str, benign_pattern: Pattern[str] | None = None
 ) -> str | None:
