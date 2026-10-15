@@ -287,8 +287,9 @@ def resolve_seed_osm(pkg: Path) -> Path | None:
 def _resolve_seed_osm(template: Path, osw_path: Path | None) -> Path | None:
     """Find the seed ``.osm`` of a template directory.
 
-    Order: ``workflow.osw`` ``seed_file`` (resolved inside the template),
-    then ``model.osm``, then a single top-level ``*.osm``.
+    Order mirrors the OpenStudio CLI: ``workflow.osw`` ``seed_file`` against the
+    template root, each ``file_paths`` entry, ``files/<name>`` and ``seeds/<name>``
+    (all confined to the template), then ``model.osm``, then a single top-level ``*.osm``.
     """
     root = template.resolve()
     if osw_path is not None:
@@ -298,15 +299,24 @@ def _resolve_seed_osm(template: Path, osw_path: Path | None) -> Path | None:
             data = None
         seed = data.get("seed_file") if isinstance(data, dict) else None
         if isinstance(seed, str) and seed.strip():
-            for base in (root, *(root / p for p in _osw_file_paths(data))):
-                candidate = (base / seed).resolve()
-                if candidate.is_file() and candidate.is_relative_to(root):
-                    return root / candidate.relative_to(root)
+            for resolved in seed_file_candidates(root, seed.strip(), _osw_file_paths(data)):
+                # Entries escaping the package are ignored: they would not be staged.
+                if resolved.is_file() and resolved.is_relative_to(root):
+                    return root / resolved.relative_to(root)
     default = template / "model.osm"
     if default.is_file():
         return default
     osms = sorted(template.glob("*.osm"))
     return osms[0] if len(osms) == 1 else None
+
+
+def seed_file_candidates(root: Path, seed: str, file_paths: list[str]) -> list[Path]:
+    """Resolved candidate locations for an OSW ``seed_file``, in OpenStudio precedence order."""
+    root = root.resolve()
+    name = Path(seed).name
+    candidates = [root / seed, *(root / p / seed for p in file_paths)]
+    candidates += [root / "files" / name, root / "seeds" / name]
+    return [c.resolve() for c in candidates]
 
 
 def _osw_file_paths(data: dict[str, Any]) -> list[str]:

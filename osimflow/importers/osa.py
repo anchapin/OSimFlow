@@ -78,6 +78,7 @@ from typing import Any
 import yaml
 
 from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
+from osimflow.apply_params import seed_file_candidates
 from osimflow.errors import OSimFlowError
 
 log = logging.getLogger("osimflow.importers.osa")
@@ -1128,6 +1129,23 @@ def _resolve_file_in_package(
     )
 
 
+def _resolve_seed_in_package(
+    osw: dict[str, Any], pkg_dir: Path, seed: str, source_root: Path | None
+) -> str | None:
+    """Pick the seed the way :func:`resolve_seed_osm` does (OSW ``file_paths`` precedence)."""
+    if Path(seed).is_absolute():
+        return None
+    root = pkg_dir.resolve()
+    entries = osw.get("file_paths")
+    fpaths = (
+        _normalize_dir_entries(pkg_dir, entries, source_root) if isinstance(entries, list) else []
+    )
+    for cand in seed_file_candidates(root, seed, fpaths):
+        if cand.is_file() and cand.is_relative_to(root):
+            return cand.relative_to(root).as_posix()
+    return None
+
+
 def _normalize_dir_entries(
     pkg_dir: Path, entries: list[Any], source_root: Path | None = None
 ) -> list[str]:
@@ -1234,10 +1252,15 @@ def _normalize_osw_paths(
     """Rewrite parent-relative or external OSW paths to resolve inside *pkg_dir*."""
     seed_file = osw.get("seed_file")
     if isinstance(seed_file, str) and seed_file.strip():
-        osw["seed_file"] = _resolve_file_in_package(
+        osw["seed_file"] = _resolve_seed_in_package(
+            osw,
             pkg_dir,
             seed_file.strip(),
-            ("", "seeds", "seed", "seed_models", "models"),
+            source_root,
+        ) or _resolve_file_in_package(
+            pkg_dir,
+            seed_file.strip(),
+            ("", "files", "seeds", "seed", "seed_models", "models"),
             "seed_file",
             source_root=source_root,
         )

@@ -82,3 +82,84 @@ def test_archive_includes_nested_seed(tmp_path: Path) -> None:
     CampaignArtifactWriter.archive_sample_artifacts(pkg, dst, ["*.osw", "*.osm"])
     assert (dst / "baseline.osm").is_file()
     assert (dst / "workflow.osw").is_file()
+
+
+def _bare_name_pkg(tmp_path: Path, where: str, file_paths: list[str] | None = None) -> Path:
+    pkg = tmp_path / "pkg"
+    (pkg / where).mkdir(parents=True)
+    (pkg / where / "baseline.osm").write_text(json.dumps({"attributes": {"lpd": 8.0}}))
+    osw: dict[str, object] = {"steps": [], "seed_file": "baseline.osm"}
+    if file_paths is not None:
+        osw["file_paths"] = file_paths
+    (pkg / "workflow.osw").write_text(json.dumps(osw))
+    return pkg
+
+
+def test_resolve_seed_osm_under_files(tmp_path: Path) -> None:
+    from osimflow.apply_params import resolve_seed_osm
+
+    pkg = _bare_name_pkg(tmp_path, "files")
+    assert resolve_seed_osm(pkg) == pkg.resolve() / "files" / "baseline.osm"
+
+
+def test_resolve_seed_osm_custom_file_paths(tmp_path: Path) -> None:
+    from osimflow.apply_params import resolve_seed_osm
+
+    pkg = _bare_name_pkg(tmp_path, "assets/models", ["assets/models"])
+    assert resolve_seed_osm(pkg) == pkg.resolve() / "assets/models" / "baseline.osm"
+
+
+def test_resolve_seed_osm_seeds_fallback_and_order(tmp_path: Path) -> None:
+    from osimflow.apply_params import resolve_seed_osm
+
+    pkg = _bare_name_pkg(tmp_path, "seeds")
+    assert resolve_seed_osm(pkg) == pkg.resolve() / "seeds" / "baseline.osm"
+    (pkg / "files").mkdir()
+    (pkg / "files" / "baseline.osm").write_text("{}")
+    assert resolve_seed_osm(pkg) == pkg.resolve() / "files" / "baseline.osm"
+    (pkg / "baseline.osm").write_text("{}")
+    assert resolve_seed_osm(pkg) == pkg.resolve() / "baseline.osm"
+
+
+def test_resolve_seed_osm_file_paths_escape_ignored(tmp_path: Path) -> None:
+    from osimflow.apply_params import resolve_seed_osm
+
+    pkg = _bare_name_pkg(tmp_path, "seeds_unused", ["../outside"])
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "baseline.osm").write_text("{}")
+    assert resolve_seed_osm(pkg) is None
+
+
+@pytest.mark.parametrize(
+    ("where", "file_paths"), [("files", None), ("assets/models", ["assets/models"])]
+)
+def test_apply_parameters_seed_in_files_or_file_paths(
+    tmp_path: Path, where: str, file_paths: list[str] | None
+) -> None:
+    pkg = _bare_name_pkg(tmp_path, where, file_paths)
+    out = tmp_path / "out"
+    apply_parameters(template=pkg, parameters={"lpd": 10.0}, sample_id="1", out=out)
+    data = json.loads((out / where / "baseline.osm").read_text())
+    assert data["attributes"] == {"lpd": 10.0}
+    assert not (out / "model.osm").exists()
+
+
+def test_measure_registry_has_osm_uses_seed_resolution(tmp_path: Path) -> None:
+    from osimflow.measures import MeasureRegistry
+
+    pkg = _bare_name_pkg(tmp_path, "files")
+    reg = MeasureRegistry()
+    reg._indexed_path = pkg
+    assert MeasureRegistry._resolve_effective_has_osm(reg, None) is True
+
+
+def test_measure_registry_has_osm_falls_back_to_any_top_level_osm(tmp_path: Path) -> None:
+    from osimflow.measures import MeasureRegistry
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.osm").write_text("{}")
+    (pkg / "b.osm").write_text("{}")
+    reg = MeasureRegistry()
+    reg._indexed_path = pkg
+    assert MeasureRegistry._resolve_effective_has_osm(reg, None) is True
