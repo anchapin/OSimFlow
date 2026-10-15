@@ -48,23 +48,49 @@ def parse_out_osw(path: Path) -> dict[str, Any]:
     """Return ``{"<measure_dir_name>.<attribute>": value}`` for every step value.
 
     Reads ``steps[].result.step_values`` (``registerValue`` outputs). When
-    the same measure appears in several steps, the later step wins.
+    the same measure directory appears in several steps, the
+    ``<measure_dir_name>.*`` keys hold the last instance (unchanged), and each
+    instance's values are additionally kept under its distinct step ``"name"``
+    (``"<step_name>.<attribute>"``) so earlier instances are not lost. Step
+    names that are not unique or that equal another ``measure_dir_name`` are
+    ambiguous and not emitted.
     Returns ``{}`` when the file is absent or unparseable.
     """
     if not path.is_file():
         return {}
     osw = _load_osw(path)
     values: dict[str, Any] = {}
-    for step in (osw or {}).get("steps") or []:
+    steps = (osw or {}).get("steps") or []
+    dir_counts: dict[str, int] = {}
+    name_counts: dict[str, int] = {}
+    for step in steps:
+        if isinstance(step, dict) and step.get("measure_dir_name"):
+            key = str(step["measure_dir_name"])
+            dir_counts[key] = dir_counts.get(key, 0) + 1
+            if isinstance(step.get("name"), str) and step["name"]:
+                name_counts[step["name"]] = name_counts.get(step["name"], 0) + 1
+    for step in steps:
         if not isinstance(step, dict):
             continue
         measure = step.get("measure_dir_name") or step.get("name")
         result = step.get("result")
         if not measure or not isinstance(result, dict):
             continue
+        prefixes = [str(measure)]
+        step_name = step.get("name")
+        if (
+            step.get("measure_dir_name")
+            and dir_counts.get(str(measure), 0) > 1
+            and isinstance(step_name, str)
+            and step_name
+            and step_name not in dir_counts
+            and name_counts.get(step_name) == 1
+        ):
+            prefixes.append(step_name)
         for item in result.get("step_values") or []:
             if isinstance(item, dict) and item.get("name") is not None and "value" in item:
-                values[f"{measure}.{item['name']}"] = item["value"]
+                for prefix in prefixes:
+                    values[f"{prefix}.{item['name']}"] = item["value"]
     return values
 
 
