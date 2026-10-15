@@ -562,6 +562,32 @@ def _measure_step_name(measure: dict[str, Any]) -> str | None:
     return None
 
 
+def _dir_instance_counts(steps: list[Any]) -> dict[str, int]:
+    """Count workflow steps per canonical ``measure_dir_name``."""
+    counts: dict[str, int] = {}
+    for step in steps:
+        if isinstance(step, dict):
+            c = _measure_step_name(step)
+            if c:
+                counts[c] = counts.get(c, 0) + 1
+    return counts
+
+
+def _step_instance_name(step: dict[str, Any], dir_counts: dict[str, int]) -> str | None:
+    """Name used to reference *step*: its own ``name`` when its measure dir repeats.
+
+    Single-instance steps keep the canonical ``measure_dir_name`` (backward
+    compatible); steps sharing a directory are referenced by their unique
+    per-step ``"name"`` so they do not collide in ``variables.yml``.
+    """
+    canonical = _measure_step_name(step)
+    if canonical and dir_counts.get(canonical, 0) > 1:
+        name = step.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return canonical
+
+
 def _is_varied_workflow_variable(mv: dict[str, Any]) -> bool:
     """Return True if a workflow ``variables[]`` entry represents a varied parameter.
 
@@ -587,13 +613,14 @@ def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
         Extracted variables with measure information attached.
     """
     extracted: list[dict[str, Any]] = []
+    dir_counts = _dir_instance_counts(workflow)
     for measure in workflow:
         if not isinstance(measure, dict):
             continue
         measure_vars = measure.get("variables", [])
         if not isinstance(measure_vars, list):
             continue
-        m_name = _measure_step_name(measure)
+        m_name = _step_instance_name(measure, dir_counts)
         for mv in measure_vars:
             if not isinstance(mv, dict) or not _is_varied_workflow_variable(mv):
                 continue
@@ -612,34 +639,42 @@ def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
 _STEP_ALIAS_KEYS = (
     "name",
     "display_name",
+    "measure_definition_display_name",
     "measure_definition_name",
     "measure_definition_class_name",
 )
 
 
 def _build_step_alias_map(workflow: Any) -> dict[str, str]:
-    """Map every identifier of each workflow step to its canonical ``measure_dir_name``.
+    """Map every identifier of each workflow step to the name that references it.
 
-    Identifiers that resolve to more than one distinct step are dropped as ambiguous.
+    Single-instance steps map to their canonical ``measure_dir_name``. Steps that
+    share a ``measure_dir_name`` map their own unique identifiers to the step's
+    ``"name"`` (the shared directory itself is not an alias). Identifiers that
+    resolve to more than one distinct step are dropped as ambiguous.
     """
     aliases: dict[str, set[str]] = {}
     if not isinstance(workflow, list):
         return {}
     steps = [s for s in workflow if isinstance(s, dict)]
-    dir_counts: dict[str, int] = {}
-    for step in steps:
-        c = _measure_step_name(step)
-        if c:
-            dir_counts[c] = dir_counts.get(c, 0) + 1
+    dir_counts = _dir_instance_counts(steps)
     for step in steps:
         canonical = _measure_step_name(step)
-        # Repeated directories keep per-instance names so apply_params can disambiguate.
-        if not canonical or dir_counts[canonical] > 1:
+        if not canonical:
             continue
-        candidates = [canonical] + [step.get(k) for k in _STEP_ALIAS_KEYS]
+        target = _step_instance_name(step, dir_counts)
+        if not target:
+            continue
+        shared = dir_counts[canonical] > 1
+        if shared and target == canonical:
+            continue
+        candidates: list[Any] = [target] if shared else [canonical]
+        candidates += [step.get(k) for k in _STEP_ALIAS_KEYS]
         for cand in candidates:
             if isinstance(cand, str) and cand.strip():
-                aliases.setdefault(cand.strip(), set()).add(canonical)
+                if shared and cand.strip() == canonical:
+                    continue
+                aliases.setdefault(cand.strip(), set()).add(target)
     return {a: next(iter(c)) for a, c in aliases.items() if len(c) == 1}
 
 
@@ -1341,6 +1376,7 @@ def _apply_step_static_arguments(
     measure_name: str,
     static_args: dict[str, Any],
     varied_pairs: set[tuple[str, str]],
+    instance_name: str | None = None,
 ) -> None:
     """Overlay non-varied *static_args* onto *osw_step* with type coercion."""
     step_args = osw_step.setdefault("arguments", {})
@@ -1348,20 +1384,38 @@ def _apply_step_static_arguments(
         step_args = {}
         osw_step["arguments"] = step_args
     for arg_name, val in static_args.items():
-        if (measure_name, arg_name) in varied_pairs:
+        if (measure_name, arg_name) in varied_pairs or (
+            instance_name is not None and (instance_name, arg_name) in varied_pairs
+        ):
             continue
         step_args[arg_name] = _coerce_like(step_args.get(arg_name), val)
 
 
 def _find_matching_osw_steps(
-    steps: list[Any], m_name: str, wf_step_name: Any
+    steps: list[Any],
+    m_name: str,
+    wf_step_name: Any,
+    *,
+    multi_instance: bool = False,
+    occurrence: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return existing OSW steps matching *m_name* (and *wf_step_name* when disambiguating)."""
+    """Return existing OSW steps matching *m_name* for one OSA workflow step.
+
+    With several OSW steps (or a multi-instance OSA workflow) sharing *m_name*,
+    match by step ``"name"`` first; otherwise pair the *occurrence*-th OSA step
+    with the *occurrence*-th OSW step so instances never overwrite each other.
+    """
     matching = [s for s in steps if isinstance(s, dict) and s.get("measure_dir_name") == m_name]
-    if isinstance(wf_step_name, str) and wf_step_name and len(matching) > 1:
+    if not (multi_instance or len(matching) > 1):
+        return matching
+    if isinstance(wf_step_name, str) and wf_step_name:
         named = [s for s in matching if s.get("name") == wf_step_name]
         if named:
             return named
+    if multi_instance:
+        unclaimed = [s for s in matching if not s.get("name")]
+        pool = unclaimed if len(unclaimed) > occurrence else []
+        return [pool[occurrence]] if pool else []
     return matching
 
 
@@ -1391,6 +1445,8 @@ def _overlay_osa_workflow_onto_osw(
         steps = []
         osw["steps"] = steps
 
+    dir_counts = _dir_instance_counts(workflow)
+    seen: dict[str, int] = {}
     for wf_step in workflow:
         if not isinstance(wf_step, dict):
             continue
@@ -1399,10 +1455,21 @@ def _overlay_osa_workflow_onto_osw(
             continue
         static_args = _extract_step_static_arguments(wf_step)
         wf_step_name = wf_step.get("name")
-        matching_steps = _find_matching_osw_steps(steps, m_name, wf_step_name)
+        occurrence = seen.get(m_name, 0)
+        seen[m_name] = occurrence + 1
+        instance = _step_instance_name(wf_step, dir_counts)
+        matching_steps = _find_matching_osw_steps(
+            steps,
+            m_name,
+            wf_step_name,
+            multi_instance=dir_counts[m_name] > 1,
+            occurrence=occurrence,
+        )
         if not matching_steps:
             filtered_args = {
-                k: v for k, v in static_args.items() if (m_name, k) not in varied_pairs
+                k: v
+                for k, v in static_args.items()
+                if (m_name, k) not in varied_pairs and (instance, k) not in varied_pairs
             }
             new_step: dict[str, Any] = {
                 "measure_dir_name": m_name,
@@ -1414,7 +1481,7 @@ def _overlay_osa_workflow_onto_osw(
             continue
 
         for osw_step in matching_steps:
-            _apply_step_static_arguments(osw_step, m_name, static_args, varied_pairs)
+            _apply_step_static_arguments(osw_step, m_name, static_args, varied_pairs, instance)
 
 
 def stage_osa_template_package(
