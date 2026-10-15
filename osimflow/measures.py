@@ -34,7 +34,12 @@ from typing import Any
 
 import requests
 
-from .apply_params import EPW_FILE_KEY, _infer_osm_attribute_mapping, read_measure_xml_aliases
+from .apply_params import (
+    EPW_FILE_KEY,
+    _infer_osm_attribute_mapping,
+    _measure_search_dirs,
+    read_measure_xml_aliases,
+)
 from .errors import OSimFlowValueError
 
 log = logging.getLogger("osimflow.measures")
@@ -191,6 +196,8 @@ class MeasureRegistry:
     def __init__(self) -> None:
         self._measures: dict[str, DiscoveredMeasure] = {}
         self._indexed_path: Path | None = None
+        # workflow.osw step "name" -> measure_dir_name (multi-instance steps)
+        self._step_aliases: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # BCL cache directory (lazily initialized)
@@ -206,33 +213,71 @@ class MeasureRegistry:
     # Public API
     # ------------------------------------------------------------------
     def index_measures(self, path: Path) -> None:
-        """Scan ``path/measures/`` and register all discovered measures.
+        """Scan the measure directories of a package and register all measures.
 
-        Recursively searches for ``measure.xml``, ``measure.rb``, and
-        ``measure.py`` files under ``path/measures/``. Each measure
-        directory is registered under its directory name.
+        Searches ``path/measures/`` plus every ``measure_paths`` entry declared
+        in ``path/workflow.osw`` (relative entries resolve against the ``.osw``
+        directory). A measure directory name found in an earlier location wins.
+        Per-step ``"name"`` aliases from ``workflow.osw`` are recorded so
+        ``<step_name>.<argument>`` variables validate for multi-instance steps.
 
         Parameters:
             path: the ``template_sim_package`` root directory.
         """
         self._indexed_path = path
-        measures_dir = path / "measures"
-        if not measures_dir.is_dir():
-            log.info("index_measures: no measures/ directory found in %s", path)
+        self._step_aliases = {}
+        osw_data = self._load_workflow_osw(path / "workflow.osw")
+        search_dirs = _measure_search_dirs(path / "workflow.osw", osw_data)
+        if not any(d.is_dir() for d in search_dirs):
+            log.info("index_measures: no measure directories found in %s", path)
             return
 
-        for measure_dir in sorted(measures_dir.iterdir()):
-            if not measure_dir.is_dir():
+        for measures_dir in search_dirs:
+            if not measures_dir.is_dir():
                 continue
-            measure = self._discover_measure(measure_dir)
-            if measure is not None:
-                self._measures[measure.name] = measure
-                log.debug(
-                    "index_measures: registered %s (%s) with %d argument(s)",
-                    measure.name,
-                    measure.language,
-                    len(measure.arguments),
-                )
+            for measure_dir in sorted(measures_dir.iterdir()):
+                if not measure_dir.is_dir() or measure_dir.name in self._measures:
+                    continue
+                measure = self._discover_measure(measure_dir)
+                if measure is not None:
+                    self._measures[measure.name] = measure
+                    log.debug(
+                        "index_measures: registered %s (%s) with %d argument(s)",
+                        measure.name,
+                        measure.language,
+                        len(measure.arguments),
+                    )
+        self._index_step_aliases(osw_data)
+
+    @staticmethod
+    def _load_workflow_osw(osw_path: Path) -> dict[str, Any]:
+        if not osw_path.is_file():
+            return {}
+        try:
+            data = json.loads(osw_path.read_text())
+        except (OSError, ValueError):
+            log.warning("index_measures: could not parse %s", osw_path, exc_info=True)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _index_step_aliases(self, osw_data: dict[str, Any]) -> None:
+        """Map distinct per-step ``name`` values to their ``measure_dir_name``."""
+        claims: dict[str, set[str]] = {}
+        for step in osw_data.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            dir_name = step.get("measure_dir_name")
+            step_name = step.get("name")
+            if (
+                isinstance(dir_name, str)
+                and isinstance(step_name, str)
+                and step_name
+                and step_name != dir_name
+                and dir_name in self._measures
+            ):
+                claims.setdefault(step_name, set()).add(dir_name)
+        # A name claimed for two different measures is ambiguous: drop it.
+        self._step_aliases = {n: next(iter(d)) for n, d in claims.items() if len(d) == 1}
 
     def read_measure_arguments(self, measure_path: Path) -> list[MeasureArgument]:
         """Read argument definitions from a measure directory.
@@ -429,6 +474,16 @@ class MeasureRegistry:
                 for alias in usable:
                     dotted_to_arg[f"{alias}.{arg.name}"] = arg
             known_measures.update(usable)
+        # Step names colliding with a measure name or any measure.xml alias are
+        # ambiguous and never usable (same policy as parse_osw_arguments).
+        taken = set(target._measures) | set(alias_claims)
+        for step_name, dir_name in target._step_aliases.items():
+            step_measure = target._measures.get(dir_name)
+            if step_measure is None or step_name in taken:
+                continue
+            for arg in step_measure.arguments:
+                dotted_to_arg[f"{step_name}.{arg.name}"] = arg
+            known_measures.add(step_name)
 
         effective_has_osm = self._resolve_effective_has_osm(target, has_osm)
         errors: list[str] = []

@@ -544,7 +544,9 @@ name in this section.
 - `osimflow/pareto.py` — `ParetoFront` + `ParetoSolution`.
 - `osimflow/measures.py` — `MeasureRegistry` + `MeasureArgument` +
   `DiscoveredMeasure` + `MeasureRegistryError` +
-  `UnmappedVariableError` + `AmbiguousVariableError`.
+  `UnmappedVariableError` + `AmbiguousVariableError`. `index_measures` also scans
+  `workflow.osw` `measure_paths` and records distinct per-step `name` aliases
+  (multi-instance steps) for `<step_name>.<arg>` validation (issue #2099).
 - `osimflow/measure_resolver.py`, `osimflow/measure_versioning.py`
   — measure internals.
 - `osimflow/weather.py` — `discover_epw_files`, `download_epw`,
