@@ -391,6 +391,12 @@ _OSA_ALGORITHM_MAP: dict[str, str] = {
     "single_run": "lhs",
     "preflight": "lhs",
     "repeat_run": "lhs",
+    "halton": "halton",
+    "random": "random",
+    "repeat_all": "repeat_all",
+    "spea_nrel": "spea2",
+    "gaisl": "gaisl",
+    "rgenoud": "rgenoud",
 }
 
 

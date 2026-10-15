@@ -210,7 +210,7 @@ class TestAlgorithmTranslationTable:
         assert osa_type in _OSA_ALGORITHM_MAP
 
     def test_map_has_expected_entries(self) -> None:
-        assert len(_OSA_ALGORITHM_MAP) == 15
+        assert len(_OSA_ALGORITHM_MAP) == 21
 
     def test_all_mapped_values_are_strings(self) -> None:
         for osimflow_name in _OSA_ALGORITHM_MAP.values():

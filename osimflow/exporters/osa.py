@@ -52,6 +52,7 @@ from typing import Any
 import yaml
 
 from osimflow.config import CampaignConfig
+from osimflow.weather import find_weather_file
 
 log = logging.getLogger("osimflow.exporters.osa")
 
@@ -75,9 +76,19 @@ _LOSSY_DISTRIBUTIONS: frozenset[str] = frozenset({"beta", "gamma", "exponential"
 _OSIMFLOW_ALGO_TO_OSA: dict[str, str] = {
     "lhs": "lhs",
     "sobol": "sobol",
-    "halton": "doe",
+    "halton": "halton",
     "morris": "morris",
     "fast99": "fast99",
+    "full_factorial": "doe",
+    "grid": "grid",
+    "random": "random",
+    "repeat_all": "repeat_all",
+    "nsga2": "nsga_nrel",
+    "spea2": "spea_nrel",
+    "pso": "pso",
+    "de": "ga",
+    "gaisl": "gaisl",
+    "rgenoud": "rgenoud",
 }
 
 # Distribution-specific parameter mappers: OSimFlow keys → OSA keys.
@@ -89,11 +100,25 @@ _PARAM_MAPS: dict[str, dict[str, str]] = {
 }
 
 
+# Sub-directories (relative to template_sim_package) searched for the seed model.
+_SEED_SEARCH_DIRS = ("", "seeds", "seed", "files", "models")
+
+
 # Placeholder note embedded in analysis.json when no seed .osm is found.
 _SEED_MISSING_NOTE = (
     "NOTE: No seed model (.osm) was found in template_sim_package. "
     "Add a seed.osm to the .osa archive before importing into PAT."
 )
+
+
+class _PackageFiles:
+    """Seed/weather files resolved from a template simulation package."""
+
+    def __init__(self) -> None:
+        self.seed_path: Path | None = None
+        self.seed_arcname: str | None = None
+        self.seed_from_osw = False
+        self.weather_rel: str | None = None
 
 
 class OSAExporter:
@@ -172,15 +197,10 @@ class OSAExporter:
         analysis_data = json.loads(analysis_path.read_text(encoding="utf-8"))
 
         # Step 2: check for a seed .osm in template_sim_package.
-        has_seed = False
-        seed_path: Path | None = None
+        files = self._resolve_package_files(config)
+        seed_path = files.seed_path
+        has_seed = seed_path is not None
         tsp = config.template_sim_package
-        if tsp and tsp.is_dir():
-            for candidate in sorted(tsp.rglob("*.osm")):
-                if candidate.is_file():
-                    has_seed = True
-                    seed_path = candidate
-                    break
 
         if not has_seed:
             log.warning(
@@ -211,36 +231,144 @@ class OSAExporter:
                     if f.suffix.lower() == ".osm":
                         continue
                     arcname = str(f.relative_to(tsp))
+                    if arcname == "workflow.osw" and files.seed_path is not None:
+                        zf.writestr(arcname, self._osw_with_seed(f))
+                        continue
                     zf.write(f, arcname)
                     log.debug("Packed %s → %s", f, arcname)
 
         log.info("Packed .osa archive: %s", osa_path)
         return osa_path
 
+    @staticmethod
+    def _osw_with_seed(osw_path: Path) -> str:
+        """Return ``workflow.osw`` text with ``seed_file`` pointing at the packed ``seed.osm``."""
+        try:
+            data = json.loads(osw_path.read_text(encoding="utf-8"))
+        except ValueError:
+            return osw_path.read_text(encoding="utf-8")
+        if not isinstance(data, dict):
+            return osw_path.read_text(encoding="utf-8")
+        data["seed_file"] = "seed.osm"
+        return json.dumps(data, indent=2) + "\n"
+
     def _build_analysis(self, config: CampaignConfig) -> dict[str, Any]:
         """Build the full analysis.json structure."""
         algorithm_type = self._translate_algorithm(config.algorithm)
-        return {
-            "analysis": {
-                "display_name": config.outdir.name,
-                "algorithm": {
-                    "type": algorithm_type,
-                    "number_of_samples": config.n_samples,
-                },
-                "problem": {
-                    "algorithm": {
-                        "type": algorithm_type,
-                        "number_of_samples": config.n_samples,
-                    },
-                    "variables": self._build_variables(config),
-                    "workflows": [],
-                    "file_format_version": 1,
-                },
+        yml_data = self._load_variables_yml(config)
+        algorithm: dict[str, Any] = {
+            "type": algorithm_type,
+            "number_of_samples": config.n_samples,
+        }
+        seed = self._resolve_seed(yml_data)
+        if seed is not None:
+            algorithm["seed"] = seed
+        analysis: dict[str, Any] = {
+            "display_name": config.outdir.name,
+            "algorithm": dict(algorithm),
+            "problem": {
+                "algorithm": dict(algorithm),
+                "variables": self._build_variables(config),
+                "workflows": [],
+                "file_format_version": 1,
             },
+        }
+        outputs = self._resolve_outputs(config, yml_data)
+        if outputs:
+            analysis["output_variables"] = outputs
+        files = self._resolve_package_files(config)
+        if files.seed_arcname:
+            analysis["seed"] = {"file_name": files.seed_arcname}
+        if files.weather_rel:
+            analysis["weather_file"] = {"file_name": files.weather_rel}
+        return {
+            "analysis": analysis,
             "server": {
                 "base_oscli_version": config.openstudio_version or "3.10.0",
             },
         }
+
+    @staticmethod
+    def _load_variables_yml(config: CampaignConfig) -> dict[str, Any]:
+        path = Path(config.input_variables)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _resolve_seed(yml_data: dict[str, Any]) -> int | None:
+        """Integer seed from top-level ``seed`` or ``_metadata.seed`` (else ``None``)."""
+        raw = yml_data.get("seed")
+        if raw is None:
+            meta = yml_data.get("_metadata")
+            raw = meta.get("seed") if isinstance(meta, dict) else None
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return None
+        return raw
+
+    @staticmethod
+    def _resolve_outputs(config: CampaignConfig, yml_data: dict[str, Any]) -> list[dict[str, Any]]:
+        """``output_variables`` from ``_metadata.outputs`` (preferred) or ``config.kpis``."""
+        meta = yml_data.get("_metadata")
+        raw = meta.get("outputs") if isinstance(meta, dict) else None
+        outputs: list[dict[str, Any]] = []
+        for item in raw if isinstance(raw, list) else []:
+            if isinstance(item, dict):
+                outputs.append(dict(item))
+            elif isinstance(item, str) and item.strip():
+                outputs.append({"name": item.strip()})
+        if not outputs:
+            outputs = [{"name": k} for k in (config.kpis or [])]
+        return outputs
+
+    @staticmethod
+    def _resolve_package_files(config: CampaignConfig) -> "_PackageFiles":
+        """Locate the seed ``.osm`` and weather file of ``template_sim_package``.
+
+        ``workflow.osw`` ``seed_file`` / ``weather_file`` are honored first
+        (searching the package root, ``seeds/``, ``files/``, ``weather/`` and the
+        in-package ``file_paths``); a lone top-level ``.osm`` is the fallback seed.
+        """
+        tsp = config.template_sim_package
+        result = _PackageFiles()
+        if not tsp or not Path(tsp).is_dir():
+            return result
+        tsp = Path(tsp)
+        osw: dict[str, Any] = {}
+        osw_path = tsp / "workflow.osw"
+        if osw_path.is_file():
+            try:
+                loaded = json.loads(osw_path.read_text(encoding="utf-8"))
+                osw = loaded if isinstance(loaded, dict) else {}
+            except (OSError, ValueError):
+                osw = {}
+
+        root = tsp.resolve()
+        extra = [p for p in osw.get("file_paths", []) if isinstance(p, str)]
+        seed_name = osw.get("seed_file")
+        if isinstance(seed_name, str) and seed_name.strip():
+            for sub in (*_SEED_SEARCH_DIRS, *extra):
+                cand = (tsp / sub / seed_name).resolve()
+                if cand.is_file() and cand.is_relative_to(root):
+                    result.seed_path = cand
+                    result.seed_from_osw = True
+                    break
+        if result.seed_path is None:
+            for candidate in sorted(tsp.rglob("*.osm")):
+                if candidate.is_file():
+                    result.seed_path = candidate
+                    break
+        if result.seed_path is not None:
+            result.seed_arcname = "seed.osm"
+
+        weather_name = osw.get("weather_file")
+        if isinstance(weather_name, str) and weather_name.strip():
+            found = find_weather_file(tsp, weather_name.strip(), config.weather_dir)
+            if found is not None and found.resolve().is_relative_to(root):
+                result.weather_rel = str(found.resolve().relative_to(root))
+        return result
 
     def _translate_algorithm(self, algorithm_name: str) -> str:
         """Translate an OSimFlow algorithm name to an OSA algorithm type.
@@ -417,6 +545,9 @@ class OSAExporter:
         if osa_type in ("discrete", "categorical"):
             values = var.get("values", [])
             dist: dict[str, Any] = {"type": osa_type, "values": values}
+            weights = self._pmf_weights(values, var.get("pmf"))
+            if weights is not None:
+                dist["weights"] = weights
             mapping = var.get("mapping")
             if mapping and isinstance(mapping, dict):
                 dist["mapping"] = mapping
@@ -430,6 +561,20 @@ class OSAExporter:
             if value is not None:
                 result[osa_key] = value
         return result
+
+    @staticmethod
+    def _pmf_weights(values: list[Any], pmf: Any) -> list[float] | None:
+        """Ordered ``weights`` list for *values* from a ``{value: weight}`` pmf."""
+        if not isinstance(pmf, dict) or not values:
+            return None
+        weights: list[float] = []
+        for v in values:
+            w = pmf.get(v, pmf.get(str(v)))
+            if w is None:
+                log.warning("pmf has no weight for value %r; omitting weights", v)
+                return None
+            weights.append(float(w))
+        return weights
 
     @staticmethod
     def _build_uniform_from_var(var: dict[str, Any]) -> dict[str, Any]:
