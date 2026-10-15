@@ -751,3 +751,28 @@ class TestValidateOsw:
         data = {**_MINIMAL_VALID_OSW, "extra_field": "allowed", "another": 123}
         osw.write_text(json.dumps(data))
         assert validate_osw(osw) is True
+
+
+@pytest.mark.parametrize(
+    "pmf",
+    [
+        [1, 2],
+        {},
+        {1: -1.0, 2: 2.0},
+        {1: "x", 2: 1.0},
+        {1: 0.0, 2: 0.0},
+        {1: float("inf"), 2: 1.0},
+        {1: 0.5, 3: 0.5},
+    ],
+)
+def test_discrete_pmf_rejected(pmf: object) -> None:
+    from osimflow.validation import ValidationError, _validate_discrete_categorical
+
+    with pytest.raises(ValidationError):
+        _validate_discrete_categorical({"values": [1, 2], "pmf": pmf}, "v")
+
+
+def test_discrete_pmf_accepted() -> None:
+    from osimflow.validation import _validate_discrete_categorical
+
+    _validate_discrete_categorical({"values": [1, 2], "pmf": {1: 3, 2: 1.5}}, "v")
