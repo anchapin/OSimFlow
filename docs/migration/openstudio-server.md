@@ -947,7 +947,9 @@ The campaign id is the `--outdir` name. Re-running the same submit is a no-op
 once `<id>/_handoff.json` exists. Workers mark each finished sample with an
 empty `_OSIMFLOW_COMPLETE` object. `download` fetches only completed samples
 (re-runs skip ones already local), aggregates locally and writes
-`aggregated_results.csv` plus the server-layout `download_data.csv`. It refuses
+`aggregated_results.csv` / `failed_simulations.csv` (generate the server-layout
+`download_data.csv` afterwards with `osimflow export-results --outdirs <dir>
+--format openstudio-server-csv`). It refuses
 incomplete campaigns unless `--allow-partial`. A sample whose step failed
 uploads `out.osw`, `run.log`, the stdout/stderr logs (and `eplusout.err` when
 under 2 MiB) followed by an empty `_OSIMFLOW_FAILED` marker; this counts as
