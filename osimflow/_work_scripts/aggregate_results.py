@@ -23,10 +23,8 @@ from typing import Any
 import pandas as pd
 
 from osimflow.osw_results import (
-    OUT_OSW_NAME,
     failure_message,
     has_osw_or_marker_failure,
-    has_valid_osw_completion,
 )
 
 # pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
@@ -533,13 +531,6 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
         # (out.osw / run.log), even when EnergyPlus produced eplusout.sql
         # before a reporting measure or workflow step failed.
         err_summary = failure_message(sim_dir)
-    if (
-        not err_summary
-        and not osw_or_marker_failed
-        and not sql_path.exists()
-        and has_valid_osw_completion(sim_dir / OUT_OSW_NAME)
-    ):
-        return None
     if err_summary or not sql_path.exists() or osw_or_marker_failed:
         if not err_summary:
             err_summary = (

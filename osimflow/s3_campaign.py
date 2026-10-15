@@ -22,7 +22,6 @@ from typing import Any
 
 from ._work_scripts.aggregate_results import extract_failure
 from .errors import OSimFlowError, OSimFlowRuntimeError
-from .osw_results import OUT_OSW_NAME, has_valid_osw_completion
 from .storage import ResultStorage
 
 log = logging.getLogger(__name__)
@@ -503,10 +502,7 @@ class S3CampaignStore:
                 sim_dir = sim_root / sid
                 if (
                     states.get(sid) == "complete"
-                    and (
-                        (sim_dir / "eplusout.sql").is_file()
-                        or has_valid_osw_completion(sim_dir / OUT_OSW_NAME)
-                    )
+                    and (sim_dir / "eplusout.sql").is_file()
                     and extract_failure(sim_dir) is None
                 ):
                     try:
