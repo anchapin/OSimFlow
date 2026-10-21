@@ -94,6 +94,7 @@ def _cmd_s3(args: argparse.Namespace, action: str) -> int:
                 cid,
                 dest,
                 allow_partial=args.allow_partial,
+                write_server_csv=True,
                 substrate_failures=_substrate_failures(args, store, cid),
             )
             print(
