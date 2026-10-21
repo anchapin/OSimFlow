@@ -442,7 +442,7 @@ def dispatch_step_work(
     its existing ``submissions`` dict for
     :func:`submit_and_await_all` to await in the normal way.
     """
-    if task_queue is not None:
+    if task_queue is not None and getattr(task_queue, "name", "") != "none":
         return task_queue.submit(fn, *task_args, **task_kwargs)
     return executor.submit(fn, *exec_args, **exec_kwargs)
 

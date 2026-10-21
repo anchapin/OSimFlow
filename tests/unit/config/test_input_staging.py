@@ -410,3 +410,36 @@ class TestRunnerSpilledPayload:
         self._env(monkeypatch, pointer)
         assert remote_runner.main() == 1
         assert not ran
+
+
+def test_input_staging_deduplicates_uploads_across_stagers(tmp_path: Path) -> None:
+    """Subsequent InputStager instances skip uploading blobs that are already present."""
+    InputStager.clear_cache()
+    storage = DirStorage(tmp_path / "bucket", prefix="test_campaign")
+
+    pkg1 = _make_package(tmp_path / "ctrl1")
+    pkg2 = _make_package(tmp_path / "ctrl2")
+    # Slightly modify one file in pkg2 so only 1 file is different
+    (pkg2 / "workflow.osw").write_text('{"seed_file": "model.osm", "extra": 1}')
+
+    upload_calls: list[str] = []
+    orig_upload = storage.upload_file
+
+    def tracking_upload(local: Path, remote: str) -> None:
+        upload_calls.append(remote)
+        orig_upload(local, remote)
+
+    storage.upload_file = tracking_upload
+
+    # Stage first package
+    InputStager(storage).stage_task_paths((pkg1,), {})
+    first_upload_count = len(upload_calls)
+    assert first_upload_count > 0
+
+    # Stage second package with a fresh InputStager instance
+    upload_calls.clear()
+    InputStager(storage).stage_task_paths((pkg2,), {})
+
+    # Only the modified workflow.osw blob and the new directory manifest should be uploaded
+    assert len(upload_calls) == 2
+

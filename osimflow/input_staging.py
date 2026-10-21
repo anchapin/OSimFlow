@@ -23,10 +23,12 @@ permission error) raises :class:`InputStagingError` -- there is deliberately
 no fallback to the original (nonexistent) controller path.
 """
 
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 from pathlib import Path, PurePosixPath
@@ -109,35 +111,99 @@ def _is_within(path: Path, root: Path) -> bool:
 class InputStager:
     """Controller-side stager: uploads inputs and rewrites payload paths."""
 
+    _global_uploaded_blobs: set[tuple[tuple[str, str, str], str]] = set()
+    _global_uploaded_manifests: set[tuple[tuple[str, str, str], str]] = set()
+    _global_hash_cache: dict[tuple[str, int, int], str] = {}
+    _loaded_disk_keys: set[tuple[str, str, str]] = set()
+    _global_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _disk_cache_path(cls, storage_key: tuple[str, str, str]) -> Path:
+        cache_dir = Path.home() / ".cache" / "osimflow" / "staged_blobs"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        backend, bucket, prefix = storage_key
+        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", f"{backend}_{bucket}_{prefix}")
+        return cache_dir / f"{safe_name}.txt"
+
+    @classmethod
+    def _ensure_disk_cache_loaded(cls, storage_key: tuple[str, str, str]) -> None:
+        if storage_key in cls._loaded_disk_keys:
+            return
+        cls._loaded_disk_keys.add(storage_key)
+        try:
+            path = cls._disk_cache_path(storage_key)
+            if path.is_file():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    sha = line.strip()
+                    if sha:
+                        cls._global_uploaded_blobs.add((storage_key, sha))
+        except Exception:
+            pass
+
+    @classmethod
+    def _record_disk_blob(cls, storage_key: tuple[str, str, str], sha256: str) -> None:
+        try:
+            path = cls._disk_cache_path(storage_key)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"{sha256}\n")
+        except Exception:
+            pass
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear cross-instance hash and upload caches (e.g. for testing)."""
+        with cls._global_lock:
+            cls._global_uploaded_blobs.clear()
+            cls._global_uploaded_manifests.clear()
+            cls._global_hash_cache.clear()
+            cls._loaded_disk_keys.clear()
+
     def __init__(self, storage: ResultStorage) -> None:
         self._storage = storage
         self._lock = threading.Lock()
         self._uploaded_blobs: set[str] = set()
         self._hash_cache: dict[tuple[str, int, int], str] = {}
 
+    def _storage_key(self) -> tuple[str, str, str]:
+        name = str(getattr(self._storage, "name", type(self._storage).__name__))
+        bucket = str(getattr(self._storage, "bucket", getattr(self._storage, "root", "")))
+        prefix = str(getattr(self._storage, "prefix", ""))
+        return (name, bucket, prefix)
+
     def _hash(self, path: Path) -> str:
         st = path.stat()
-        cache_key = (str(path), st.st_size, st.st_mtime_ns)
-        with self._lock:
-            cached = self._hash_cache.get(cache_key)
+        cache_key = (str(path.resolve()), st.st_size, st.st_mtime_ns)
+        with self._global_lock:
+            cached = self._global_hash_cache.get(cache_key)
         if cached is not None:
             return cached
         digest = _sha256_file(path)
-        with self._lock:
-            self._hash_cache[cache_key] = digest
+        with self._global_lock:
+            self._global_hash_cache[cache_key] = digest
         return digest
 
+    def _is_blob_uploaded(self, sha256: str) -> bool:
+        sk = self._storage_key()
+        with self._global_lock:
+            self._ensure_disk_cache_loaded(sk)
+            return sha256 in self._uploaded_blobs or (sk, sha256) in self._global_uploaded_blobs
+
     def _upload_blob(self, path: Path, sha256: str) -> None:
-        with self._lock:
-            if sha256 in self._uploaded_blobs:
+        sk = self._storage_key()
+        with self._global_lock:
+            self._ensure_disk_cache_loaded(sk)
+            if sha256 in self._uploaded_blobs or (sk, sha256) in self._global_uploaded_blobs:
+                self._uploaded_blobs.add(sha256)
                 return
         try:
             self._storage.upload_file(path, _blob_key(sha256))
         except Exception as exc:
             log.error("input staging: upload failed for %s: %s", path, exc, exc_info=True)
             raise InputStagingError(f"failed to stage input file {path}: {exc}") from exc
-        with self._lock:
+        with self._global_lock:
             self._uploaded_blobs.add(sha256)
+            self._global_uploaded_blobs.add((sk, sha256))
+            self._record_disk_blob(sk, sha256)
 
     def stage_path(self, path: Path, *, role: str = "input") -> dict[str, Any]:
         """Stage *path* and return its tagged payload reference."""
@@ -151,13 +217,14 @@ class InputStager:
             kind = "dir"
             files: list[dict[str, Any]] = []
             dirs: list[str] = []
+            file_entries: list[tuple[Path, str]] = []
             for child in sorted(path.rglob("*")):
                 rel = child.relative_to(path).as_posix()
                 if child.is_dir():
                     dirs.append(rel)
                 elif child.is_file():
                     sha = self._hash(child)
-                    self._upload_blob(child, sha)
+                    file_entries.append((child, sha))
                     files.append(
                         {
                             "path": rel,
@@ -166,6 +233,10 @@ class InputStager:
                             "mode": child.stat().st_mode & 0o777,
                         }
                     )
+            unuploaded = [(c, s) for c, s in file_entries if not self._is_blob_uploaded(s)]
+            if unuploaded:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(unuploaded))) as pool:
+                    list(pool.map(lambda item: self._upload_blob(item[0], item[1]), unuploaded))
         elif path.is_file():
             kind = "file"
             sha = self._hash(path)
@@ -187,14 +258,20 @@ class InputStager:
         }
         raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
         manifest_sha = hashlib.sha256(raw).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="osimflow-stage-") as tmp:
-            local = Path(tmp) / "manifest.json"
-            local.write_bytes(raw)
-            try:
-                self._storage.upload_file(local, _manifest_key(manifest_sha))
-            except Exception as exc:
-                log.error("input staging: manifest upload failed: %s", exc, exc_info=True)
-                raise InputStagingError(f"failed to stage manifest for {path}: {exc}") from exc
+        sk = self._storage_key()
+        with self._global_lock:
+            manifest_uploaded = (sk, manifest_sha) in self._global_uploaded_manifests
+        if not manifest_uploaded:
+            with tempfile.TemporaryDirectory(prefix="osimflow-stage-") as tmp:
+                local = Path(tmp) / "manifest.json"
+                local.write_bytes(raw)
+                try:
+                    self._storage.upload_file(local, _manifest_key(manifest_sha))
+                except Exception as exc:
+                    log.error("input staging: manifest upload failed: %s", exc, exc_info=True)
+                    raise InputStagingError(f"failed to stage manifest for {path}: {exc}") from exc
+            with self._global_lock:
+                self._global_uploaded_manifests.add((sk, manifest_sha))
         return {
             _PATH_MARKER_KEY: STAGED_INPUT_TYPE,
             "path": str(path),

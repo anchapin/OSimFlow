@@ -295,7 +295,11 @@ def _cmd_warm_cache(args: argparse.Namespace) -> int:
     _apply_preset(args)
     cfg: CampaignConfig = load_config(vars(args))
     executor = _build_executor(args)
-    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    task_queue = (
+        build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+        if cfg.task_queue != "none"
+        else None
+    )
     campaign = Campaign(
         cfg,
         executor,
@@ -577,7 +581,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         if args.custom_kpi_extractor
         else None
     )
-    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    task_queue = (
+        build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+        if cfg.task_queue != "none"
+        else None
+    )
     if cfg.task_queue != "none":
         log.info("task queue enabled: backend=%s", cfg.task_queue)
     campaign = Campaign(
