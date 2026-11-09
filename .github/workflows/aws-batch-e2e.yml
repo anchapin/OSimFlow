@@ -79,7 +79,7 @@ jobs:
           --require AWS_ROLE_ARN OSIMFLOW_TASK_PAYLOAD_SECRET AWS_REGION
           AWS_BATCH_QUEUE AWS_BATCH_JOB_DEFINITION AWS_BATCH_RESULT_BUCKET
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         if: steps.preflight.outputs.available == 'true'
         with:
           python-version: "3.12"
@@ -148,7 +148,7 @@ jobs:
           --require AWS_ROLE_ARN OSIMFLOW_TASK_PAYLOAD_SECRET AWS_REGION
           AWS_BATCH_QUEUE AWS_BATCH_JOB_DEFINITION AWS_BATCH_RESULT_BUCKET
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         if: steps.preflight.outputs.available == 'true'
         with:
           python-version: "3.12"
@@ -224,7 +224,7 @@ jobs:
           --require AWS_ROLE_ARN OSIMFLOW_TASK_PAYLOAD_SECRET AWS_REGION
           AWS_BATCH_QUEUE AWS_BATCH_JOB_DEFINITION AWS_BATCH_RESULT_BUCKET OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         if: steps.preflight.outputs.available == 'true'
         with:
           python-version: "3.12"
