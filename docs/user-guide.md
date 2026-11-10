@@ -1904,6 +1904,7 @@ exempt — see `tools/check_docs_sync.py::INDEX_EXEMPT_DOCS`).
 | [Time-Series Management](time-series-management.md) | Controlling output data volume |
 | [Cost Estimation](cost-estimation.md) | AWS Batch and Slurm cost modeling |
 | [Chaos Engine](chaos-engine.md) | Resilience testing via fault injection |
+| [Cloud Pathways Patterns](cloud-pathways-patterns.md) | Design mapping and gaps vs. Google Cloud Pathways |
 | [eplusout.sql Guide](eplusout-sql-guide.md) | Querying EnergyPlus SQL output |
 | [Benchmarks](benchmarks.md) | Performance benchmarking reference |
 | [Compatibility Matrix](compatibility-matrix.md) | OpenStudio version compatibility |
