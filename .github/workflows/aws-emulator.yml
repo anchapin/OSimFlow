@@ -26,7 +26,17 @@ on:
       - "osimflow/storage/**"
       - "tests/integration/test_aws_batch_emulator.py"
       - ".github/workflows/aws-emulator.yml"
+  # Monthly canary: the same tests against the LATEST emulator release. A pass
+  # means the pin below is safe to bump (security fixes ship only in the latest
+  # release); a failure means a new release changed behaviour this tier uses.
+  schedule:
+    - cron: "0 7 1 * *"
   workflow_dispatch:
+    inputs:
+      latest:
+        description: "Test against the latest emulator release instead of the pin"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -56,13 +66,28 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -e ".[dev,aws]"
 
-      - name: Install AWS Emulator (pinned, checksum-verified)
+      - name: Install AWS Emulator (pinned and checksum-verified, or latest for the canary)
+        env:
+          USE_LATEST: ${{ github.event_name == 'schedule' || inputs.latest == true }}
         run: |
-          curl -fsSLo aws-emulator.deb \
-            "https://downloads.aws.com/aws-emulator/packages/aws-emulator/LTS/aws-emulator_${AWS_EMULATOR_VERSION}-1_amd64.deb"
-          echo "${AWS_EMULATOR_DEB_SHA256}  aws-emulator.deb" | sha256sum -c -
+          base=https://downloads.aws.com/aws-emulator/packages/aws-emulator/LTS
+          if [ "$USE_LATEST" = "true" ]; then
+            curl -fsSLo aws-emulator.deb "$base/latest/aws-emulator_amd64.deb"
+          else
+            curl -fsSLo aws-emulator.deb "$base/aws-emulator_${AWS_EMULATOR_VERSION}-1_amd64.deb"
+            echo "${AWS_EMULATOR_DEB_SHA256}  aws-emulator.deb" | sha256sum -c -
+          fi
           sudo apt-get install -y ./aws-emulator.deb
           aws-emulator -v
+          {
+            echo "### AWS Emulator under test"
+            echo '```'; aws-emulator -v; echo '```'
+            if [ "$USE_LATEST" = "true" ]; then
+              echo "Canary run against the latest release (pinned: ${AWS_EMULATOR_VERSION})."
+              echo "If the tests pass, bump AWS_EMULATOR_VERSION and AWS_EMULATOR_DEB_SHA256 to:"
+              echo '```'; aws-emulator -v | awk '/^Version/{print $2}'; sha256sum aws-emulator.deb | cut -d" " -f1; echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Start AWS Emulator
         run: |
