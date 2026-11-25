@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -146,12 +145,8 @@ def test_cancel_moves_runnable_job_to_failed(
     )
     assert handle.cancel() is True
 
-    deadline = time.monotonic() + 30
-    while True:
-        job = emulator["batch"].describe_jobs(jobs=[handle.job_id])["jobs"][0]
-        if job["status"] == "FAILED" or time.monotonic() > deadline:
-            break
-        time.sleep(0.5)
+    # TerminateJob on a RUNNABLE job is applied synchronously: no polling needed.
+    job = emulator["batch"].describe_jobs(jobs=[handle.job_id])["jobs"][0]
     assert job["status"] == "FAILED"
     assert "cancel" in (job.get("statusReason") or "").lower()
 
